@@ -1,0 +1,164 @@
+"""Real-world example showing nlp2sql usage patterns."""
+import asyncio
+import os
+from nlp2sql import DatabaseType
+
+
+def show_usage_patterns():
+    """Show different usage patterns for nlp2sql."""
+    
+    print("📚 nlp2sql - Real World Usage Examples")
+    print("=" * 60)
+    
+    # Example 1: Basic setup
+    print("\n1. Basic Setup:")
+    print("```python")
+    print("from nlp2sql import create_query_service, DatabaseType")
+    print()
+    print("# Create service")
+    print("service = create_query_service(")
+    print("    database_url='postgresql://user:pass@localhost:5432/mydb',")
+    print("    ai_provider='openai',")
+    print("    api_key='your-openai-api-key',")
+    print("    database_type=DatabaseType.POSTGRES")
+    print(")")
+    print()
+    print("# Initialize")
+    print("await service.initialize(DatabaseType.POSTGRES)")
+    print("```")
+    
+    # Example 2: Query generation
+    print("\n2. Query Generation:")
+    print("```python")
+    print("# Generate SQL from natural language")
+    print("result = await service.generate_sql(")
+    print("    question='Show me customers from Madrid who bought more than 1000',")
+    print("    database_type=DatabaseType.POSTGRES")
+    print(")")
+    print()
+    print("print(f'SQL: {result[\"sql\"]}')") 
+    print("print(f'Confidence: {result[\"confidence\"]}')") 
+    print("print(f'Explanation: {result[\"explanation\"]}')") 
+    print("```")
+    
+    # Example 3: Real queries
+    print("\n3. Example Natural Language Queries:")
+    english_queries = [
+        "Show me all customers from Madrid",
+        "How many orders were placed last month?",
+        "Find the top 5 best-selling products",
+        "Which customers haven't placed any orders?",
+        "Show me sales by city",
+        "What's the most expensive product by category?",
+        "Customers who bought more than 3 times",
+        "Average sales per month"
+    ]
+    
+    print("   Queries the library can handle:")
+    for i, query in enumerate(english_queries, 1):
+        print(f"   {i}. {query}")
+    
+    # Example 4: Expected SQL outputs
+    print("\n4. Expected SQL Output (PostgreSQL):")
+    expected_sqls = [
+        "SELECT * FROM customers WHERE city = 'Madrid'",
+        "SELECT COUNT(*) FROM orders WHERE order_date >= date_trunc('month', CURRENT_DATE - interval '1 month')",
+        "SELECT p.name, SUM(oi.quantity) as total_sold FROM products p JOIN order_items oi ON p.id = oi.product_id GROUP BY p.id, p.name ORDER BY total_sold DESC LIMIT 5",
+        "SELECT c.* FROM customers c LEFT JOIN orders o ON c.id = o.customer_id WHERE o.id IS NULL",
+        "SELECT city, SUM(total_amount) as total_sales FROM customers c JOIN orders o ON c.id = o.customer_id GROUP BY city"
+    ]
+    
+    for i, sql in enumerate(expected_sqls, 1):
+        print(f"   {i}. {sql}")
+    
+    # Example 5: Advanced features
+    print("\n5. Advanced Features:")
+    print("```python")
+    print("# Query validation")
+    print("validation = await service.validate_sql(")
+    print("    sql='SELECT * FROM customers WHERE city = \"Madrid\"',")
+    print("    database_type=DatabaseType.POSTGRES")
+    print(")")
+    print()
+    print("# Query suggestions")
+    print("suggestions = await service.get_query_suggestions(")
+    print("    partial_question='show customers',")
+    print("    database_type=DatabaseType.POSTGRES")
+    print(")")
+    print()
+    print("# Explain existing query")
+    print("explanation = await service.explain_query(")
+    print("    sql='SELECT COUNT(*) FROM orders WHERE status = \"completed\"',")
+    print("    database_type=DatabaseType.POSTGRES")
+    print(")")
+    print("```")
+    
+    # Example 6: Configuration options
+    print("\n6. Configuration Options:")
+    print("```python")
+    print("# Environment variables")
+    print("export OPENAI_API_KEY='your-openai-key'")
+    print("export DATABASE_URL='postgresql://user:pass@localhost:5432/db'")
+    print("export NLP2SQL_MAX_SCHEMA_TOKENS=10000")
+    print("export NLP2SQL_CACHE_ENABLED=true")
+    print("export NLP2SQL_LOG_LEVEL=INFO")
+    print()
+    print("# Programmatic configuration")
+    print("from nlp2sql.config.settings import settings")
+    print("settings.max_schema_tokens = 12000")
+    print("settings.default_temperature = 0.1")
+    print("```")
+    
+    # Example 7: Error handling
+    print("\n7. Error Handling:")
+    print("```python")
+    print("try:")
+    print("    result = await service.generate_sql(")
+    print("        question='very complex query',")
+    print("        database_type=DatabaseType.POSTGRES")
+    print("    )")
+    print("except TokenLimitException as e:")
+    print("    print(f'Token limit exceeded: {e.tokens_used}/{e.max_tokens}')")
+    print("except QueryGenerationException as e:")
+    print("    print(f'SQL generation error: {e}')")
+    print("except ValidationException as e:")
+    print("    print(f'Invalid SQL: {e}')")
+    print("```")
+    
+    print("\n8. Key Benefits:")
+    print("   ✅ Handles large schemas (1000+ tables)")
+    print("   ✅ Multiple AI providers - no vendor lock-in")
+    print("   ✅ Intelligent caching - fast responses")
+    print("   ✅ Automatic query optimization")
+    print("   ✅ SQL syntax validation")
+    print("   ✅ Relevance scoring for tables")
+    print("   ✅ Schema compression for tokens")
+    print("   ✅ Semantic search with embeddings")
+    print("   ✅ Async support for better performance")
+    print("   ✅ Clean, extensible architecture")
+    
+    print("\n🎯 Perfect Use Cases:")
+    print("   1. Companies with complex database schemas")
+    print("   2. Teams needing to democratize data access")
+    print("   3. Applications requiring dynamic queries")
+    print("   4. BI and analytics systems")
+    print("   5. Dashboards with natural language queries")
+    
+    print("\n📊 Comparison with Existing Solutions:")
+    print("   vs Simple Text-to-SQL:")
+    print("   ✅ Large schema handling")
+    print("   ✅ Multiple providers")
+    print("   ✅ Caching and optimization")
+    print("   ✅ Automatic validation")
+    print()
+    print("   vs Enterprise solutions:")
+    print("   ✅ Open source and customizable")
+    print("   ✅ Modern architecture")
+    print("   ✅ Easy integration")
+    print("   ✅ No vendor lock-in")
+    
+    print("\n🚀 Ready for production use!")
+
+
+if __name__ == "__main__":
+    show_usage_patterns()

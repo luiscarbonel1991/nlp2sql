@@ -1,0 +1,42 @@
+services:
+  postgres:
+    image: postgres:${POSTGRES_VERSION:-16}
+    container_name: ${SIMPLE_CONTAINER_NAME:-nlp2sql-postgres}
+    environment:
+      POSTGRES_USER: ${SIMPLE_DB_USER:-testuser}
+      POSTGRES_PASSWORD: ${SIMPLE_DB_PASSWORD:-testpass}
+      POSTGRES_DB: ${SIMPLE_DB_NAME:-testdb}
+    ports:
+      - "${SIMPLE_DB_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-schema.sql:/docker-entrypoint-initdb.d/init-schema.sql
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${SIMPLE_DB_USER:-testuser} -d ${SIMPLE_DB_NAME:-testdb}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres-large:
+    image: postgres:${POSTGRES_VERSION:-16}
+    container_name: ${LARGE_CONTAINER_NAME:-nlp2sql-postgres-large}
+    environment:
+      POSTGRES_USER: ${LARGE_DB_USER:-demo}
+      POSTGRES_PASSWORD: ${LARGE_DB_PASSWORD:-demo123}
+      POSTGRES_DB: ${LARGE_DB_NAME:-enterprise}
+    ports:
+      - "${LARGE_DB_PORT:-5433}:5432"
+    volumes:
+      - postgres_large_data:/var/lib/postgresql/data
+      - ./large-schema.sql:/docker-entrypoint-initdb.d/large-schema.sql
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${LARGE_DB_USER:-demo} -d ${LARGE_DB_NAME:-enterprise}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
+  postgres_large_data:

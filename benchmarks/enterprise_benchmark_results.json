@@ -1,0 +1,26 @@
+{
+  "openai": {
+    "total_time": 87.22716045379639,
+    "total_tokens": 4930,
+    "successful_queries": 15,
+    "failed_queries": 0,
+    "avg_confidence": 0.7200000000000001,
+    "confidences": [
+      1.0,
+      1.0,
+      1.0,
+      0.9,
+      0.8,
+      0.8,
+      0.9,
+      0.9,
+      0.9,
+      0.9,
+      0.9,
+      0.8,
+      0.0,
+      0.0,
+      0.0
+    ]
+  }
+}
