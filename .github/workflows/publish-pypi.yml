@@ -27,7 +27,12 @@ jobs:
         python -m pip install --upgrade pip
         pip install -e .[dev] build twine
 
+    - name: List installed packages
+      run: pip freeze
+
     - name: Run tests
+      env:
+        PYTHONPATH: src
       run: |
         pytest
 
