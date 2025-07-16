@@ -26,13 +26,19 @@ jobs:
       run: python -m pip install uv
 
     - name: Install project dependencies with uv
-      run: uv pip install -e .[dev] --system
+      run: |
+        # Install main dependencies first
+        uv pip install --system .
+        # Then install dev dependencies
+        uv pip install --system ".[dev]"
+        # Verify structlog is installed
+        python -c "import structlog; print(f'structlog version: {structlog.__version__}')"
 
     - name: Install build and twine
       run: python -m pip install build twine
 
-    - name: List installed packages
-      run: pip freeze
+    - name: List installed packages (debug)
+      run: pip list | grep -E "(structlog|pytest)"
 
     - name: Run tests
       env:
