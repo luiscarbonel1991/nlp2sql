@@ -26,10 +26,7 @@ jobs:
       run: python -m pip install uv
 
     - name: Install project dependencies with uv
-      run: uv pip install -e . --system
-
-    - name: Install pytest
-      run: python -m pip install pytest
+      run: uv pip install -e .[dev] --system
 
     - name: Install build and twine
       run: python -m pip install build twine
