@@ -14,9 +14,10 @@ cd nlp2sql
 
 ### Set API Keys
 ```bash
+# At least one required - CLI will auto-detect available providers
 export OPENAI_API_KEY=your-openai-key
 export ANTHROPIC_API_KEY=your-anthropic-key  # optional
-export GOOGLE_API_KEY=your-google-key        # optional
+export GOOGLE_API_KEY=your-google-key        # optional (Note: GOOGLE_API_KEY, not GEMINI_API_KEY)
 ```
 
 ### Setup Test Databases (Optional)
@@ -36,14 +37,21 @@ uv run nlp2sql --help
 uv run nlp2sql setup     # Interactive setup
 uv run nlp2sql validate  # Validate configuration
 
-# Test with sample database
+# Test CLI with Docker database (auto-detects available provider)
+uv run nlp2sql query \
+  --database-url "postgresql://testuser:testpass@localhost:5432/testdb" \
+  --question "How many users are there?"
+
+# Or specify provider explicitly
+uv run nlp2sql query \
+  --database-url "postgresql://testuser:testpass@localhost:5432/testdb" \
+  --question "How many users are there?" \
+  --provider openai
+
+# Inspect database schema
 uv run nlp2sql inspect \
   --database-url postgresql://testuser:testpass@localhost:5432/testdb
 ```
-uv run nlp2sql query \
---database-url "postgresql://screenshotuser:screenshotpass@localhost:5434/screenshotapi" \
---question "How many users are there?" \
---provider openai
 ## 📋 Command Reference
 
 ### Setup & Validation
@@ -75,13 +83,15 @@ uv run nlp2sql providers list
 ```
 
 #### `nlp2sql providers test`
-Tests provider connections.
+Tests provider connections with proper environment variable mapping.
 ```bash
-# Test all configured providers
+# Test all configured providers (auto-detects OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_API_KEY)
 uv run nlp2sql providers test
 
 # Test specific provider
 uv run nlp2sql providers test --provider openai
+uv run nlp2sql providers test --provider anthropic  
+uv run nlp2sql providers test --provider gemini     # Uses GOOGLE_API_KEY
 ```
 
 ### SQL Query Generation
@@ -91,20 +101,30 @@ Generate SQL from natural language with advanced options.
 
 **Basic Usage:**
 ```bash
-# Simple test database (use docker/docker-compose.yml)
+# Simple test database (auto-detects available provider)
 uv run nlp2sql query \
   --database-url postgresql://testuser:testpass@localhost:5432/testdb \
   --question "Show me all active users"
 
-# Large enterprise database
+# Large enterprise database with provider selection
 uv run nlp2sql query \
   --database-url postgresql://demo:demo123@localhost:5433/enterprise \
-  --question "Show me sales performance by rep"
+  --question "Show me sales performance by rep" \
+  --provider anthropic  # Good for large schemas
+
+# Test all three providers quickly
+for provider in openai anthropic gemini; do
+  echo "Testing $provider..."
+  uv run nlp2sql query \
+    --database-url postgresql://testuser:testpass@localhost:5432/testdb \
+    --question "Count total users" \
+    --provider $provider
+done
 ```
 
 **Advanced Usage:**
 ```bash
-# Using Anthropic with large schema and filters
+# Using Anthropic with large schema and comprehensive filters
 uv run nlp2sql query \
   --database-url postgresql://demo:demo123@localhost:5433/enterprise \
   --question "Calculate monthly revenue by product category" \
@@ -112,7 +132,14 @@ uv run nlp2sql query \
   --explain \
   --temperature 0.1 \
   --max-tokens 1500 \
-  --schema-filters '{"include_schemas": ["sales"], "exclude_system_tables": true}'
+  --schema-filters '{"include_schemas": ["sales", "finance"], "exclude_system_tables": true, "include_tables": ["customers", "orders", "products"], "exclude_tables": ["audit_logs"]}'
+
+# Using Gemini for cost-effective high-volume queries
+uv run nlp2sql query \
+  --database-url postgresql://testuser:testpass@localhost:5432/testdb \
+  --question "Find users who registered this week" \
+  --provider gemini \
+  --temperature 0.0  # More deterministic
 ```
 
 **Options:**
@@ -125,25 +152,31 @@ uv run nlp2sql query \
 
 **Examples:**
 ```bash
-# Using OpenAI with explanation
+# Using OpenAI with explanation (Docker simple database)
 uv run nlp2sql query \
-  --database-url postgresql://localhost/sales \
-  --question "Top 10 customers by revenue" \
+  --database-url postgresql://testuser:testpass@localhost:5432/testdb \
+  --question "Top 5 products with highest ratings" \
   --provider openai \
   --explain
 
-# Using Anthropic for large schema
+# Using Anthropic for large schema (Docker enterprise database)
 uv run nlp2sql query \
-  --database-url postgresql://localhost/enterprise \
-  --question "Find customers with unusual patterns" \
+  --database-url postgresql://demo:demo123@localhost:5433/enterprise \
+  --question "Find customers with unusual purchasing patterns" \
   --provider anthropic \
-  --schema-filters '{"include_tables": ["customers", "orders", "payments"]}'
+  --schema-filters '{"include_schemas": ["sales"], "include_tables": ["customers", "orders", "payments"], "exclude_system_tables": true}'
 
 # Using Gemini for cost efficiency
 uv run nlp2sql query \
-  --database-url postgresql://localhost/analytics \
+  --database-url postgresql://testuser:testpass@localhost:5432/testdb \
   --question "Count active users today" \
   --provider gemini
+  
+# Smart provider detection (uses first available)
+uv run nlp2sql query \
+  --database-url postgresql://testuser:testpass@localhost:5432/testdb \
+  --question "Show me user analytics" \
+  --explain  # No --provider specified, auto-detects
 ```
 
 ### Database Schema Inspection
@@ -153,19 +186,30 @@ Inspect database schema with advanced filtering.
 
 **Basic Usage:**
 ```bash
-uv run nlp2sql inspect --database-url postgresql://user:pass@localhost/db
+# Inspect simple Docker database
+uv run nlp2sql inspect --database-url postgresql://testuser:testpass@localhost:5432/testdb
+
+# Inspect enterprise Docker database
+uv run nlp2sql inspect --database-url postgresql://demo:demo123@localhost:5433/enterprise
 ```
 
 **Advanced Filtering:**
 ```bash
+# Enterprise database with comprehensive filtering
 uv run nlp2sql inspect \
-  --database-url postgresql://localhost/enterprise \
+  --database-url postgresql://demo:demo123@localhost:5433/enterprise \
   --exclude-system \
   --min-rows 1000 \
   --max-tables 50 \
   --sort-by size \
   --format json \
-  --output schema.json
+  --output enterprise_schema.json
+
+# Business tables only from simple database
+uv run nlp2sql inspect \
+  --database-url postgresql://testuser:testpass@localhost:5432/testdb \
+  --include-tables users,products,orders,reviews \
+  --format table
 ```
 
 **Options:**
@@ -179,18 +223,23 @@ uv run nlp2sql inspect \
 
 **Examples:**
 ```bash
-# Business tables only
+# Business tables only (Docker simple database)
 uv run nlp2sql inspect \
-  --database-url postgresql://localhost/crm \
-  --include-tables customers,orders,products,invoices \
+  --database-url postgresql://testuser:testpass@localhost:5432/testdb \
+  --include-tables users,products,orders,categories \
   --format table
 
-# Large tables analysis
+# Large tables analysis (Docker enterprise database)
 uv run nlp2sql inspect \
-  --database-url postgresql://localhost/warehouse \
-  --min-rows 10000 \
+  --database-url postgresql://demo:demo123@localhost:5433/enterprise \
+  --min-rows 1000 \
   --sort-by size \
-  --format json
+  --format json \
+  --output large_tables.json
+
+# Compare schemas between databases
+uv run nlp2sql inspect --database-url postgresql://testuser:testpass@localhost:5432/testdb --format json > simple_schema.json
+uv run nlp2sql inspect --database-url postgresql://demo:demo123@localhost:5433/enterprise --format json > enterprise_schema.json
 ```
 
 ### Performance Benchmarking
@@ -200,17 +249,31 @@ Benchmark different AI providers for performance comparison.
 
 **Basic Usage:**
 ```bash
+# Benchmark all available providers with simple database
 uv run nlp2sql benchmark \
-  --database-url postgresql://user:pass@localhost/db
+  --database-url postgresql://testuser:testpass@localhost:5432/testdb
+
+# Benchmark with enterprise database
+uv run nlp2sql benchmark \
+  --database-url postgresql://demo:demo123@localhost:5433/enterprise
 ```
 
 **Advanced Benchmarking:**
 ```bash
+# Compare all three providers with custom questions
 uv run nlp2sql benchmark \
-  --database-url postgresql://localhost/sales \
+  --database-url postgresql://testuser:testpass@localhost:5432/testdb \
   --questions benchmark_questions.txt \
   --providers openai,anthropic,gemini \
-  --iterations 5
+  --iterations 3
+
+# Enterprise database benchmark with schema filtering
+uv run nlp2sql benchmark \
+  --database-url postgresql://demo:demo123@localhost:5433/enterprise \
+  --questions enterprise_questions.txt \
+  --providers anthropic,gemini \
+  --schema-filters '{"include_schemas": ["sales", "finance"], "exclude_system_tables": true}' \
+  --iterations 2
 ```
 
 **Options:**
@@ -218,13 +281,24 @@ uv run nlp2sql benchmark \
 - `--providers`: Comma-separated list of providers to test
 - `--iterations`: Number of iterations per test (default: 3)
 
-**Example Questions File:**
+**Example Questions File (benchmark_questions.txt):**
 ```text
-Count total customers
-Show monthly sales trends
-Find top performing products
-Calculate customer lifetime value
-Identify at-risk customers
+How many users are there?
+Show me all products with their categories
+Find the top 5 products by average rating
+Count orders placed this month
+Show users who have never placed an order
+What are the most popular product categories?
+```
+
+**Enterprise Questions File (enterprise_questions.txt):**
+```text
+Show sales performance by representative
+Calculate monthly revenue trends
+Find customers with highest lifetime value
+Identify at-risk accounts with no recent activity
+Show product performance by category
+Analyze customer acquisition costs by channel
 ```
 
 **Sample Output:**
@@ -277,32 +351,54 @@ uv run nlp2sql cache clear --queries
 ### Multi-Provider Workflow
 ```bash
 # 1. Setup and validate all providers
+export OPENAI_API_KEY=your-openai-key
+export ANTHROPIC_API_KEY=your-anthropic-key  
+export GOOGLE_API_KEY=your-google-key
+
 uv run nlp2sql setup
 uv run nlp2sql validate
 
-# 2. Compare providers for your use case
-uv run nlp2sql benchmark --database-url $DB_URL
+# 2. Compare providers with Docker databases
+uv run nlp2sql benchmark --database-url postgresql://testuser:testpass@localhost:5432/testdb
+uv run nlp2sql benchmark --database-url postgresql://demo:demo123@localhost:5433/enterprise
 
 # 3. Use optimal provider for production
 uv run nlp2sql query \
-  --database-url $DB_URL \
-  --question "Your complex query" \
+  --database-url postgresql://demo:demo123@localhost:5433/enterprise \
+  --question "Show quarterly sales performance by region" \
   --provider anthropic \
+  --schema-filters '{"include_schemas": ["sales"], "exclude_system_tables": true}' \
   --explain
 ```
 
 ### Large Database Optimization
 ```bash
-# 1. Inspect full schema
-uv run nlp2sql inspect --database-url $DB_URL --format json > full_schema.json
+# 1. Inspect full enterprise schema
+uv run nlp2sql inspect --database-url postgresql://demo:demo123@localhost:5433/enterprise --format json > enterprise_full_schema.json
 
-# 2. Create filtered queries
+# 2. Create filtered queries for better performance
 uv run nlp2sql query \
-  --database-url $DB_URL \
-  --question "Business intelligence query" \
-  --schema-filters '{"include_tables": ["users", "orders", "products"], "exclude_system_tables": true}'
+  --database-url postgresql://demo:demo123@localhost:5433/enterprise \
+  --question "Analyze customer purchasing patterns" \
+  --provider anthropic \
+  --schema-filters '{
+    "include_schemas": ["sales", "finance"],
+    "include_tables": ["customers", "orders", "products", "payments"],
+    "exclude_tables": ["audit_logs", "system_logs"],
+    "exclude_system_tables": true
+  }'
 
-# 3. Clear cache if schema changes
+# 3. Performance comparison: filtered vs unfiltered
+echo "Unfiltered query:"
+time uv run nlp2sql query --database-url postgresql://demo:demo123@localhost:5433/enterprise --question "Show customer analytics"
+
+echo "\nFiltered query:"
+time uv run nlp2sql query \
+  --database-url postgresql://demo:demo123@localhost:5433/enterprise \
+  --question "Show customer analytics" \
+  --schema-filters '{"include_tables": ["customers", "orders"], "exclude_system_tables": true}'
+
+# 4. Clear cache if schema changes
 uv run nlp2sql cache clear --embeddings
 ```
 
@@ -327,18 +423,21 @@ uv run nlp2sql cache info
 
 ### Environment Variables
 ```bash
-# Required (at least one)
+# AI Provider API Keys (at least one required)
+# CLI will auto-detect and use first available
 export OPENAI_API_KEY=your-openai-key
 export ANTHROPIC_API_KEY=your-anthropic-key
-export GOOGLE_API_KEY=your-google-key
+export GOOGLE_API_KEY=your-google-key      # Note: GOOGLE_API_KEY for Gemini provider
 
-# Optional database
-export DATABASE_URL=postgresql://user:pass@host:port/db
+# Docker Database URLs (for development/testing)
+export DATABASE_URL=postgresql://testuser:testpass@localhost:5432/testdb        # Simple DB
+# export DATABASE_URL=postgresql://demo:demo123@localhost:5433/enterprise      # Enterprise DB
 
-# Optional settings
+# Optional Performance Settings
 export NLP2SQL_MAX_SCHEMA_TOKENS=8000
 export NLP2SQL_CACHE_ENABLED=true
 export NLP2SQL_LOG_LEVEL=INFO
+export TOKENIZERS_PARALLELISM=false  # Suppress tokenizer warnings
 ```
 
 ### Global CLI Options
@@ -354,12 +453,19 @@ export NLP2SQL_LOG_LEVEL=INFO
 # Diagnose API key issues
 uv run nlp2sql setup
 uv run nlp2sql providers test
+
+# Check specific provider
+uv run nlp2sql providers test --provider gemini  # Uses GOOGLE_API_KEY
 ```
 
 **Database Connection:**
 ```bash
-# Test database connection
-uv run nlp2sql inspect --database-url postgresql://user:pass@host:port/db
+# Test Docker database connections
+uv run nlp2sql inspect --database-url postgresql://testuser:testpass@localhost:5432/testdb
+uv run nlp2sql inspect --database-url postgresql://demo:demo123@localhost:5433/enterprise
+
+# Ensure Docker containers are running
+cd docker && docker-compose ps
 ```
 
 **Performance Issues:**
@@ -367,14 +473,32 @@ uv run nlp2sql inspect --database-url postgresql://user:pass@host:port/db
 # Clear cache and re-initialize
 uv run nlp2sql cache clear --all
 uv run nlp2sql cache info
+
+# Use schema filtering for large databases
+uv run nlp2sql query \
+  --database-url postgresql://demo:demo123@localhost:5433/enterprise \
+  --question "Your query" \
+  --schema-filters '{"exclude_system_tables": true, "include_schemas": ["sales"]}'
 ```
 
-**Import Errors:**
+**JSON Parsing Errors (Anthropic):**
+```bash
+# These are handled gracefully, but if you see:
+# "Query validation failed error='Expecting value: line 1 column 1 (char 0)'"
+# The query still works, validation just falls back to default
+
+# To minimize these errors, use simpler queries or different providers
+uv run nlp2sql query --question "Simple query" --provider openai
+```
+
+**Provider-Specific Issues:**
 ```bash
 # Install missing provider dependencies
-pip install nlp2sql[anthropic,gemini]
-# Or install all providers
-pip install nlp2sql[all-providers]
+uv add anthropic  # For Anthropic support
+uv add google-generativeai  # For Gemini support
+
+# Or install all providers at once
+uv sync  # Installs all dependencies from pyproject.toml
 ```
 
 ### Getting Help

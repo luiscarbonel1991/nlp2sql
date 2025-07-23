@@ -1,8 +1,8 @@
 """Core domain entities for nlp2sql."""
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional, Any
 from datetime import datetime
 from enum import Enum
+from typing import Any, Dict, List, Optional
 
 
 class DatabaseType(Enum):

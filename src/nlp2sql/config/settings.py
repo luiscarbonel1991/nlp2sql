@@ -1,9 +1,9 @@
 """Configuration settings for nlp2sql."""
-from typing import Dict, Any, Optional
+from enum import Enum
+from typing import Any, Dict, Optional
+
 from pydantic import Field, validator
 from pydantic_settings import BaseSettings
-from enum import Enum
-import os
 
 
 class LogLevel(str, Enum):
@@ -17,13 +17,13 @@ class LogLevel(str, Enum):
 
 class Settings(BaseSettings):
     """Application settings."""
-    
+
     # General settings
     app_name: str = "nlp2sql"
     version: str = "0.1.0"
     debug: bool = Field(default=False, env="NLP2SQL_DEBUG")
     log_level: LogLevel = Field(default=LogLevel.INFO, env="NLP2SQL_LOG_LEVEL")
-    
+
     # AI Provider settings
     openai_api_key: Optional[str] = Field(default=None, env="OPENAI_API_KEY")
     anthropic_api_key: Optional[str] = Field(default=None, env="ANTHROPIC_API_KEY")
@@ -33,50 +33,50 @@ class Settings(BaseSettings):
     aws_access_key_id: Optional[str] = Field(default=None, env="AWS_ACCESS_KEY_ID")
     aws_secret_access_key: Optional[str] = Field(default=None, env="AWS_SECRET_ACCESS_KEY")
     aws_region: str = Field(default="us-east-1", env="AWS_DEFAULT_REGION")
-    
+
     # Database settings
     default_database_type: str = Field(default="postgres", env="NLP2SQL_DEFAULT_DB_TYPE")
     database_url: Optional[str] = Field(default=None, env="DATABASE_URL")
     database_pool_size: int = Field(default=10, env="NLP2SQL_DB_POOL_SIZE")
     database_max_overflow: int = Field(default=20, env="NLP2SQL_DB_MAX_OVERFLOW")
-    
+
     # Cache settings
     cache_enabled: bool = Field(default=True, env="NLP2SQL_CACHE_ENABLED")
     cache_ttl_seconds: int = Field(default=3600, env="NLP2SQL_CACHE_TTL")
     redis_url: Optional[str] = Field(default=None, env="REDIS_URL")
-    
+
     # Schema settings
     max_schema_tokens: int = Field(default=8000, env="NLP2SQL_MAX_SCHEMA_TOKENS")
     schema_cache_enabled: bool = Field(default=True, env="NLP2SQL_SCHEMA_CACHE_ENABLED")
     schema_refresh_interval_hours: int = Field(default=24, env="NLP2SQL_SCHEMA_REFRESH_HOURS")
-    
+
     # Query generation settings
     default_temperature: float = Field(default=0.1, env="NLP2SQL_TEMPERATURE")
     default_max_tokens: int = Field(default=2000, env="NLP2SQL_MAX_TOKENS")
     retry_attempts: int = Field(default=3, env="NLP2SQL_RETRY_ATTEMPTS")
     retry_delay_seconds: float = Field(default=1.0, env="NLP2SQL_RETRY_DELAY")
-    
+
     # Embedding settings
     embedding_model: str = Field(default="all-MiniLM-L6-v2", env="NLP2SQL_EMBEDDING_MODEL")
     embedding_cache_enabled: bool = Field(default=True, env="NLP2SQL_EMBEDDING_CACHE")
-    
+
     # Rate limiting
     rate_limit_enabled: bool = Field(default=True, env="NLP2SQL_RATE_LIMIT_ENABLED")
     rate_limit_requests_per_minute: int = Field(default=60, env="NLP2SQL_RATE_LIMIT_RPM")
-    
+
     class Config:
         """Pydantic config."""
         env_file = ".env"
         env_file_encoding = "utf-8"
         case_sensitive = False
-    
+
     @validator("openai_api_key", "anthropic_api_key", "google_api_key", pre=True)
     def validate_api_keys(cls, v: Optional[str]) -> Optional[str]:
         """Validate API keys are not empty strings."""
         if v == "":
             return None
         return v
-    
+
     def get_provider_config(self, provider: str) -> Dict[str, Any]:
         """Get configuration for specific provider."""
         configs = {

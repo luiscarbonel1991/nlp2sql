@@ -1,63 +1,69 @@
 """Real-world example showing nlp2sql usage patterns."""
-import asyncio
-import os
-from nlp2sql import DatabaseType
 
 
 def show_usage_patterns():
     """Show different usage patterns for nlp2sql."""
-    
+
     print("📚 nlp2sql - Real World Usage Examples")
     print("=" * 60)
-    
-    # Example 1: Basic setup
-    print("\n1. Basic Setup:")
+
+    # Example 1: Basic setup with automatic provider detection
+    print("\n1. Basic Setup with Smart Provider Detection:")
     print("```python")
     print("from nlp2sql import create_query_service, DatabaseType")
+    print("import os")
     print()
-    print("# Create service")
+    print("# Detect available AI provider automatically")
+    print("providers = [")
+    print("    {'name': 'openai', 'key': os.getenv('OPENAI_API_KEY')},")
+    print("    {'name': 'anthropic', 'key': os.getenv('ANTHROPIC_API_KEY')},")
+    print("    {'name': 'gemini', 'key': os.getenv('GOOGLE_API_KEY')}")
+    print("]")
+    print("provider = next((p for p in providers if p['key']), None)")
+    print()
+    print("# Create service with detected provider")
     print("service = create_query_service(")
-    print("    database_url='postgresql://user:pass@localhost:5432/mydb',")
-    print("    ai_provider='openai',")
-    print("    api_key='your-openai-api-key',")
+    print("    database_url='postgresql://testuser:testpass@localhost:5432/testdb',")
+    print("    ai_provider=provider['name'],")
+    print("    api_key=provider['key'],")
     print("    database_type=DatabaseType.POSTGRES")
     print(")")
     print()
     print("# Initialize")
     print("await service.initialize(DatabaseType.POSTGRES)")
     print("```")
-    
-    # Example 2: Query generation
+
+    # Example 2: Query generation with real examples
     print("\n2. Query Generation:")
     print("```python")
     print("# Generate SQL from natural language")
     print("result = await service.generate_sql(")
-    print("    question='Show me customers from Madrid who bought more than 1000',")
+    print("    question='Show me users who have placed more than 5 orders',")
     print("    database_type=DatabaseType.POSTGRES")
     print(")")
     print()
-    print("print(f'SQL: {result[\"sql\"]}')") 
-    print("print(f'Confidence: {result[\"confidence\"]}')") 
-    print("print(f'Explanation: {result[\"explanation\"]}')") 
+    print("print(f'SQL: {result[\"sql\"]}')")
+    print("print(f'Confidence: {result[\"confidence\"]}')")
+    print("print(f'Explanation: {result[\"explanation\"]}')")
     print("```")
-    
-    # Example 3: Real queries
+
+    # Example 3: Real queries adapted for Docker testdb schema
     print("\n3. Example Natural Language Queries:")
     english_queries = [
-        "Show me all customers from Madrid",
-        "How many orders were placed last month?",
-        "Find the top 5 best-selling products",
-        "Which customers haven't placed any orders?",
-        "Show me sales by city",
-        "What's the most expensive product by category?",
-        "Customers who bought more than 3 times",
-        "Average sales per month"
+        "How many users are registered in our system?",
+        "Show me all products with their categories",
+        "Find the top 5 best-selling products by quantity",
+        "Which users haven't placed any orders?",
+        "Show me orders placed this month",
+        "What's the most expensive product in each category?",
+        "Users who have placed more than 3 orders",
+        "Show me all product reviews with ratings above 4"
     ]
-    
+
     print("   Queries the library can handle:")
     for i, query in enumerate(english_queries, 1):
         print(f"   {i}. {query}")
-    
+
     # Example 4: Expected SQL outputs
     print("\n4. Expected SQL Output (PostgreSQL):")
     expected_sqls = [
@@ -67,10 +73,10 @@ def show_usage_patterns():
         "SELECT c.* FROM customers c LEFT JOIN orders o ON c.id = o.customer_id WHERE o.id IS NULL",
         "SELECT city, SUM(total_amount) as total_sales FROM customers c JOIN orders o ON c.id = o.customer_id GROUP BY city"
     ]
-    
+
     for i, sql in enumerate(expected_sqls, 1):
         print(f"   {i}. {sql}")
-    
+
     # Example 5: Advanced features
     print("\n5. Advanced Features:")
     print("```python")
@@ -92,7 +98,7 @@ def show_usage_patterns():
     print("    database_type=DatabaseType.POSTGRES")
     print(")")
     print("```")
-    
+
     # Example 6: Configuration options
     print("\n6. Configuration Options:")
     print("```python")
@@ -108,7 +114,7 @@ def show_usage_patterns():
     print("settings.max_schema_tokens = 12000")
     print("settings.default_temperature = 0.1")
     print("```")
-    
+
     # Example 7: Error handling
     print("\n7. Error Handling:")
     print("```python")
@@ -124,7 +130,7 @@ def show_usage_patterns():
     print("except ValidationException as e:")
     print("    print(f'Invalid SQL: {e}')")
     print("```")
-    
+
     print("\n8. Key Benefits:")
     print("   ✅ Handles large schemas (1000+ tables)")
     print("   ✅ Multiple AI providers - no vendor lock-in")
@@ -136,14 +142,14 @@ def show_usage_patterns():
     print("   ✅ Semantic search with embeddings")
     print("   ✅ Async support for better performance")
     print("   ✅ Clean, extensible architecture")
-    
+
     print("\n🎯 Perfect Use Cases:")
     print("   1. Companies with complex database schemas")
     print("   2. Teams needing to democratize data access")
     print("   3. Applications requiring dynamic queries")
     print("   4. BI and analytics systems")
     print("   5. Dashboards with natural language queries")
-    
+
     print("\n📊 Comparison with Existing Solutions:")
     print("   vs Simple Text-to-SQL:")
     print("   ✅ Large schema handling")
@@ -156,7 +162,7 @@ def show_usage_patterns():
     print("   ✅ Modern architecture")
     print("   ✅ Easy integration")
     print("   ✅ No vendor lock-in")
-    
+
     print("\n🚀 Ready for production use!")
 
 

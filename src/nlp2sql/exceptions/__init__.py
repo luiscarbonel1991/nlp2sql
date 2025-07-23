@@ -1,5 +1,5 @@
 """Custom exceptions for nlp2sql library."""
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Optional
 
 
 class NLP2SQLException(Exception):

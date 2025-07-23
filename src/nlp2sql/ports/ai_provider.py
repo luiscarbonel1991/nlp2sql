@@ -1,8 +1,8 @@
 """AI Provider Port - Interface for all AI providers."""
 from abc import ABC, abstractmethod
-from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any, Dict, List, Optional
 
 
 class AIProviderType(Enum):
@@ -39,27 +39,27 @@ class QueryResponse:
 
 class AIProviderPort(ABC):
     """Abstract interface for AI providers."""
-    
+
     @abstractmethod
     async def generate_query(self, context: QueryContext) -> QueryResponse:
         """Generate SQL query from natural language."""
         pass
-    
+
     @abstractmethod
     async def validate_query(self, sql: str, schema_context: str) -> Dict[str, Any]:
         """Validate generated SQL query."""
         pass
-    
+
     @abstractmethod
     def get_token_count(self, text: str) -> int:
         """Count tokens for the provider's model."""
         pass
-    
+
     @abstractmethod
     def get_max_context_size(self) -> int:
         """Get maximum context size for the provider."""
         pass
-    
+
     @property
     @abstractmethod
     def provider_type(self) -> AIProviderType:

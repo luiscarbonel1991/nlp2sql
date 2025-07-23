@@ -1,14 +1,13 @@
 """PostgreSQL repository for schema management."""
 from datetime import datetime
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional
 
-import asyncpg
 import structlog
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from ..exceptions import SchemaException
-from ..ports.schema_repository import SchemaRepositoryPort, TableInfo, SchemaMetadata
+from ..ports.schema_repository import SchemaMetadata, SchemaRepositoryPort, TableInfo
 
 logger = structlog.get_logger()
 
@@ -51,7 +50,7 @@ class PostgreSQLRepository(SchemaRepositoryPort):
 
         except Exception as e:
             logger.error("Failed to initialize PostgreSQL repository", error=str(e))
-            raise SchemaException(f"Database initialization failed: {str(e)}")
+            raise SchemaException(f"Database initialization failed: {e!s}")
 
     async def get_tables(self, schema_name: Optional[str] = None) -> List[TableInfo]:
         """Get all tables in the schema."""
@@ -91,7 +90,7 @@ class PostgreSQLRepository(SchemaRepositoryPort):
 
         except Exception as e:
             logger.error("Failed to get tables", error=str(e))
-            raise SchemaException(f"Failed to get tables: {str(e)}")
+            raise SchemaException(f"Failed to get tables: {e!s}")
 
     async def get_table_info(self, table_name: str, schema_name: Optional[str] = None) -> TableInfo:
         """Get detailed information about a specific table."""
@@ -125,7 +124,7 @@ class PostgreSQLRepository(SchemaRepositoryPort):
 
         except Exception as e:
             logger.error("Failed to get table info", table=table_name, error=str(e))
-            raise SchemaException(f"Failed to get table info: {str(e)}")
+            raise SchemaException(f"Failed to get table info: {e!s}")
 
     async def search_tables(self, pattern: str) -> List[TableInfo]:
         """Search tables by name pattern."""
@@ -161,7 +160,7 @@ class PostgreSQLRepository(SchemaRepositoryPort):
 
         except Exception as e:
             logger.error("Failed to search tables", pattern=pattern, error=str(e))
-            raise SchemaException(f"Failed to search tables: {str(e)}")
+            raise SchemaException(f"Failed to search tables: {e!s}")
 
     async def get_related_tables(self, table_name: str) -> List[TableInfo]:
         """Get tables related through foreign keys."""
@@ -217,7 +216,7 @@ class PostgreSQLRepository(SchemaRepositoryPort):
 
         except Exception as e:
             logger.error("Failed to get related tables", table=table_name, error=str(e))
-            raise SchemaException(f"Failed to get related tables: {str(e)}")
+            raise SchemaException(f"Failed to get related tables: {e!s}")
 
     async def get_schema_metadata(self) -> SchemaMetadata:
         """Get metadata about the entire schema."""
@@ -250,7 +249,7 @@ class PostgreSQLRepository(SchemaRepositoryPort):
 
         except Exception as e:
             logger.error("Failed to get schema metadata", error=str(e))
-            raise SchemaException(f"Failed to get schema metadata: {str(e)}")
+            raise SchemaException(f"Failed to get schema metadata: {e!s}")
 
     async def refresh_schema(self) -> None:
         """Refresh schema information from database."""
@@ -266,7 +265,7 @@ class PostgreSQLRepository(SchemaRepositoryPort):
 
         except Exception as e:
             logger.error("Failed to refresh schema", error=str(e))
-            raise SchemaException(f"Failed to refresh schema: {str(e)}")
+            raise SchemaException(f"Failed to refresh schema: {e!s}")
 
     async def get_table_sample_data(self, table_name: str, limit: int = 5) -> List[Dict[str, Any]]:
         """Get sample data from a table."""
@@ -282,7 +281,7 @@ class PostgreSQLRepository(SchemaRepositoryPort):
 
         except Exception as e:
             logger.error("Failed to get sample data", table=table_name, error=str(e))
-            raise SchemaException(f"Failed to get sample data: {str(e)}")
+            raise SchemaException(f"Failed to get sample data: {e!s}")
 
     async def _build_table_info(self, row, schema: str) -> TableInfo:
         """Build TableInfo from database row."""
