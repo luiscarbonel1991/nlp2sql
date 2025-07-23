@@ -100,6 +100,20 @@ packages = ["src/nlp2sql"]
 target-version = "py39"
 line-length = 120
 indent-width = 4
+exclude = [
+    ".venv_test",
+    ".venv",
+    "__pycache__",
+    "*.egg-info",
+    ".git",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    "build",
+    "dist",
+    "*.iml",
+    "*.md"
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "B", "C90", "UP", "ANN", "S", "A", "C4", "RET", "SIM", "PLR", "PLW", "RUF"]

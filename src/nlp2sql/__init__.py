@@ -1,11 +1,12 @@
 """nlp2sql - Natural Language to SQL converter with multiple AI providers."""
-from typing import Dict, Any
-from .services.query_service import QueryGenerationService
+from typing import Any, Dict
+
 from .adapters.openai_adapter import OpenAIAdapter
 from .adapters.postgres_repository import PostgreSQLRepository
-from .core.entities import DatabaseType, Query, SQLQuery
 from .config.settings import settings
+from .core.entities import DatabaseType, Query, SQLQuery
 from .exceptions import *
+from .services.query_service import QueryGenerationService
 
 __version__ = "0.1.0"
 __author__ = "Luis Carbonel"
@@ -14,24 +15,24 @@ __email__ = "devhighlevel@gmail.com"
 __all__ = [
     # Main service
     "QueryGenerationService",
-    
+
     # Helper functions
     "create_query_service",
     "create_and_initialize_service",
     "generate_sql_from_db",
-    
+
     # Adapters
     "OpenAIAdapter",
     "PostgreSQLRepository",
-    
+
     # Core entities
     "DatabaseType",
     "Query",
     "SQLQuery",
-    
+
     # Configuration
     "settings",
-    
+
     # Exceptions
     "NLP2SQLException",
     "SchemaException",
@@ -45,7 +46,7 @@ __all__ = [
 ]
 
 
-def create_query_service(database_url: str, 
+def create_query_service(database_url: str,
                         ai_provider: str = "openai",
                         api_key: str = None,
                         database_type: DatabaseType = DatabaseType.POSTGRES,
@@ -65,13 +66,13 @@ def create_query_service(database_url: str,
     """
     from .adapters.openai_adapter import OpenAIAdapter
     from .adapters.postgres_repository import PostgreSQLRepository
-    
+
     # Create repository
     if database_type == DatabaseType.POSTGRES:
         repository = PostgreSQLRepository(database_url)
     else:
         raise NotImplementedError(f"Database type {database_type} not yet supported")
-    
+
     # Create AI provider
     if ai_provider == "openai":
         from .adapters.openai_adapter import OpenAIAdapter
@@ -85,19 +86,19 @@ def create_query_service(database_url: str,
     else:
         available_providers = ["openai", "anthropic", "gemini"]
         raise NotImplementedError(f"AI provider '{ai_provider}' not supported. Available: {available_providers}")
-    
+
     # Create service
     service = QueryGenerationService(
         ai_provider=provider,
         schema_repository=repository,
         schema_filters=schema_filters
     )
-    
+
     return service
 
 
 async def create_and_initialize_service(database_url: str,
-                                      ai_provider: str = "openai", 
+                                      ai_provider: str = "openai",
                                       api_key: str = None,
                                       database_type: DatabaseType = DatabaseType.POSTGRES,
                                       schema_filters: Dict[str, Any] = None) -> QueryGenerationService:

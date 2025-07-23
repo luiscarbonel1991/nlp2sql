@@ -167,4 +167,7 @@ cython_debug/
 nplsql.toml
 embeddings/
 query_cache.db
-*.iml.idea/
+*.iml
+*.idea/
+.venv_test/
+*.md

@@ -52,14 +52,27 @@ pip install nlp2sql[all-providers]     # All providers
 
 ```python
 import asyncio
+import os
 from nlp2sql import generate_sql_from_db
 
 async def main():
+    # Automatic provider detection
+    providers = [
+        {"name": "openai", "key": os.getenv("OPENAI_API_KEY")},
+        {"name": "anthropic", "key": os.getenv("ANTHROPIC_API_KEY")},
+        {"name": "gemini", "key": os.getenv("GOOGLE_API_KEY")}
+    ]
+    
+    # Use first available provider
+    selected = next((p for p in providers if p["key"]), None)
+    if not selected:
+        raise ValueError("No API key found. Set OPENAI_API_KEY, ANTHROPIC_API_KEY, or GOOGLE_API_KEY")
+    
     result = await generate_sql_from_db(
-        database_url="postgresql://user:pass@localhost/db",
+        database_url="postgresql://testuser:testpass@localhost:5432/testdb",
         question="Show me all active users",
-        ai_provider="openai",  # or "anthropic", "gemini"
-        api_key="your-api-key"
+        ai_provider=selected["name"],
+        api_key=selected["key"]
     )
     print(result['sql'])
 
@@ -70,19 +83,30 @@ asyncio.run(main())
 
 ```python
 import asyncio
+import os
 from nlp2sql import create_and_initialize_service
 
 async def main():
-    # Initialize once
+    # Smart provider detection
+    api_key = os.getenv("OPENAI_API_KEY") or os.getenv("ANTHROPIC_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    provider = "openai" if os.getenv("OPENAI_API_KEY") else \
+               "anthropic" if os.getenv("ANTHROPIC_API_KEY") else "gemini"
+    
+    # Initialize once with Docker test database
     service = await create_and_initialize_service(
-        database_url="postgresql://user:pass@localhost/db",
-        api_key="your-openai-api-key"
+        database_url="postgresql://testuser:testpass@localhost:5432/testdb",
+        ai_provider=provider,
+        api_key=api_key
     )
     
     # Use multiple times
     result1 = await service.generate_sql("Count total users")
     result2 = await service.generate_sql("Find inactive accounts")
     result3 = await service.generate_sql("Show user registration trends")
+    
+    print(f"Using {provider} provider")
+    for i, result in enumerate([result1, result2, result3], 1):
+        print(f"Query {i}: {result['sql']}")
 
 asyncio.run(main())
 ```
@@ -91,14 +115,19 @@ asyncio.run(main())
 
 ```python
 import asyncio
+import os
 from nlp2sql import create_query_service, DatabaseType
 
 async def main():
-    # Create service
+    # Create service with schema filtering for large databases
     service = create_query_service(
-        database_url="postgresql://user:pass@localhost/db",
-        ai_provider="openai",
-        api_key="your-openai-api-key"
+        database_url="postgresql://demo:demo123@localhost:5433/enterprise",
+        ai_provider="anthropic",  # Good for large schemas
+        api_key=os.getenv("ANTHROPIC_API_KEY"),
+        schema_filters={
+            "include_schemas": ["sales", "finance"],
+            "exclude_system_tables": True
+        }
     )
     
     # Initialize (loads schema automatically)
@@ -106,13 +135,14 @@ async def main():
     
     # Generate SQL
     result = await service.generate_sql(
-        question="Show revenue by month",
+        question="Show revenue by month for the sales team",
         database_type=DatabaseType.POSTGRES
     )
     
     print(f"SQL: {result['sql']}")
     print(f"Confidence: {result['confidence']}")
     print(f"Explanation: {result['explanation']}")
+    print(f"Valid: {result['validation']['is_valid']}")
 
 asyncio.run(main())
 ```
@@ -126,21 +156,21 @@ nlp2sql supports multiple AI providers - you're not locked into OpenAI!
 ```python
 # OpenAI GPT-4 (default)
 service = await create_and_initialize_service(
-    database_url="postgresql://localhost/db",
+    database_url="postgresql://testuser:testpass@localhost:5432/testdb",
     ai_provider="openai",
     api_key="your-openai-key"
 )
 
 # Anthropic Claude
 service = await create_and_initialize_service(
-    database_url="postgresql://localhost/db", 
+    database_url="postgresql://testuser:testpass@localhost:5432/testdb", 
     ai_provider="anthropic",
     api_key="your-anthropic-key"
 )
 
 # Google Gemini
 service = await create_and_initialize_service(
-    database_url="postgresql://localhost/db",
+    database_url="postgresql://testuser:testpass@localhost:5432/testdb",
     ai_provider="gemini", 
     api_key="your-google-key"
 )
@@ -152,7 +182,7 @@ service = await create_and_initialize_service(
 |----------|-------------|----------------|----------|
 | OpenAI GPT-4 | 128K | $0.030 | Complex reasoning |
 | Anthropic Claude | 200K | $0.015 | Large schemas |
-| Google Gemini | 30K | $0.001 | High volume/cost |
+| Google Gemini | 1M | $0.001 | High volume/cost |
 
 ## 📊 Large Schema Support
 
@@ -162,11 +192,11 @@ For databases with 1000+ tables, use schema filters:
 # Basic filtering
 filters = {
     "exclude_system_tables": True,
-    "excluded_tables": ["audit_log", "temp_data", "migration_history"]
+    "exclude_tables": ["audit_log", "temp_data", "migration_history"]
 }
 
 service = await create_and_initialize_service(
-    database_url="postgresql://localhost/large_db",
+    database_url="postgresql://demo:demo123@localhost:5433/enterprise",
     api_key="your-api-key",
     schema_filters=filters
 )
@@ -177,6 +207,15 @@ business_filters = {
         "users", "customers", "orders", "products",
         "invoices", "payments", "addresses"
     ],
+    "exclude_system_tables": True
+}
+
+# Multi-schema filtering for enterprise databases
+enterprise_filters = {
+    "include_schemas": ["sales", "hr", "finance"],
+    "exclude_schemas": ["archive", "temp"],
+    "include_tables": ["customers", "orders", "employees", "transactions"],
+    "exclude_tables": ["audit_logs", "system_logs"],
     "exclude_system_tables": True
 }
 ```
@@ -201,13 +240,14 @@ nlp2sql/
 ### Environment Variables
 
 ```bash
-# AI Provider API Keys
+# AI Provider API Keys (at least one required)
 export OPENAI_API_KEY="your-openai-key"
 export ANTHROPIC_API_KEY="your-anthropic-key"
-export GOOGLE_API_KEY="your-google-key"
+export GOOGLE_API_KEY="your-google-key"  # Note: GOOGLE_API_KEY, not GEMINI_API_KEY
 
-# Database
-export DATABASE_URL="postgresql://user:pass@localhost:5432/db"
+# Database (Docker test databases)
+export DATABASE_URL="postgresql://testuser:testpass@localhost:5432/testdb"  # Simple DB
+# export DATABASE_URL="postgresql://demo:demo123@localhost:5433/enterprise"  # Large DB
 
 # Optional Settings
 export NLP2SQL_MAX_SCHEMA_TOKENS=8000
@@ -226,6 +266,18 @@ cd nlp2sql
 
 # Install dependencies
 uv sync
+
+# Setup Docker test databases
+cd docker
+docker-compose up -d
+cd ..
+
+# Test CLI with Docker database
+export OPENAI_API_KEY=your-key
+uv run nlp2sql query \
+  --database-url "postgresql://testuser:testpass@localhost:5432/testdb" \
+  --question "How many users are there?" \
+  --provider openai
 
 # Run tests
 uv run pytest

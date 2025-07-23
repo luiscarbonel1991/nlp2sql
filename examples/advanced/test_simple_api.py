@@ -1,73 +1,96 @@
 """Example using the simplified one-line API for SQL generation."""
 import asyncio
 import os
-from nlp2sql import generate_sql_from_db, create_and_initialize_service
+
+from nlp2sql import create_and_initialize_service, generate_sql_from_db
 
 
 async def test_one_line_api():
     """Test the simplest possible API usage."""
-    
-    database_url = "postgresql://odoo:odoo@localhost:5433/postgres"
-    api_key = os.getenv("OPENAI_API_KEY")
-    
-    if not api_key:
-        print("❌ Please set OPENAI_API_KEY environment variable")
+
+    # Use Docker simple database for basic API testing
+    database_url = "postgresql://testuser:testpass@localhost:5432/testdb"
+
+    # Detect available AI provider
+    providers = [
+        {"name": "openai", "env_var": "OPENAI_API_KEY", "key": os.getenv("OPENAI_API_KEY")},
+        {"name": "anthropic", "env_var": "ANTHROPIC_API_KEY", "key": os.getenv("ANTHROPIC_API_KEY")},
+        {"name": "gemini", "env_var": "GOOGLE_API_KEY", "key": os.getenv("GOOGLE_API_KEY")}
+    ]
+
+    # Find first available provider
+    selected_provider = None
+    for provider in providers:
+        if provider["key"]:
+            selected_provider = provider
+            break
+
+    if not selected_provider:
+        print("❌ No AI provider API key found. Set one of:")
+        for provider in providers:
+            print(f"   export {provider['env_var']}=your-key")
         return
-    
+
+    print(f"🤖 Using {selected_provider['name'].title()} provider")
+    ai_provider = selected_provider["name"]
+    api_key = selected_provider["key"]
+
     print("🚀 nlp2sql - Simplified API Example")
     print("=" * 40)
     print("📋 One-line SQL generation from natural language")
     print()
-    
+
     # Example 1: Single query with one-line API
     print("1️⃣ One-line API Example:")
     print("-" * 30)
-    
+
     try:
         result = await generate_sql_from_db(
             database_url,
-            "Count how many active users we have",
+            "Count how many users we have in the system",
+            ai_provider=ai_provider,
             api_key=api_key
         )
-        
-        print(f"❓ Question: Count how many active users we have")
+
+        print("❓ Question: Count how many users we have in the system")
         print(f"📝 SQL: {result['sql']}")
         print(f"📊 Confidence: {result['confidence']}")
         print()
-        
+
     except Exception as e:
-        print(f"❌ Error: {str(e)}")
-    
+        print(f"❌ Error: {e!s}")
+
     # Example 2: Multiple queries with pre-initialized service
     print("\n2️⃣ Pre-initialized Service Example:")
     print("-" * 30)
-    
+
     try:
         # Initialize once
         print("⚡ Initializing service once...")
         service = await create_and_initialize_service(
             database_url,
+            ai_provider=ai_provider,
             api_key=api_key
         )
         print("✅ Service ready for multiple queries")
         print()
-        
+
         # Use many times without re-loading schema
         questions = [
-            "Show me all companies",
-            "Find partners without phone numbers",
-            "List users created today"
+            "Show me all products with their categories",
+            "Find users without phone numbers",
+            "List all orders placed today"
         ]
-        
+
         for question in questions:
             print(f"❓ Question: {question}")
-            result = await service.generate_sql(question)
+            result = await service.generate_sql(question, database_type="postgres")
             print(f"📝 SQL: {result['sql']}")
             print()
-            
+
     except Exception as e:
-        print(f"❌ Error: {str(e)}")
-    
+        print(f"❌ Error: {e!s}")
+
     print("🎉 Benefits of the simplified API:")
     print("   ✅ One line for simple queries")
     print("   ✅ Pre-initialize for better performance")
@@ -77,27 +100,44 @@ async def test_one_line_api():
 
 async def test_advanced_options():
     """Test with advanced options."""
-    
-    database_url = "postgresql://odoo:odoo@localhost:5433/postgres"
-    api_key = os.getenv("OPENAI_API_KEY")
-    
-    if not api_key:
-        return
-    
+
+    # Use Docker simple database for basic API testing
+    database_url = "postgresql://testuser:testpass@localhost:5432/testdb"
+
+    # Detect available AI provider (same logic as above)
+    providers = [
+        {"name": "openai", "env_var": "OPENAI_API_KEY", "key": os.getenv("OPENAI_API_KEY")},
+        {"name": "anthropic", "env_var": "ANTHROPIC_API_KEY", "key": os.getenv("ANTHROPIC_API_KEY")},
+        {"name": "gemini", "env_var": "GOOGLE_API_KEY", "key": os.getenv("GOOGLE_API_KEY")}
+    ]
+
+    selected_provider = None
+    for provider in providers:
+        if provider["key"]:
+            selected_provider = provider
+            break
+
+    if not selected_provider:
+        return  # Skip if no provider available
+
+    ai_provider = selected_provider["name"]
+    api_key = selected_provider["key"]
+
     print("\n3️⃣ Advanced Options Example:")
     print("-" * 30)
-    
+
     # One-line with custom parameters
     result = await generate_sql_from_db(
         database_url,
-        "Find the top 10 most active users based on login count",
+        "Find the top 5 users who have placed the most orders",
+        ai_provider=ai_provider,
         api_key=api_key,
         max_tokens=1000,
         temperature=0.0,  # More deterministic
         include_explanation=True
     )
-    
-    print(f"❓ Question: Find the top 10 most active users based on login count")
+
+    print("❓ Question: Find the top 5 users who have placed the most orders")
     print(f"📝 SQL: {result['sql']}")
     print(f"💡 Explanation: {result.get('explanation', 'N/A')[:100]}...")
 
@@ -106,6 +146,6 @@ if __name__ == "__main__":
     print("🔧 Simple API Examples")
     print("=" * 20)
     print()
-    
+
     asyncio.run(test_one_line_api())
     asyncio.run(test_advanced_options())
