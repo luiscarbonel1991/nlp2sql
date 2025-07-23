@@ -1,9 +1,18 @@
-name: Publish Python Package
+name: Publish Python Package to Test PyPI
 
 on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Git tag to publish (e.g., v0.2.0b1, v0.2.0)'
+        required: false
+        default: 'latest'
+      version:
+        description: 'Package version to publish (e.g., 0.2.0b1, 0.2.0)'
+        required: false
+        default: 'auto-detect'
 
 jobs:
   deploy:
@@ -15,7 +24,18 @@ jobs:
       contents: read
 
     steps:
-    - uses: actions/checkout@v4
+    - name: Checkout specific tag or latest
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event.inputs.tag != 'latest' && github.event.inputs.tag || github.ref }}
+        fetch-depth: 0
+    
+    - name: Display selected tag/version info
+      run: |
+        echo "🏷️ Selected tag: ${{ github.event.inputs.tag || 'latest' }}"
+        echo "📦 Target version: ${{ github.event.inputs.version || 'auto-detect' }}"
+        echo "🔍 Current commit: $(git rev-parse HEAD)"
+        echo "🌟 Current tag: $(git describe --tags --exact-match 2>/dev/null || echo 'No tag')"
 
     - name: Set up Python 3.12
       uses: actions/setup-python@v5

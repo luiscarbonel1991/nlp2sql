@@ -1,6 +1,6 @@
 [project]
 name = "nlp2sql"
-version = "0.1.0"
+version = "0.2.0b1"
 description = "Enterprise-ready Natural Language to SQL converter with multi-provider support. Built for production scale (1000+ tables) with Clean Architecture."
 readme = "README.md"
 license = {text = "MIT"}

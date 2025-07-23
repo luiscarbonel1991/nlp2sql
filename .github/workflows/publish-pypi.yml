@@ -4,6 +4,19 @@ on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Git tag to publish (e.g., v0.2.0, v0.3.0)'
+        required: false
+        default: 'latest'
+      version:
+        description: 'Package version to publish (e.g., 0.2.0, 0.3.0)'
+        required: false
+        default: 'auto-detect'
+      confirm_production:
+        description: 'Type "PRODUCTION" to confirm publishing to live PyPI'
+        required: true
+        default: ''
 
 jobs:
   deploy:
@@ -15,7 +28,27 @@ jobs:
       contents: read
 
     steps:
-    - uses: actions/checkout@v4
+    - name: Validate production confirmation
+      run: |
+        if [ "${{ github.event.inputs.confirm_production }}" != "PRODUCTION" ]; then
+          echo "❌ Production confirmation required. Please type 'PRODUCTION' to confirm."
+          exit 1
+        fi
+        echo "✅ Production deployment confirmed"
+    
+    - name: Checkout specific tag or latest
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event.inputs.tag != 'latest' && github.event.inputs.tag || github.ref }}
+        fetch-depth: 0
+    
+    - name: Display selected tag/version info
+      run: |
+        echo "🏷️ Selected tag: ${{ github.event.inputs.tag || 'latest' }}"
+        echo "📦 Target version: ${{ github.event.inputs.version || 'auto-detect' }}"
+        echo "🔍 Current commit: $(git rev-parse HEAD)"
+        echo "🌟 Current tag: $(git describe --tags --exact-match 2>/dev/null || echo 'No tag')"
+        echo "🚀 Publishing to: PRODUCTION PyPI"
 
     - name: Set up Python 3.12
       uses: actions/setup-python@v5

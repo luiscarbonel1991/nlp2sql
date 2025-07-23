@@ -43,6 +43,9 @@ uv add nlp2sql
 # Or with pip
 pip install nlp2sql
 
+# Beta version with latest features (multi-provider support)
+pip install --index-url https://test.pypi.org/simple/ nlp2sql==0.2.0b1
+
 # With specific providers
 pip install nlp2sql[anthropic,gemini]  # Multiple providers
 pip install nlp2sql[all-providers]     # All providers
