@@ -1,4 +1,5 @@
 """Ports (interfaces) for nlp2sql."""
+
 from .ai_provider import AIProviderPort, AIProviderType, QueryContext, QueryResponse
 from .cache import CachePort
 from .query_optimizer import OptimizationLevel, OptimizationResult, QueryAnalysis, QueryOptimizerPort
@@ -11,21 +12,17 @@ __all__ = [
     "AIProviderType",
     "QueryContext",
     "QueryResponse",
-
     # Cache
     "CachePort",
-
     # Query Optimizer
     "QueryOptimizerPort",
     "OptimizationLevel",
     "OptimizationResult",
     "QueryAnalysis",
-
     # Schema Repository
     "SchemaRepositoryPort",
     "TableInfo",
     "SchemaMetadata",
-
     # Schema Strategy
     "SchemaStrategyPort",
     "SchemaChunk",

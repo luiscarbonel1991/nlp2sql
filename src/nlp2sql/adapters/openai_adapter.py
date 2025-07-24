@@ -1,4 +1,5 @@
 """OpenAI adapter for query generation."""
+
 import json
 from typing import Any, Dict, Optional
 
@@ -17,11 +18,13 @@ logger = structlog.get_logger()
 class OpenAIAdapter(AIProviderPort):
     """OpenAI adapter for natural language to SQL generation."""
 
-    def __init__(self,
-                 api_key: Optional[str] = None,
-                 model: str = "gpt-4-turbo-preview",
-                 max_tokens: int = 2000,
-                 temperature: float = 0.1):
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model: str = "gpt-4-turbo-preview",
+        max_tokens: int = 2000,
+        temperature: float = 0.1,
+    ):
         self.api_key = api_key or settings.openai_api_key
         if not self.api_key:
             raise ProviderException("OpenAI API key is required")
@@ -55,11 +58,7 @@ class OpenAIAdapter(AIProviderPort):
         }
         return context_limits.get(self.model, 8192)
 
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=4, max=10),
-        reraise=True
-    )
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10), reraise=True)
     async def generate_query(self, context: QueryContext) -> QueryResponse:
         """Generate SQL query from natural language."""
         try:
@@ -73,18 +72,12 @@ class OpenAIAdapter(AIProviderPort):
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=[
-                    {
-                        "role": "system",
-                        "content": self._get_system_prompt(context.database_type)
-                    },
-                    {
-                        "role": "user",
-                        "content": prompt
-                    }
+                    {"role": "system", "content": self._get_system_prompt(context.database_type)},
+                    {"role": "user", "content": prompt},
                 ],
                 max_tokens=context.max_tokens,
                 temperature=context.temperature,
-                response_format={"type": "json_object"}
+                response_format={"type": "json_object"},
             )
 
             # Parse response
@@ -92,17 +85,17 @@ class OpenAIAdapter(AIProviderPort):
 
             # Create QueryResponse
             return QueryResponse(
-                sql=result['sql'],
-                explanation=result.get('explanation', ''),
-                confidence=result.get('confidence', 0.8),
+                sql=result["sql"],
+                explanation=result.get("explanation", ""),
+                confidence=result.get("confidence", 0.8),
                 tokens_used=response.usage.total_tokens,
                 provider=self.provider_type.value,
                 metadata={
-                    'model': self.model,
-                    'finish_reason': response.choices[0].finish_reason,
-                    'prompt_tokens': response.usage.prompt_tokens,
-                    'completion_tokens': response.usage.completion_tokens
-                }
+                    "model": self.model,
+                    "finish_reason": response.choices[0].finish_reason,
+                    "prompt_tokens": response.usage.prompt_tokens,
+                    "completion_tokens": response.usage.completion_tokens,
+                },
             )
 
         except Exception as e:
@@ -119,16 +112,13 @@ class OpenAIAdapter(AIProviderPort):
                 messages=[
                     {
                         "role": "system",
-                        "content": "You are a SQL validation expert. Analyze the given SQL query and provide validation results in JSON format."
+                        "content": "You are a SQL validation expert. Analyze the given SQL query and provide validation results in JSON format.",
                     },
-                    {
-                        "role": "user",
-                        "content": validation_prompt
-                    }
+                    {"role": "user", "content": validation_prompt},
                 ],
                 max_tokens=1000,
                 temperature=0,
-                response_format={"type": "json_object"}
+                response_format={"type": "json_object"},
             )
 
             result = json.loads(response.choices[0].message.content)
@@ -136,11 +126,7 @@ class OpenAIAdapter(AIProviderPort):
 
         except Exception as e:
             logger.error("OpenAI query validation failed", error=str(e))
-            return {
-                'is_valid': False,
-                'errors': [f"Validation failed: {e!s}"],
-                'warnings': []
-            }
+            return {"is_valid": False, "errors": [f"Validation failed: {e!s}"], "warnings": []}
 
     def _build_prompt(self, context: QueryContext) -> str:
         """Build prompt for query generation."""
@@ -212,7 +198,7 @@ Ensure the JSON is properly formatted with no syntax errors. Escape any quotes i
             "mysql": "You specialize in MySQL syntax and features. Use MySQL-specific functions and syntax when appropriate.",
             "sqlite": "You specialize in SQLite syntax and features. Use SQLite-specific functions and syntax when appropriate.",
             "mssql": "You specialize in SQL Server syntax and features. Use T-SQL syntax when appropriate.",
-            "oracle": "You specialize in Oracle SQL syntax and features. Use Oracle-specific functions and syntax when appropriate."
+            "oracle": "You specialize in Oracle SQL syntax and features. Use Oracle-specific functions and syntax when appropriate.",
         }
 
         specific_prompt = database_specific.get(database_type.lower(), "")
@@ -228,20 +214,20 @@ Ensure the JSON is properly formatted with no syntax errors. Escape any quotes i
             logger.debug("Raw OpenAI response", content=content)
 
             # Try to extract JSON if wrapped in markdown
-            if content.startswith('```json'):
-                content = content.replace('```json', '').replace('```', '').strip()
-            elif content.startswith('```'):
-                content = content.replace('```', '').strip()
+            if content.startswith("```json"):
+                content = content.replace("```json", "").replace("```", "").strip()
+            elif content.startswith("```"):
+                content = content.replace("```", "").strip()
 
             result = json.loads(content)
 
             # Validate required fields
-            if 'sql' not in result:
+            if "sql" not in result:
                 raise ProviderException("Response missing required 'sql' field")
 
             # Set defaults
-            result.setdefault('explanation', '')
-            result.setdefault('confidence', 0.8)
+            result.setdefault("explanation", "")
+            result.setdefault("confidence", 0.8)
 
             return result
 
@@ -272,11 +258,13 @@ Ensure the JSON is properly formatted with no syntax errors. Escape any quotes i
             raise TokenLimitException(
                 f"Input tokens ({total_input_tokens}) exceed available context ({available_tokens})",
                 tokens_used=total_input_tokens,
-                max_tokens=available_tokens
+                max_tokens=available_tokens,
             )
 
-        logger.debug("Token validation passed",
-                    prompt_tokens=prompt_tokens,
-                    system_tokens=system_tokens,
-                    total_tokens=total_input_tokens,
-                    available_tokens=available_tokens)
+        logger.debug(
+            "Token validation passed",
+            prompt_tokens=prompt_tokens,
+            system_tokens=system_tokens,
+            total_tokens=total_input_tokens,
+            available_tokens=available_tokens,
+        )

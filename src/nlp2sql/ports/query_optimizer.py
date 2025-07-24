@@ -1,4 +1,5 @@
 """Query Optimizer Port - Interface for SQL query optimization."""
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
@@ -7,6 +8,7 @@ from typing import Any, Dict, List, Optional
 
 class OptimizationLevel(Enum):
     """Optimization levels for queries."""
+
     NONE = "none"
     BASIC = "basic"
     MODERATE = "moderate"
@@ -16,6 +18,7 @@ class OptimizationLevel(Enum):
 @dataclass
 class OptimizationResult:
     """Result of query optimization."""
+
     original_query: str
     optimized_query: str
     optimizations_applied: List[str]
@@ -27,6 +30,7 @@ class OptimizationResult:
 @dataclass
 class QueryAnalysis:
     """Analysis of a SQL query."""
+
     tables_used: List[str]
     joins: List[Dict[str, Any]]
     filters: List[Dict[str, Any]]

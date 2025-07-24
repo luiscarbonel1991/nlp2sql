@@ -1,4 +1,5 @@
 """PostgreSQL repository for schema management."""
+
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -34,12 +35,7 @@ class PostgreSQLRepository(SchemaRepositoryPort):
             asyncpg_url = self.connection_string.replace("postgresql://", "postgresql+asyncpg://")
 
             # Create async engine
-            self.async_engine = create_async_engine(
-                asyncpg_url,
-                echo=False,
-                pool_size=10,
-                max_overflow=20
-            )
+            self.async_engine = create_async_engine(asyncpg_url, echo=False, pool_size=10, max_overflow=20)
 
             # Test connection
             async with self.async_engine.begin() as conn:
@@ -244,7 +240,7 @@ class PostgreSQLRepository(SchemaRepositoryPort):
                     version=row[1],
                     total_tables=row[2],
                     total_size_bytes=row[3] or 0,
-                    last_analyzed=datetime.now()
+                    last_analyzed=datetime.now(),
                 )
 
         except Exception as e:
@@ -309,7 +305,7 @@ class PostgreSQLRepository(SchemaRepositoryPort):
             row_count=row[5],
             size_bytes=row[4],
             description=row[2],
-            last_updated=datetime.now()
+            last_updated=datetime.now(),
         )
 
     async def _get_table_columns(self, table_name: str, schema: str) -> List[Dict[str, Any]]:
@@ -337,16 +333,18 @@ class PostgreSQLRepository(SchemaRepositoryPort):
 
             columns = []
             for row in rows:
-                columns.append({
-                    'name': row[0],
-                    'type': row[1],
-                    'nullable': row[2] == 'YES',
-                    'default': row[3],
-                    'max_length': row[4],
-                    'precision': row[5],
-                    'scale': row[6],
-                    'description': row[7]
-                })
+                columns.append(
+                    {
+                        "name": row[0],
+                        "type": row[1],
+                        "nullable": row[2] == "YES",
+                        "default": row[3],
+                        "max_length": row[4],
+                        "precision": row[5],
+                        "scale": row[6],
+                        "description": row[7],
+                    }
+                )
 
             return columns
 
@@ -388,12 +386,9 @@ class PostgreSQLRepository(SchemaRepositoryPort):
 
             foreign_keys = []
             for row in rows:
-                foreign_keys.append({
-                    'column': row[0],
-                    'ref_table': row[1],
-                    'ref_column': row[2],
-                    'constraint_name': row[3]
-                })
+                foreign_keys.append(
+                    {"column": row[0], "ref_table": row[1], "ref_column": row[2], "constraint_name": row[3]}
+                )
 
             return foreign_keys
 
@@ -422,11 +417,6 @@ class PostgreSQLRepository(SchemaRepositoryPort):
 
             indexes = []
             for row in rows:
-                indexes.append({
-                    'name': row[0],
-                    'columns': row[1],
-                    'unique': row[2],
-                    'primary': row[3]
-                })
+                indexes.append({"name": row[0], "columns": row[1], "unique": row[2], "primary": row[3]})
 
             return indexes

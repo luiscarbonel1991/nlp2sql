@@ -1,4 +1,5 @@
 """AI Provider Port - Interface for all AI providers."""
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
@@ -7,6 +8,7 @@ from typing import Any, Dict, List, Optional
 
 class AIProviderType(Enum):
     """Supported AI providers."""
+
     OPENAI = "openai"
     ANTHROPIC = "anthropic"
     BEDROCK = "bedrock"
@@ -17,6 +19,7 @@ class AIProviderType(Enum):
 @dataclass
 class QueryContext:
     """Context for query generation."""
+
     question: str
     database_type: str  # postgres, mysql, etc.
     schema_context: str
@@ -29,6 +32,7 @@ class QueryContext:
 @dataclass
 class QueryResponse:
     """Response from AI provider."""
+
     sql: str
     explanation: str
     confidence: float

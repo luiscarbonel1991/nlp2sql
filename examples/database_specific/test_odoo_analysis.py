@@ -34,6 +34,7 @@ TEST_QUESTIONS = [
     "Find all purchase orders that are pending",
 ]
 
+
 class OdooNLP2SQLTester:
     def __init__(self):
         self.settings = Settings()
@@ -52,17 +53,14 @@ class OdooNLP2SQLTester:
             port=ODOO_DB_CONFIG["port"],
             database=ODOO_DB_CONFIG["database"],
             username=ODOO_DB_CONFIG["username"],
-            password=ODOO_DB_CONFIG["password"]
+            password=ODOO_DB_CONFIG["password"],
         )
 
         # Initialize schema analyzer
         self.schema_analyzer = SchemaAnalyzer(self.schema_repo)
 
         # Initialize schema manager
-        self.schema_manager = SchemaManager(
-            schema_repository=self.schema_repo,
-            schema_analyzer=self.schema_analyzer
-        )
+        self.schema_manager = SchemaManager(schema_repository=self.schema_repo, schema_analyzer=self.schema_analyzer)
 
         # Initialize AI provider (OpenAI)
         if not os.getenv("OPENAI_API_KEY"):
@@ -71,10 +69,7 @@ class OdooNLP2SQLTester:
 
         try:
             ai_adapter = OpenAIAdapter()
-            self.query_service = QueryGenerationService(
-                ai_provider=ai_adapter,
-                schema_manager=self.schema_manager
-            )
+            self.query_service = QueryGenerationService(ai_provider=ai_adapter, schema_manager=self.schema_manager)
         except Exception as e:
             print(f"⚠️  Could not initialize AI provider: {e}")
 
@@ -107,11 +102,21 @@ class OdooNLP2SQLTester:
 
             # Show some key Odoo tables
             odoo_core_tables = [
-                table for table in tables
-                if any(keyword in table.name.lower() for keyword in [
-                    'res_users', 'res_partner', 'product_', 'sale_',
-                    'purchase_', 'account_', 'hr_', 'stock_'
-                ])
+                table
+                for table in tables
+                if any(
+                    keyword in table.name.lower()
+                    for keyword in [
+                        "res_users",
+                        "res_partner",
+                        "product_",
+                        "sale_",
+                        "purchase_",
+                        "account_",
+                        "hr_",
+                        "stock_",
+                    ]
+                )
             ][:10]  # Limit to first 10
 
             print("\n🏢 Key Odoo tables found:")
@@ -152,10 +157,7 @@ class OdooNLP2SQLTester:
 
             # Test schema loading with filters
             test_context = "users and customers"
-            relevant_tables = await self.schema_manager.get_relevant_schema(
-                query_context=test_context,
-                max_tables=5
-            )
+            relevant_tables = await self.schema_manager.get_relevant_schema(query_context=test_context, max_tables=5)
 
             print(f"📋 Found {len(relevant_tables)} relevant tables for context: '{test_context}'")
             for table in relevant_tables:
@@ -185,8 +187,7 @@ class OdooNLP2SQLTester:
 
                 try:
                     result = await self.query_service.generate_query(
-                        natural_language_query=question,
-                        database_type=DatabaseType.POSTGRES
+                        natural_language_query=question, database_type=DatabaseType.POSTGRES
                     )
 
                     print("✅ Generated SQL:")

@@ -1,4 +1,5 @@
 """Example showing multiple AI providers support."""
+
 import asyncio
 import os
 
@@ -24,20 +25,20 @@ async def test_multiple_ai_providers():
             "name": "OpenAI GPT-4",
             "provider": "openai",
             "api_key": os.getenv("OPENAI_API_KEY"),
-            "env_var": "OPENAI_API_KEY"
+            "env_var": "OPENAI_API_KEY",
         },
         {
             "name": "Anthropic Claude",
             "provider": "anthropic",
             "api_key": os.getenv("ANTHROPIC_API_KEY"),
-            "env_var": "ANTHROPIC_API_KEY"
+            "env_var": "ANTHROPIC_API_KEY",
         },
         {
             "name": "Google Gemini",
             "provider": "gemini",
             "api_key": os.getenv("GOOGLE_API_KEY"),
-            "env_var": "GOOGLE_API_KEY"
-        }
+            "env_var": "GOOGLE_API_KEY",
+        },
     ]
 
     results = []
@@ -45,7 +46,7 @@ async def test_multiple_ai_providers():
     for provider_config in providers:
         print(f"🔧 Testing {provider_config['name']}...")
 
-        if not provider_config['api_key']:
+        if not provider_config["api_key"]:
             print(f"   ⚠️  Skipped - No API key (set {provider_config['env_var']} env var)")
             print()
             continue
@@ -53,17 +54,12 @@ async def test_multiple_ai_providers():
         try:
             # Create service with specific provider
             service = await create_and_initialize_service(
-                database_url=database_url,
-                ai_provider=provider_config['provider'],
-                api_key=provider_config['api_key']
+                database_url=database_url, ai_provider=provider_config["provider"], api_key=provider_config["api_key"]
             )
 
             # Generate SQL
             result = await service.generate_sql(
-                question=question,
-                database_type=DatabaseType.POSTGRES,
-                max_tokens=500,
-                temperature=0.1
+                question=question, database_type=DatabaseType.POSTGRES, max_tokens=500, temperature=0.1
             )
 
             print("   ✅ Success!")
@@ -72,12 +68,14 @@ async def test_multiple_ai_providers():
             print(f"   ⚡ Tokens: {result['tokens_used']}")
             print(f"   🧠 Provider: {result['provider']}")
 
-            results.append({
-                'provider': provider_config['name'],
-                'sql': result['sql'],
-                'confidence': result['confidence'],
-                'tokens': result['tokens_used']
-            })
+            results.append(
+                {
+                    "provider": provider_config["name"],
+                    "sql": result["sql"],
+                    "confidence": result["confidence"],
+                    "tokens": result["tokens_used"],
+                }
+            )
 
         except ImportError as e:
             print(f"   ❌ Import Error: {e!s}")
@@ -100,17 +98,17 @@ async def test_multiple_ai_providers():
             print()
 
         # Find most confident result
-        best_result = max(results, key=lambda x: x['confidence'])
+        best_result = max(results, key=lambda x: x["confidence"])
         print(f"🏆 Highest Confidence: {best_result['provider']} ({best_result['confidence']})")
 
         # Check SQL consistency
-        unique_sqls = set(result['sql'].strip().lower() for result in results)
+        unique_sqls = set(result["sql"].strip().lower() for result in results)
         if len(unique_sqls) == 1:
             print("✅ All providers generated identical SQL!")
         else:
             print(f"⚠️  Generated {len(unique_sqls)} different SQL variants")
 
-    print("\n" + "="*50)
+    print("\n" + "=" * 50)
     print("🎯 Multi-Provider Benefits:")
     print("   ✅ No vendor lock-in")
     print("   ✅ Compare AI model performance")
@@ -129,23 +127,23 @@ async def demo_provider_selection():
         {
             "use_case": "High accuracy complex queries",
             "recommended": "OpenAI GPT-4",
-            "reason": "Most sophisticated reasoning"
+            "reason": "Most sophisticated reasoning",
         },
         {
             "use_case": "Cost-effective high volume",
             "recommended": "Google Gemini",
-            "reason": "Good performance, competitive pricing"
+            "reason": "Good performance, competitive pricing",
         },
         {
             "use_case": "Long context/large schemas",
             "recommended": "Anthropic Claude",
-            "reason": "200K token context window"
+            "reason": "200K token context window",
         },
         {
             "use_case": "Privacy-sensitive data",
             "recommended": "Self-hosted options",
-            "reason": "Data doesn't leave your infrastructure"
-        }
+            "reason": "Data doesn't leave your infrastructure",
+        },
     ]
 
     for case in use_cases:

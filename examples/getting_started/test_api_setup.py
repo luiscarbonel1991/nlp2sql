@@ -6,6 +6,7 @@ This example consolidates API key testing and validation into one comprehensive 
 - Simple SQL generation testing
 - Troubleshooting common issues
 """
+
 import asyncio
 import os
 
@@ -33,6 +34,7 @@ async def test_openai_api_key(api_key: str = None):
     try:
         # Test with a simple database-less example
         from nlp2sql.adapters.openai_adapter import OpenAIAdapter
+
         adapter = OpenAIAdapter(api_key=test_key)
 
         print("✅ API key format is valid")
@@ -70,7 +72,7 @@ async def test_simple_sql_generation():
     providers = [
         {"name": "openai", "env_var": "OPENAI_API_KEY", "key": os.getenv("OPENAI_API_KEY")},
         {"name": "anthropic", "env_var": "ANTHROPIC_API_KEY", "key": os.getenv("ANTHROPIC_API_KEY")},
-        {"name": "gemini", "env_var": "GOOGLE_API_KEY", "key": os.getenv("GOOGLE_API_KEY")}
+        {"name": "gemini", "env_var": "GOOGLE_API_KEY", "key": os.getenv("GOOGLE_API_KEY")},
     ]
 
     # Find first available provider
@@ -98,10 +100,9 @@ async def test_simple_sql_generation():
 
         # This will test the API key and basic functionality
         from nlp2sql import create_query_service
+
         service = create_query_service(
-            database_url=database_url,
-            ai_provider=selected_provider["name"],
-            api_key=selected_provider["key"]
+            database_url=database_url, ai_provider=selected_provider["name"], api_key=selected_provider["key"]
         )
 
         print("✅ Service created successfully")
@@ -124,7 +125,7 @@ async def test_environment_setup():
     api_keys = {
         "OpenAI": os.getenv("OPENAI_API_KEY"),
         "Anthropic": os.getenv("ANTHROPIC_API_KEY"),
-        "Google": os.getenv("GOOGLE_API_KEY")
+        "Google": os.getenv("GOOGLE_API_KEY"),
     }
 
     print("🔍 Checking environment variables:")
@@ -156,24 +157,19 @@ async def test_multiple_providers():
     print("=" * 40)
 
     providers_config = [
-        {
-            "name": "OpenAI",
-            "provider": "openai",
-            "env_var": "OPENAI_API_KEY",
-            "api_key": os.getenv("OPENAI_API_KEY")
-        },
+        {"name": "OpenAI", "provider": "openai", "env_var": "OPENAI_API_KEY", "api_key": os.getenv("OPENAI_API_KEY")},
         {
             "name": "Anthropic",
             "provider": "anthropic",
             "env_var": "ANTHROPIC_API_KEY",
-            "api_key": os.getenv("ANTHROPIC_API_KEY")
+            "api_key": os.getenv("ANTHROPIC_API_KEY"),
         },
         {
             "name": "Google Gemini",
             "provider": "gemini",
             "env_var": "GOOGLE_API_KEY",
-            "api_key": os.getenv("GOOGLE_API_KEY")
-        }
+            "api_key": os.getenv("GOOGLE_API_KEY"),
+        },
     ]
 
     working_providers = []
@@ -181,21 +177,22 @@ async def test_multiple_providers():
     for config in providers_config:
         print(f"\n🔍 Testing {config['name']}...")
 
-        if not config['api_key']:
+        if not config["api_key"]:
             print(f"   ⚠️  Skipped - No API key (set {config['env_var']})")
             continue
 
         try:
             # Create a basic service to test the provider
             from nlp2sql import create_query_service
+
             service = create_query_service(
                 database_url="postgresql://test:test@localhost/test",
-                ai_provider=config['provider'],
-                api_key=config['api_key']
+                ai_provider=config["provider"],
+                api_key=config["api_key"],
             )
 
             print(f"   ✅ {config['name']} adapter initialized successfully")
-            working_providers.append(config['name'])
+            working_providers.append(config["name"])
 
         except ImportError as e:
             print(f"   ❌ Import error: {e!s}")
@@ -251,7 +248,7 @@ async def run_comprehensive_test():
         ("Environment Setup", test_environment_setup),
         ("OpenAI API Key", lambda: test_openai_api_key()),
         ("Simple SQL Generation", test_simple_sql_generation),
-        ("Multiple Providers", test_multiple_providers)
+        ("Multiple Providers", test_multiple_providers),
     ]
 
     results = []

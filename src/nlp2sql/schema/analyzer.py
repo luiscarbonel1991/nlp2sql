@@ -1,4 +1,5 @@
 """Schema analyzer for relevance scoring and analysis."""
+
 import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
@@ -17,6 +18,7 @@ logger = structlog.get_logger()
 @dataclass
 class RelevanceScore:
     """Relevance score for a schema element."""
+
     element_name: str
     element_type: str  # table, column
     score: float
@@ -29,11 +31,7 @@ class SchemaAnalyzer(SchemaStrategyPort):
 
     def __init__(self, embedding_model: str = "all-MiniLM-L6-v2"):
         self.embedding_model = SentenceTransformer(embedding_model)
-        self.tfidf_vectorizer = TfidfVectorizer(
-            ngram_range=(1, 3),
-            stop_words='english',
-            max_features=10000
-        )
+        self.tfidf_vectorizer = TfidfVectorizer(ngram_range=(1, 3), stop_words="english", max_features=10000)
         self._schema_embeddings = {}
         self._schema_descriptions = {}
 
@@ -44,19 +42,21 @@ class SchemaAnalyzer(SchemaStrategyPort):
         current_tokens = 0
 
         # Sort tables by estimated relevance (larger tables first)
-        sorted_tables = sorted(tables, key=lambda t: len(t.get('columns', [])), reverse=True)
+        sorted_tables = sorted(tables, key=lambda t: len(t.get("columns", [])), reverse=True)
 
         for table in sorted_tables:
             table_tokens = self._estimate_tokens(table)
 
             if current_tokens + table_tokens > max_chunk_size and current_chunk:
                 # Create chunk
-                chunks.append(SchemaChunk(
-                    tables=[t['name'] for t in current_chunk],
-                    token_count=current_tokens,
-                    relevance_score=1.0,  # Will be updated based on query
-                    metadata={'table_count': len(current_chunk)}
-                ))
+                chunks.append(
+                    SchemaChunk(
+                        tables=[t["name"] for t in current_chunk],
+                        token_count=current_tokens,
+                        relevance_score=1.0,  # Will be updated based on query
+                        metadata={"table_count": len(current_chunk)},
+                    )
+                )
                 current_chunk = [table]
                 current_tokens = table_tokens
             else:
@@ -65,20 +65,22 @@ class SchemaAnalyzer(SchemaStrategyPort):
 
         # Add remaining tables
         if current_chunk:
-            chunks.append(SchemaChunk(
-                tables=[t['name'] for t in current_chunk],
-                token_count=current_tokens,
-                relevance_score=1.0,
-                metadata={'table_count': len(current_chunk)}
-            ))
+            chunks.append(
+                SchemaChunk(
+                    tables=[t["name"] for t in current_chunk],
+                    token_count=current_tokens,
+                    relevance_score=1.0,
+                    metadata={"table_count": len(current_chunk)},
+                )
+            )
 
         logger.info("Schema chunked", chunks=len(chunks), total_tables=len(tables))
         return chunks
 
     async def score_relevance(self, query: str, schema_element: Dict[str, Any]) -> float:
         """Score relevance of schema element to query."""
-        element_name = schema_element.get('name', '')
-        element_type = schema_element.get('type', 'table')
+        element_name = schema_element.get("name", "")
+        element_type = schema_element.get("type", "table")
 
         # Multiple scoring strategies
         scores = []
@@ -106,13 +108,10 @@ class SchemaAnalyzer(SchemaStrategyPort):
             reasons.append(f"High semantic similarity: {semantic_score:.2f}")
 
         # 4. Column-based relevance for tables
-        if element_type == 'table' and 'columns' in schema_element:
+        if element_type == "table" and "columns" in schema_element:
             column_scores = []
-            for column in schema_element['columns']:
-                col_score = await self.score_relevance(query, {
-                    'name': column.get('name', ''),
-                    'type': 'column'
-                })
+            for column in schema_element["columns"]:
+                col_score = await self.score_relevance(query, {"name": column.get("name", ""), "type": "column"})
                 column_scores.append(col_score)
 
             if column_scores:
@@ -124,10 +123,7 @@ class SchemaAnalyzer(SchemaStrategyPort):
         # Combine scores
         final_score = max(scores) if scores else 0.0
 
-        logger.debug("Relevance scored",
-                    element=element_name,
-                    score=final_score,
-                    reasons=reasons)
+        logger.debug("Relevance scored", element=element_name, score=final_score, reasons=reasons)
 
         return final_score
 
@@ -145,30 +141,30 @@ class SchemaAnalyzer(SchemaStrategyPort):
             table_desc = f"Table: {table_name}"
 
             # Add primary keys
-            if 'primary_keys' in table_info:
+            if "primary_keys" in table_info:
                 table_desc += f" (PK: {', '.join(table_info['primary_keys'])})"
 
             # Add most important columns
-            if 'columns' in table_info:
-                important_cols = self._get_important_columns(table_info['columns'])
+            if "columns" in table_info:
+                important_cols = self._get_important_columns(table_info["columns"])
                 col_info = []
 
                 for col in important_cols[:10]:  # Limit columns
                     col_str = f"{col['name']}:{col['type']}"
-                    if col.get('nullable', True):
+                    if col.get("nullable", True):
                         col_str += "?"
                     col_info.append(col_str)
 
                 table_desc += f"\n  Columns: {', '.join(col_info)}"
 
             # Add foreign keys (compressed)
-            if table_info.get('foreign_keys'):
+            if table_info.get("foreign_keys"):
                 fk_info = []
-                for fk in table_info['foreign_keys'][:3]:  # Limit FKs
+                for fk in table_info["foreign_keys"][:3]:  # Limit FKs
                     fk_info.append(f"{fk['column']}->{fk['ref_table']}")
                 table_desc += f"\n  FK: {', '.join(fk_info)}"
 
-            desc_tokens = self._estimate_tokens({'description': table_desc})
+            desc_tokens = self._estimate_tokens({"description": table_desc})
             if current_tokens + desc_tokens <= target_tokens:
                 compressed.append(table_desc)
                 current_tokens += desc_tokens
@@ -225,7 +221,7 @@ class SchemaAnalyzer(SchemaStrategyPort):
                 continue
 
             table_context = self._build_table_context(table, context)
-            table_tokens = self._estimate_tokens({'text': table_context})
+            table_tokens = self._estimate_tokens({"text": table_context})
 
             if current_tokens + table_tokens <= context.max_tokens:
                 context_parts.append(table_context)
@@ -233,7 +229,7 @@ class SchemaAnalyzer(SchemaStrategyPort):
             else:
                 # Try compressed version
                 compressed = self._build_compressed_table_context(table)
-                compressed_tokens = self._estimate_tokens({'text': compressed})
+                compressed_tokens = self._estimate_tokens({"text": compressed})
                 if current_tokens + compressed_tokens <= context.max_tokens:
                     context_parts.append(compressed)
                     current_tokens += compressed_tokens
@@ -251,26 +247,27 @@ class SchemaAnalyzer(SchemaStrategyPort):
     def _tokenize(self, text: str) -> List[str]:
         """Tokenize text for matching."""
         # Split on non-alphanumeric, convert to lowercase
-        tokens = re.findall(r'\w+', text.lower())
+        tokens = re.findall(r"\w+", text.lower())
         # Handle snake_case and camelCase
         expanded_tokens = []
         for token in tokens:
             # Snake case
-            expanded_tokens.extend(token.split('_'))
+            expanded_tokens.extend(token.split("_"))
             # Camel case
-            expanded_tokens.extend(re.findall(r'[A-Z]?[a-z]+|[A-Z]+(?=[A-Z]|$)', token))
+            expanded_tokens.extend(re.findall(r"[A-Z]?[a-z]+|[A-Z]+(?=[A-Z]|$)", token))
 
         return [t.lower() for t in expanded_tokens if t]
 
-    async def _calculate_semantic_similarity(self, query: str, element_name: str,
-                                           schema_element: Dict[str, Any]) -> float:
+    async def _calculate_semantic_similarity(
+        self, query: str, element_name: str, schema_element: Dict[str, Any]
+    ) -> float:
         """Calculate semantic similarity using embeddings."""
         # Create descriptive text for element
         element_desc = f"{element_name}"
-        if 'description' in schema_element:
+        if "description" in schema_element:
             element_desc += f" {schema_element['description']}"
-        if 'columns' in schema_element:
-            col_names = [c.get('name', '') for c in schema_element['columns'][:5]]
+        if "columns" in schema_element:
+            col_names = [c.get("name", "") for c in schema_element["columns"][:5]]
             element_desc += f" with columns {', '.join(col_names)}"
 
         # Get embeddings
@@ -286,18 +283,18 @@ class SchemaAnalyzer(SchemaStrategyPort):
         important = []
 
         # Priority patterns
-        priority_patterns = ['id', 'name', 'date', 'amount', 'total', 'count', 'status', 'type']
+        priority_patterns = ["id", "name", "date", "amount", "total", "count", "status", "type"]
 
         # First add primary keys and foreign keys
         for col in columns:
-            if col.get('is_primary_key') or col.get('is_foreign_key'):
+            if col.get("is_primary_key") or col.get("is_foreign_key"):
                 important.append(col)
 
         # Then add columns matching priority patterns
         for col in columns:
             if col in important:
                 continue
-            col_name = col.get('name', '').lower()
+            col_name = col.get("name", "").lower()
             if any(pattern in col_name for pattern in priority_patterns):
                 important.append(col)
 
@@ -314,50 +311,50 @@ class SchemaAnalyzer(SchemaStrategyPort):
         """Build context for a single table."""
         parts = [f"Table: {table['name']}"]
 
-        if 'description' in table:
+        if "description" in table:
             parts.append(f"Description: {table['description']}")
 
         # Columns
-        if 'columns' in table:
+        if "columns" in table:
             col_defs = []
-            for col in table['columns']:
+            for col in table["columns"]:
                 col_def = f"  - {col['name']} {col['type']}"
-                if col.get('nullable', True):
+                if col.get("nullable", True):
                     col_def += " NULL"
                 else:
                     col_def += " NOT NULL"
-                if col.get('is_primary_key'):
+                if col.get("is_primary_key"):
                     col_def += " PRIMARY KEY"
-                if col.get('is_foreign_key'):
+                if col.get("is_foreign_key"):
                     col_def += " FOREIGN KEY"
                 col_defs.append(col_def)
             parts.append("Columns:\n" + "\n".join(col_defs))
 
         # Relationships
-        if table.get('foreign_keys'):
+        if table.get("foreign_keys"):
             fk_defs = []
-            for fk in table['foreign_keys']:
+            for fk in table["foreign_keys"]:
                 fk_defs.append(f"  - {fk['column']} -> {fk['ref_table']}.{fk['ref_column']}")
             parts.append("Foreign Keys:\n" + "\n".join(fk_defs))
 
         # Sample data if requested
-        if context.include_samples and 'sample_data' in table:
+        if context.include_samples and "sample_data" in table:
             parts.append(f"Sample Data: {table['sample_data'][:3]}")
 
         return "\n".join(parts)
 
     def _build_compressed_table_context(self, table: Dict[str, Any]) -> str:
         """Build compressed context for a table."""
-        name = table['name']
+        name = table["name"]
         cols = []
 
-        if 'columns' in table:
-            important_cols = self._get_important_columns(table['columns'])
+        if "columns" in table:
+            important_cols = self._get_important_columns(table["columns"])
             for col in important_cols[:8]:  # Limit to 8 columns
                 col_str = f"{col['name']}:{col['type'][:3]}"  # Abbreviate type
-                if col.get('is_primary_key'):
+                if col.get("is_primary_key"):
                     col_str += "*"
-                if col.get('is_foreign_key'):
+                if col.get("is_foreign_key"):
                     col_str += "→"
                 cols.append(col_str)
 

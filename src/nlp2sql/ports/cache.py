@@ -1,4 +1,5 @@
 """Cache Port - Interface for caching mechanisms."""
+
 from abc import ABC, abstractmethod
 from datetime import timedelta
 from typing import Any, Dict, Optional

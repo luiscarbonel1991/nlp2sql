@@ -1,4 +1,5 @@
 """Simple demonstration of nlp2sql library."""
+
 from nlp2sql.adapters.openai_adapter import OpenAIAdapter
 from nlp2sql.core.entities import DatabaseType
 from nlp2sql.ports.ai_provider import QueryContext, QueryResponse
@@ -28,13 +29,8 @@ def demo_basic_functionality():
             country VARCHAR(100)
         );
         """,
-        examples=[
-            {
-                "question": "Show all users",
-                "sql": "SELECT * FROM users"
-            }
-        ],
-        max_tokens=1000
+        examples=[{"question": "Show all users", "sql": "SELECT * FROM users"}],
+        max_tokens=1000,
     )
 
     print(f"   Question: {context.question}")
@@ -48,7 +44,7 @@ def demo_basic_functionality():
         explanation="This query selects all customers from the city of Madrid",
         confidence=0.95,
         tokens_used=150,
-        provider="openai"
+        provider="openai",
     )
 
     print(f"   SQL: {response.sql}")
@@ -63,7 +59,7 @@ def demo_basic_functionality():
         adapter = OpenAIAdapter(
             api_key="demo-key",  # Demo key
             model="gpt-4-turbo-preview",
-            temperature=0.1
+            temperature=0.1,
         )
 
         print(f"   Provider type: {adapter.provider_type.value}")

@@ -1,4 +1,5 @@
 """Basic tests for nlp2sql library."""
+
 import pytest
 
 from nlp2sql.core.entities import DatabaseType
@@ -27,7 +28,7 @@ class TestBasicFunctionality:
             database_type="postgres",
             schema_context="CREATE TABLE users (id INT, name VARCHAR(255))",
             examples=[],
-            max_tokens=1000
+            max_tokens=1000,
         )
 
         assert context.question == "Show me all users"
@@ -41,7 +42,7 @@ class TestBasicFunctionality:
             explanation="This query selects all users",
             confidence=0.95,
             tokens_used=150,
-            provider="openai"
+            provider="openai",
         )
 
         assert response.sql == "SELECT * FROM users"

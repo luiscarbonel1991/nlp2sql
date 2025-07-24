@@ -1,4 +1,5 @@
 """Schema Strategy Port - Interface for schema handling strategies."""
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
@@ -9,6 +10,7 @@ import numpy as np
 @dataclass
 class SchemaChunk:
     """Represents a chunk of schema information."""
+
     tables: List[str]
     token_count: int
     relevance_score: float
@@ -18,6 +20,7 @@ class SchemaChunk:
 @dataclass
 class SchemaContext:
     """Context for schema processing."""
+
     query: str
     max_tokens: int
     database_type: str

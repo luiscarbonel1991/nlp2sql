@@ -1,4 +1,5 @@
 """Comprehensive schema filtering demonstration for nlp2sql."""
+
 import asyncio
 import logging
 import os
@@ -8,10 +9,7 @@ import structlog
 # Disable debug logs for cleaner output
 logging.basicConfig(level=logging.WARNING)
 structlog.configure(
-    processors=[
-        structlog.stdlib.filter_by_level,
-        structlog.dev.ConsoleRenderer()
-    ],
+    processors=[structlog.stdlib.filter_by_level, structlog.dev.ConsoleRenderer()],
     wrapper_class=structlog.stdlib.BoundLogger,
     logger_factory=structlog.stdlib.LoggerFactory(),
     cache_logger_on_first_use=True,
@@ -30,7 +28,7 @@ async def test_comprehensive_schema_filtering():
     providers = [
         {"name": "openai", "env_var": "OPENAI_API_KEY", "key": os.getenv("OPENAI_API_KEY")},
         {"name": "anthropic", "env_var": "ANTHROPIC_API_KEY", "key": os.getenv("ANTHROPIC_API_KEY")},
-        {"name": "gemini", "env_var": "GOOGLE_API_KEY", "key": os.getenv("GOOGLE_API_KEY")}
+        {"name": "gemini", "env_var": "GOOGLE_API_KEY", "key": os.getenv("GOOGLE_API_KEY")},
     ]
 
     selected_provider = None
@@ -59,11 +57,7 @@ async def test_comprehensive_schema_filtering():
     print("-" * 50)
 
     try:
-        service_all = await create_and_initialize_service(
-            database_url,
-            ai_provider=ai_provider,
-            api_key=api_key
-        )
+        service_all = await create_and_initialize_service(database_url, ai_provider=ai_provider, api_key=api_key)
 
         tables_all = await service_all.schema_repository.get_tables()
         print(f"✅ Loaded {len(tables_all)} tables total")
@@ -81,15 +75,10 @@ async def test_comprehensive_schema_filtering():
     print("-" * 50)
 
     try:
-        filters_no_system = {
-            "exclude_system_tables": True
-        }
+        filters_no_system = {"exclude_system_tables": True}
 
         service_no_system = await create_and_initialize_service(
-            database_url,
-            ai_provider=ai_provider,
-            api_key=api_key,
-            schema_filters=filters_no_system
+            database_url, ai_provider=ai_provider, api_key=api_key, schema_filters=filters_no_system
         )
 
         tables_no_system = await service_no_system.schema_repository.get_tables()
@@ -104,16 +93,10 @@ async def test_comprehensive_schema_filtering():
     print("-" * 50)
 
     try:
-        filters_specific = {
-            "include_tables": ["users", "products", "orders"],
-            "exclude_system_tables": True
-        }
+        filters_specific = {"include_tables": ["users", "products", "orders"], "exclude_system_tables": True}
 
         service_specific = await create_and_initialize_service(
-            database_url,
-            ai_provider=ai_provider,
-            api_key=api_key,
-            schema_filters=filters_specific
+            database_url, ai_provider=ai_provider, api_key=api_key, schema_filters=filters_specific
         )
 
         tables_specific = await service_specific.schema_repository.get_tables()
@@ -124,10 +107,7 @@ async def test_comprehensive_schema_filtering():
 
         # Test a query with limited schema
         print("\n🧠 Testing query with limited schema:")
-        result = await service_specific.generate_sql(
-            "How many users do we have?",
-            database_type=DatabaseType.POSTGRES
-        )
+        result = await service_specific.generate_sql("How many users do we have?", database_type=DatabaseType.POSTGRES)
 
         print(f"   📝 Generated SQL: {result['sql']}")
         print(f"   📊 Confidence: {result['confidence']}")
@@ -142,14 +122,11 @@ async def test_comprehensive_schema_filtering():
     try:
         filters_exclude = {
             "exclude_tables": ["reviews"],  # Exclude reviews table
-            "exclude_system_tables": True
+            "exclude_system_tables": True,
         }
 
         service_exclude = await create_and_initialize_service(
-            database_url,
-            ai_provider=ai_provider,
-            api_key=api_key,
-            schema_filters=filters_exclude
+            database_url, ai_provider=ai_provider, api_key=api_key, schema_filters=filters_exclude
         )
 
         tables_exclude = await service_exclude.schema_repository.get_tables()
@@ -159,7 +136,7 @@ async def test_comprehensive_schema_filtering():
         print(f"📋 Remaining tables: {', '.join(excluded_names)}")
 
         # Verify reviews table is not included
-        has_reviews = any(table.name == 'reviews' for table in tables_exclude)
+        has_reviews = any(table.name == "reviews" for table in tables_exclude)
         print(f"🔍 Reviews table present: {'❌ No' if not has_reviews else '✅ Yes'}")
 
     except Exception as e:
@@ -173,29 +150,23 @@ async def test_comprehensive_schema_filtering():
         # Check what schemas we have first
         all_schemas = set()
         for table in tables_all:
-            if hasattr(table, 'schema') and table.schema:
+            if hasattr(table, "schema") and table.schema:
                 all_schemas.add(table.schema)
             # Also check if schema is in the name (schema.table format)
-            if '.' in table.name:
-                schema_name = table.name.split('.')[0]
+            if "." in table.name:
+                schema_name = table.name.split(".")[0]
                 all_schemas.add(schema_name)
 
         if not all_schemas:
-            all_schemas.add('public')  # Default PostgreSQL schema
+            all_schemas.add("public")  # Default PostgreSQL schema
 
         print(f"📊 Available schemas: {', '.join(all_schemas) if all_schemas else 'public (default)'}")
 
         # Filter by public schema only
-        filters_schema = {
-            "include_schemas": ["public"],
-            "exclude_system_tables": True
-        }
+        filters_schema = {"include_schemas": ["public"], "exclude_system_tables": True}
 
         service_schema = await create_and_initialize_service(
-            database_url,
-            ai_provider=ai_provider,
-            api_key=api_key,
-            schema_filters=filters_schema
+            database_url, ai_provider=ai_provider, api_key=api_key, schema_filters=filters_schema
         )
 
         tables_schema = await service_schema.schema_repository.get_tables()
@@ -213,14 +184,11 @@ async def test_comprehensive_schema_filtering():
             "include_schemas": ["public"],
             "include_tables": ["users", "products", "orders", "categories"],
             "exclude_tables": ["order_items"],  # Exclude junction table
-            "exclude_system_tables": True
+            "exclude_system_tables": True,
         }
 
         service_complex = await create_and_initialize_service(
-            database_url,
-            ai_provider=ai_provider,
-            api_key=api_key,
-            schema_filters=filters_complex
+            database_url, ai_provider=ai_provider, api_key=api_key, schema_filters=filters_complex
         )
 
         tables_complex = await service_complex.schema_repository.get_tables()
@@ -232,8 +200,7 @@ async def test_comprehensive_schema_filtering():
         # Test query with complex filtered schema
         print("\n🧠 Testing query with complex filtered schema:")
         result = await service_complex.generate_sql(
-            "Show me products with their categories",
-            database_type=DatabaseType.POSTGRES
+            "Show me products with their categories", database_type=DatabaseType.POSTGRES
         )
 
         print(f"   📝 Generated SQL: {result['sql'][:100]}{'...' if len(result['sql']) > 100 else ''}")
@@ -243,9 +210,9 @@ async def test_comprehensive_schema_filtering():
         print(f"❌ Error: {e!s}")
 
     # Summary and recommendations
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("📊 SCHEMA FILTERING TEST RESULTS SUMMARY")
-    print("="*60)
+    print("=" * 60)
 
     print("\n🔢 Table Count Comparison:")
     print(f"   • No filters: {len(tables_all)} tables")

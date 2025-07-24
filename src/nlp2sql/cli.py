@@ -1,4 +1,5 @@
 """Enhanced command line interface for nlp2sql."""
+
 import asyncio
 import json
 import os
@@ -39,9 +40,9 @@ def setup_logging(verbose: bool = False):
 
 def detect_command_confusion(ctx, param, value):
     """Detect common command confusions and provide helpful suggestions."""
-    if ctx.info_name == 'inspect' and param.name == 'question':
+    if ctx.info_name == "inspect" and param.name == "question":
         click.echo("❌ Error: 'inspect' command doesn't accept --question option", err=True)
-        click.echo("💡 Did you mean: nlp2sql query --database-url [...] --question \"...\"", err=True)
+        click.echo('💡 Did you mean: nlp2sql query --database-url [...] --question "..."', err=True)
         click.echo("🔍 Use 'inspect' to analyze database schema", err=True)
         click.echo("🤖 Use 'query' to generate SQL from natural language", err=True)
         ctx.exit(1)
@@ -50,7 +51,7 @@ def detect_command_confusion(ctx, param, value):
 
 def validate_database_url(ctx, param, value):
     """Validate database URL format."""
-    if value and not value.startswith(('postgresql://', 'mysql://', 'sqlite://')):
+    if value and not value.startswith(("postgresql://", "mysql://", "sqlite://")):
         click.echo(f"❌ Invalid database URL format: {value}", err=True)
         click.echo("💡 Expected format: postgresql://user:pass@host:port/database", err=True)
         click.echo("📝 Examples:", err=True)
@@ -62,14 +63,14 @@ def validate_database_url(ctx, param, value):
 
 @click.group()
 @click.version_option()
-@click.option('--verbose', '-v', is_flag=True, help='Enable verbose output')
-@click.option('--config', type=click.Path(), help='Configuration file path')
+@click.option("--verbose", "-v", is_flag=True, help="Enable verbose output")
+@click.option("--config", type=click.Path(), help="Configuration file path")
 @click.pass_context
 def cli(ctx, verbose, config):
     """nlp2sql - Advanced Natural Language to SQL converter with multiple AI providers."""
     ctx.ensure_object(dict)
-    ctx.obj['verbose'] = verbose
-    ctx.obj['config'] = config
+    ctx.obj["verbose"] = verbose
+    ctx.obj["config"] = config
 
     setup_logging(verbose)
 
@@ -81,6 +82,7 @@ def cli(ctx, verbose, config):
 def version():
     """Show the version of the tool."""
     from . import __version__
+
     click.echo(f"nlp2sql version {__version__}")
 
 
@@ -88,8 +90,8 @@ def version():
 @click.pass_context
 def config(ctx):
     """Show the current configuration."""
-    verbose = ctx.obj.get('verbose', False)
-    config_path = ctx.obj.get('config', 'Not set')
+    verbose = ctx.obj.get("verbose", False)
+    config_path = ctx.obj.get("config", "Not set")
 
     click.echo("🔧 Current Configuration")
     click.echo("=" * 25)
@@ -98,9 +100,9 @@ def config(ctx):
 
     click.echo("\n🔑 API Keys Status:")
     api_keys = {
-        'OpenAI': os.getenv('OPENAI_API_KEY'),
-        'Anthropic': os.getenv('ANTHROPIC_API_KEY'),
-        'Google': os.getenv('GOOGLE_API_KEY')
+        "OpenAI": os.getenv("OPENAI_API_KEY"),
+        "Anthropic": os.getenv("ANTHROPIC_API_KEY"),
+        "Google": os.getenv("GOOGLE_API_KEY"),
     }
     for provider, key in api_keys.items():
         if key:
@@ -108,7 +110,7 @@ def config(ctx):
         else:
             click.echo(f"   ❌ {provider}: Not set")
 
-    db_url = os.getenv('DATABASE_URL')
+    db_url = os.getenv("DATABASE_URL")
     click.echo("\n🗄️ Database Connection:")
     if db_url:
         click.echo(f"   ✅ DATABASE_URL: {db_url}")
@@ -119,7 +121,7 @@ def config(ctx):
 @cli.command(name="init")
 def init():
     """Create a new configuration file."""
-    config_path = Path('nplsql.toml')
+    config_path = Path("nplsql.toml")
     if config_path.exists():
         click.echo("❌ Configuration file already exists.")
         return
@@ -144,33 +146,47 @@ api_key = "$GOOGLE_API_KEY"
 
 
 @cli.command()
-@click.option('--database-url', required=True, callback=validate_database_url,
-              help='Database connection URL')
-@click.option('--schema', default='public', help='Database schema name')
-@click.option('--output', type=click.File('w'), default='-', help='Output file (default: stdout)')
-@click.option('--format', 'output_format', type=click.Choice(['json', 'table', 'summary', 'csv']),
-              default='summary', help='Output format')
-@click.option('--include-tables', help='Comma-separated list of tables to include')
-@click.option('--exclude-tables', help='Comma-separated list of tables to exclude')
-@click.option('--exclude-system', is_flag=True, help='Exclude system tables')
-@click.option('--min-rows', type=int, help='Only show tables with at least N rows')
-@click.option('--max-tables', type=int, help='Limit number of tables shown')
-@click.option('--sort-by', type=click.Choice(['name', 'rows', 'size', 'columns']),
-              default='name', help='Sort tables by field')
+@click.option("--database-url", required=True, callback=validate_database_url, help="Database connection URL")
+@click.option("--schema", default="public", help="Database schema name")
+@click.option("--output", type=click.File("w"), default="-", help="Output file (default: stdout)")
+@click.option(
+    "--format",
+    "output_format",
+    type=click.Choice(["json", "table", "summary", "csv"]),
+    default="summary",
+    help="Output format",
+)
+@click.option("--include-tables", help="Comma-separated list of tables to include")
+@click.option("--exclude-tables", help="Comma-separated list of tables to exclude")
+@click.option("--exclude-system", is_flag=True, help="Exclude system tables")
+@click.option("--min-rows", type=int, help="Only show tables with at least N rows")
+@click.option("--max-tables", type=int, help="Limit number of tables shown")
+@click.option(
+    "--sort-by", type=click.Choice(["name", "rows", "size", "columns"]), default="name", help="Sort tables by field"
+)
 @click.pass_context
-def inspect(ctx, database_url: str, schema: str, output, output_format: str,
-           include_tables: Optional[str], exclude_tables: Optional[str],
-           exclude_system: bool, min_rows: Optional[int], max_tables: Optional[int],
-           sort_by: str):
+def inspect(
+    ctx,
+    database_url: str,
+    schema: str,
+    output,
+    output_format: str,
+    include_tables: Optional[str],
+    exclude_tables: Optional[str],
+    exclude_system: bool,
+    min_rows: Optional[int],
+    max_tables: Optional[int],
+    sort_by: str,
+):
     """Inspect database schema with advanced filtering and analysis."""
-    if 'question' in ctx.params:
+    if "question" in ctx.params:
         click.echo("❌ Error: 'inspect' command doesn't accept --question option", err=True)
-        click.echo("💡 Did you mean: nlp2sql query --database-url [...] --question \"...\"", err=True)
+        click.echo('💡 Did you mean: nlp2sql query --database-url [...] --question "..."', err=True)
         click.echo("🔍 Use 'inspect' to analyze database schema", err=True)
         click.echo("🤖 Use 'query' to generate SQL from natural language", err=True)
         ctx.exit(1)
 
-    verbose = ctx.obj.get('verbose', False)
+    verbose = ctx.obj.get("verbose", False)
 
     async def _inspect():
         try:
@@ -181,20 +197,20 @@ def inspect(ctx, database_url: str, schema: str, output, output_format: str,
             # Get schema information
             tables = await repo.get_tables()
 
-            if output_format == 'json':
+            if output_format == "json":
                 # Export full schema as JSON
                 schema_data = []
                 for table in tables:
                     table_data = {
-                        'name': table.name,
-                        'schema': table.schema,
-                        'columns': table.columns,
-                        'primary_keys': table.primary_keys,
-                        'foreign_keys': table.foreign_keys,
-                        'indexes': table.indexes,
-                        'row_count': table.row_count,
-                        'size_bytes': table.size_bytes,
-                        'description': table.description
+                        "name": table.name,
+                        "schema": table.schema,
+                        "columns": table.columns,
+                        "primary_keys": table.primary_keys,
+                        "foreign_keys": table.foreign_keys,
+                        "indexes": table.indexes,
+                        "row_count": table.row_count,
+                        "size_bytes": table.size_bytes,
+                        "description": table.description,
                     }
                     schema_data.append(table_data)
 
@@ -214,7 +230,7 @@ def inspect(ctx, database_url: str, schema: str, output, output_format: str,
 
         except NLP2SQLException as e:
             click.echo(f"❌ Application Error: {e!s}", err=True)
-            if verbose and hasattr(e, 'details'):
+            if verbose and hasattr(e, "details"):
                 click.echo(f"   Details: {e.details}", err=True)
             sys.exit(1)
 
@@ -222,6 +238,7 @@ def inspect(ctx, database_url: str, schema: str, output, output_format: str,
             click.echo(f"❌ An unexpected error occurred: {e!s}", err=True)
             if verbose:
                 import traceback
+
                 click.echo(traceback.format_exc(), err=True)
             sys.exit(1)
 
@@ -229,22 +246,33 @@ def inspect(ctx, database_url: str, schema: str, output, output_format: str,
 
 
 @cli.command()
-@click.option('--database-url', required=True, callback=validate_database_url,
-              help='Database connection URL')
-@click.option('--question', required=True, help='Natural language question')
-@click.option('--provider', default='openai',
-              type=click.Choice(['openai', 'anthropic', 'gemini']),
-              help='AI provider to use (default: openai)')
-@click.option('--api-key', help='API key (or use environment variables)')
-@click.option('--explain', is_flag=True, help='Include detailed explanation')
-@click.option('--temperature', type=float, default=0.1, help='Model temperature (0.0-1.0)')
-@click.option('--max-tokens', type=int, default=1000, help='Maximum tokens for response')
-@click.option('--schema-filters', help='JSON string with schema filters')
+@click.option("--database-url", required=True, callback=validate_database_url, help="Database connection URL")
+@click.option("--question", required=True, help="Natural language question")
+@click.option(
+    "--provider",
+    default="openai",
+    type=click.Choice(["openai", "anthropic", "gemini"]),
+    help="AI provider to use (default: openai)",
+)
+@click.option("--api-key", help="API key (or use environment variables)")
+@click.option("--explain", is_flag=True, help="Include detailed explanation")
+@click.option("--temperature", type=float, default=0.1, help="Model temperature (0.0-1.0)")
+@click.option("--max-tokens", type=int, default=1000, help="Maximum tokens for response")
+@click.option("--schema-filters", help="JSON string with schema filters")
 @click.pass_context
-def query(ctx, database_url: str, question: str, provider: str, api_key: Optional[str],
-          explain: bool, temperature: float, max_tokens: int, schema_filters: Optional[str]):
+def query(
+    ctx,
+    database_url: str,
+    question: str,
+    provider: str,
+    api_key: Optional[str],
+    explain: bool,
+    temperature: float,
+    max_tokens: int,
+    schema_filters: Optional[str],
+):
     """Generate SQL from natural language question with advanced options."""
-    verbose = ctx.obj.get('verbose', False)
+    verbose = ctx.obj.get("verbose", False)
 
     async def _query():
         try:
@@ -267,9 +295,9 @@ def query(ctx, database_url: str, question: str, provider: str, api_key: Optiona
             if not final_api_key:
                 # Map provider to correct environment variable
                 env_var_mapping = {
-                    'openai': 'OPENAI_API_KEY',
-                    'anthropic': 'ANTHROPIC_API_KEY',
-                    'gemini': 'GOOGLE_API_KEY'
+                    "openai": "OPENAI_API_KEY",
+                    "anthropic": "ANTHROPIC_API_KEY",
+                    "gemini": "GOOGLE_API_KEY",
                 }
                 env_var = env_var_mapping.get(provider, f"{provider.upper()}_API_KEY")
                 final_api_key = os.getenv(env_var)
@@ -279,10 +307,7 @@ def query(ctx, database_url: str, question: str, provider: str, api_key: Optiona
 
             # Create service
             service = await create_and_initialize_service(
-                database_url=database_url,
-                ai_provider=provider,
-                api_key=final_api_key,
-                schema_filters=filters
+                database_url=database_url, ai_provider=provider, api_key=final_api_key, schema_filters=filters
             )
 
             # Generate SQL
@@ -291,7 +316,7 @@ def query(ctx, database_url: str, question: str, provider: str, api_key: Optiona
                 database_type=DatabaseType.POSTGRES,
                 temperature=temperature,
                 max_tokens=max_tokens,
-                include_explanation=explain
+                include_explanation=explain,
             )
 
             # Output results
@@ -301,29 +326,29 @@ def query(ctx, database_url: str, question: str, provider: str, api_key: Optiona
             click.echo(f"📊 Confidence: {result['confidence']}")
             click.echo(f"⚡ Tokens used: {result['tokens_used']}")
 
-            if explain and 'explanation' in result:
+            if explain and "explanation" in result:
                 click.echo(f"💡 Explanation: {result['explanation']}")
 
-            if 'validation' in result:
-                validation = result['validation']
-                if validation['is_valid']:
+            if "validation" in result:
+                validation = result["validation"]
+                if validation["is_valid"]:
                     click.echo("✅ SQL validation: Passed")
                 else:
                     click.echo(f"⚠️  SQL validation issues: {validation.get('issues', [])}")
 
         except ProviderException as e:
             click.echo(f"❌ Provider Error: {e!s}", err=True)
-            if hasattr(e, 'provider'):
+            if hasattr(e, "provider"):
                 click.echo(f"   Provider: {e.provider}", err=True)
-            if hasattr(e, 'status_code'):
+            if hasattr(e, "status_code"):
                 click.echo(f"   Status Code: {e.status_code}", err=True)
-            if verbose and hasattr(e, 'details'):
+            if verbose and hasattr(e, "details"):
                 click.echo(f"   Details: {e.details}", err=True)
             sys.exit(1)
 
         except NLP2SQLException as e:
             click.echo(f"❌ Application Error: {e!s}", err=True)
-            if verbose and hasattr(e, 'details'):
+            if verbose and hasattr(e, "details"):
                 click.echo(f"   Details: {e.details}", err=True)
             sys.exit(1)
 
@@ -331,6 +356,7 @@ def query(ctx, database_url: str, question: str, provider: str, api_key: Optiona
             click.echo(f"❌ An unexpected error occurred: {e!s}", err=True)
             if verbose:
                 import traceback
+
                 click.echo(traceback.format_exc(), err=True)
             sys.exit(1)
 
@@ -341,16 +367,16 @@ def query(ctx, database_url: str, question: str, provider: str, api_key: Optiona
 @click.pass_context
 def setup(ctx):
     """Interactive setup and configuration for nlp2sql."""
-    verbose = ctx.obj.get('verbose', False)
+    verbose = ctx.obj.get("verbose", False)
 
     click.echo("🚀 nlp2sql - Interactive Setup")
     click.echo("=" * 40)
 
     # Check API keys
     api_keys = {
-        'OpenAI': os.getenv('OPENAI_API_KEY'),
-        'Anthropic': os.getenv('ANTHROPIC_API_KEY'),
-        'Google': os.getenv('GOOGLE_API_KEY')
+        "OpenAI": os.getenv("OPENAI_API_KEY"),
+        "Anthropic": os.getenv("ANTHROPIC_API_KEY"),
+        "Google": os.getenv("GOOGLE_API_KEY"),
     }
 
     click.echo("\n🔑 API Keys Status:")
@@ -396,18 +422,12 @@ async def _test_providers(providers: list, verbose: bool = False):
 
         try:
             # Map provider to correct environment variable
-            env_var_mapping = {
-                'openai': 'OPENAI_API_KEY',
-                'anthropic': 'ANTHROPIC_API_KEY',
-                'gemini': 'GOOGLE_API_KEY'
-            }
+            env_var_mapping = {"openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY", "gemini": "GOOGLE_API_KEY"}
             env_var = env_var_mapping.get(provider, f"{provider.upper()}_API_KEY")
 
             # Create a simple service to test the provider
             service = create_query_service(
-                database_url="postgresql://test:test@localhost/test",
-                ai_provider=provider,
-                api_key=os.getenv(env_var)
+                database_url="postgresql://test:test@localhost/test", ai_provider=provider, api_key=os.getenv(env_var)
             )
             click.echo(f"   ✅ {provider.title()}: Connection successful")
 
@@ -420,13 +440,9 @@ def _setup_database():
     click.echo("\n📊 Database Configuration")
     click.echo("-" * 30)
 
-    db_type = click.choice([
-        'postgresql',
-        'mysql',
-        'sqlite'
-    ], prompt="Select database type")
+    db_type = click.choice(["postgresql", "mysql", "sqlite"], prompt="Select database type")
 
-    if db_type == 'postgresql':
+    if db_type == "postgresql":
         host = click.prompt("Host", default="localhost")
         port = click.prompt("Port", default="5432")
         username = click.prompt("Username")
@@ -435,7 +451,7 @@ def _setup_database():
 
         db_url = f"postgresql://{username}:{password}@{host}:{port}/{database}"
 
-    elif db_type == 'mysql':
+    elif db_type == "mysql":
         host = click.prompt("Host", default="localhost")
         port = click.prompt("Port", default="3306")
         username = click.prompt("Username")
@@ -450,14 +466,14 @@ def _setup_database():
 
     click.echo(f"\n📝 Connection string: {db_url}")
     click.echo("💡 Save this to your environment:")
-    click.echo(f"   export DATABASE_URL=\"{db_url}\"")
+    click.echo(f'   export DATABASE_URL="{db_url}"')
 
 
 @cli.command()
 @click.pass_context
 def validate(ctx):
     """Validate nlp2sql configuration and test all components."""
-    verbose = ctx.obj.get('verbose', False)
+    verbose = ctx.obj.get("verbose", False)
 
     click.echo("🔍 nlp2sql - Configuration Validation")
     click.echo("=" * 45)
@@ -466,9 +482,9 @@ def validate(ctx):
 
     # Test API keys
     api_keys = {
-        'openai': os.getenv('OPENAI_API_KEY'),
-        'anthropic': os.getenv('ANTHROPIC_API_KEY'),
-        'gemini': os.getenv('GOOGLE_API_KEY')
+        "openai": os.getenv("OPENAI_API_KEY"),
+        "anthropic": os.getenv("ANTHROPIC_API_KEY"),
+        "gemini": os.getenv("GOOGLE_API_KEY"),
     }
 
     click.echo("\n🔑 Testing API Keys...")
@@ -482,9 +498,7 @@ def validate(ctx):
 
         try:
             service = create_query_service(
-                database_url="postgresql://test:test@localhost/test",
-                ai_provider=provider,
-                api_key=key
+                database_url="postgresql://test:test@localhost/test", ai_provider=provider, api_key=key
             )
             click.echo(f"   ✅ {provider.title()}: Valid")
             working_providers.append(provider)
@@ -495,7 +509,7 @@ def validate(ctx):
             tests.append(False)
 
     # Test database connection if provided
-    db_url = os.getenv('DATABASE_URL')
+    db_url = os.getenv("DATABASE_URL")
     if db_url:
         click.echo("\n🗄️ Testing Database Connection...")
         try:
@@ -540,7 +554,7 @@ def providers():
     pass
 
 
-@providers.command('list')
+@providers.command("list")
 def providers_list():
     """List all available AI providers."""
     click.echo("🤖 Available AI Providers")
@@ -548,30 +562,30 @@ def providers_list():
 
     providers_info = [
         {
-            'name': 'OpenAI',
-            'provider': 'openai',
-            'env_var': 'OPENAI_API_KEY',
-            'models': 'GPT-4, GPT-3.5',
-            'context': '128K tokens'
+            "name": "OpenAI",
+            "provider": "openai",
+            "env_var": "OPENAI_API_KEY",
+            "models": "GPT-4, GPT-3.5",
+            "context": "128K tokens",
         },
         {
-            'name': 'Anthropic',
-            'provider': 'anthropic',
-            'env_var': 'ANTHROPIC_API_KEY',
-            'models': 'Claude-3',
-            'context': '200K tokens'
+            "name": "Anthropic",
+            "provider": "anthropic",
+            "env_var": "ANTHROPIC_API_KEY",
+            "models": "Claude-3",
+            "context": "200K tokens",
         },
         {
-            'name': 'Google',
-            'provider': 'gemini',
-            'env_var': 'GOOGLE_API_KEY',
-            'models': 'Gemini Pro',
-            'context': '30K tokens'
-        }
+            "name": "Google",
+            "provider": "gemini",
+            "env_var": "GOOGLE_API_KEY",
+            "models": "Gemini Pro",
+            "context": "30K tokens",
+        },
     ]
 
     for provider in providers_info:
-        api_key = os.getenv(provider['env_var'])
+        api_key = os.getenv(provider["env_var"])
         status = "✅ Configured" if api_key else "❌ Not configured"
 
         click.echo(f"\n🤖 {provider['name']}")
@@ -582,8 +596,8 @@ def providers_list():
         click.echo(f"   Setup: export {provider['env_var']}=your-key")
 
 
-@providers.command('test')
-@click.option('--provider', help='Test specific provider (openai, anthropic, gemini)')
+@providers.command("test")
+@click.option("--provider", help="Test specific provider (openai, anthropic, gemini)")
 def providers_test(provider):
     """Test AI provider connections."""
 
@@ -594,8 +608,8 @@ def providers_test(provider):
             providers_to_test = [provider]
         else:
             # Test all configured providers
-            all_providers = ['openai', 'anthropic', 'gemini']
-            env_vars = ['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'GOOGLE_API_KEY']
+            all_providers = ["openai", "anthropic", "gemini"]
+            env_vars = ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY"]
 
             for p, env_var in zip(all_providers, env_vars):
                 if os.getenv(env_var):
@@ -614,16 +628,14 @@ def providers_test(provider):
             try:
                 # Map provider to correct environment variable
                 env_var_mapping = {
-                    'openai': 'OPENAI_API_KEY',
-                    'anthropic': 'ANTHROPIC_API_KEY',
-                    'gemini': 'GOOGLE_API_KEY'
+                    "openai": "OPENAI_API_KEY",
+                    "anthropic": "ANTHROPIC_API_KEY",
+                    "gemini": "GOOGLE_API_KEY",
                 }
                 env_var = env_var_mapping.get(p, f"{p.upper()}_API_KEY")
 
                 service = create_query_service(
-                    database_url="postgresql://test:test@localhost/test",
-                    ai_provider=p,
-                    api_key=os.getenv(env_var)
+                    database_url="postgresql://test:test@localhost/test", ai_provider=p, api_key=os.getenv(env_var)
                 )
 
                 click.echo(f"   ✅ {p.title()}: Connection successful")
@@ -639,17 +651,24 @@ def providers_test(provider):
 
 
 @cli.command()
-@click.option('--database-url', required=True, help='Database connection URL')
-@click.option('--questions', help='File with test questions (one per line)')
-@click.option('--providers', help='Comma-separated list of providers to test')
-@click.option('--iterations', type=int, default=3, help='Number of iterations per test')
-@click.option('--schema-filters', help='JSON string with schema filters')
-@click.option('--output-file', type=click.Path(), help='Output file to save benchmark results (JSON format)')
+@click.option("--database-url", required=True, help="Database connection URL")
+@click.option("--questions", help="File with test questions (one per line)")
+@click.option("--providers", help="Comma-separated list of providers to test")
+@click.option("--iterations", type=int, default=3, help="Number of iterations per test")
+@click.option("--schema-filters", help="JSON string with schema filters")
+@click.option("--output-file", type=click.Path(), help="Output file to save benchmark results (JSON format)")
 @click.pass_context
-def benchmark(ctx, database_url: str, questions: Optional[str],
-              providers: Optional[str], iterations: int, schema_filters: Optional[str], output_file: Optional[str]):
+def benchmark(
+    ctx,
+    database_url: str,
+    questions: Optional[str],
+    providers: Optional[str],
+    iterations: int,
+    schema_filters: Optional[str],
+    output_file: Optional[str],
+):
     """Benchmark different AI providers performance."""
-    verbose = ctx.obj.get('verbose', False)
+    verbose = ctx.obj.get("verbose", False)
 
     async def _benchmark():
         # Parse schema filters if provided
@@ -667,7 +686,7 @@ def benchmark(ctx, database_url: str, questions: Optional[str],
             "Show active customers",
             "Find recent orders",
             "Calculate monthly revenue",
-            "List top products"
+            "List top products",
         ]
 
         # Load questions from file or use defaults
@@ -682,13 +701,15 @@ def benchmark(ctx, database_url: str, questions: Optional[str],
 
         # Determine providers to test
         if providers:
-            test_providers = providers.split(',')
+            test_providers = providers.split(",")
         else:
             # Test all configured providers
             test_providers = []
-            for p, env_var in [('openai', 'OPENAI_API_KEY'),
-                             ('anthropic', 'ANTHROPIC_API_KEY'),
-                             ('gemini', 'GOOGLE_API_KEY')]:
+            for p, env_var in [
+                ("openai", "OPENAI_API_KEY"),
+                ("anthropic", "ANTHROPIC_API_KEY"),
+                ("gemini", "GOOGLE_API_KEY"),
+            ]:
                 if os.getenv(env_var):
                     test_providers.append(p)
 
@@ -708,57 +729,49 @@ def benchmark(ctx, database_url: str, questions: Optional[str],
         for provider in test_providers:
             click.echo(f"🧪 Testing {provider.title()}...")
             provider_results = {
-                'total_time': 0,
-                'total_tokens': 0,
-                'successful_queries': 0,
-                'failed_queries': 0,
-                'avg_confidence': 0,
-                'confidences': []
+                "total_time": 0,
+                "total_tokens": 0,
+                "successful_queries": 0,
+                "failed_queries": 0,
+                "avg_confidence": 0,
+                "confidences": [],
             }
 
             # Map provider to correct environment variable
-            env_var_mapping = {
-                'openai': 'OPENAI_API_KEY',
-                'anthropic': 'ANTHROPIC_API_KEY',
-                'gemini': 'GOOGLE_API_KEY'
-            }
+            env_var_mapping = {"openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY", "gemini": "GOOGLE_API_KEY"}
             env_var = env_var_mapping.get(provider, f"{provider.upper()}_API_KEY")
             api_key = os.getenv(env_var)
 
             try:
                 service = await create_and_initialize_service(
-                    database_url=database_url,
-                    ai_provider=provider,
-                    api_key=api_key,
-                    schema_filters=filters
+                    database_url=database_url, ai_provider=provider, api_key=api_key, schema_filters=filters
                 )
 
                 for question in test_questions:
                     for iteration in range(iterations):
                         try:
                             start_time = time.time()
-                            result = await service.generate_sql(
-                                question=question,
-                                database_type=DatabaseType.POSTGRES
-                            )
+                            result = await service.generate_sql(question=question, database_type=DatabaseType.POSTGRES)
                             end_time = time.time()
 
-                            provider_results['total_time'] += (end_time - start_time)
-                            provider_results['total_tokens'] += result.get('tokens_used', 0)
-                            provider_results['successful_queries'] += 1
-                            provider_results['confidences'].append(result.get('confidence', 0))
+                            provider_results["total_time"] += end_time - start_time
+                            provider_results["total_tokens"] += result.get("tokens_used", 0)
+                            provider_results["successful_queries"] += 1
+                            provider_results["confidences"].append(result.get("confidence", 0))
 
                             if verbose:
                                 click.echo(f"   ✅ '{question}' - {end_time - start_time:.2f}s")
 
                         except Exception as e:
-                            provider_results['failed_queries'] += 1
+                            provider_results["failed_queries"] += 1
                             if verbose:
                                 click.echo(f"   ❌ '{question}' - {e!s}")
 
                 # Calculate averages
-                if provider_results['confidences']:
-                    provider_results['avg_confidence'] = sum(provider_results['confidences']) / len(provider_results['confidences'])
+                if provider_results["confidences"]:
+                    provider_results["avg_confidence"] = sum(provider_results["confidences"]) / len(
+                        provider_results["confidences"]
+                    )
 
                 results[provider] = provider_results
                 click.echo(f"   ✅ {provider.title()} completed")
@@ -769,7 +782,7 @@ def benchmark(ctx, database_url: str, questions: Optional[str],
         # Display results
         if output_file:
             try:
-                with open(output_file, 'w') as f:
+                with open(output_file, "w") as f:
                     json.dump(results, f, indent=2)
                 click.echo(f"✅ Benchmark results saved to {output_file}")
             except Exception as e:
@@ -779,9 +792,9 @@ def benchmark(ctx, database_url: str, questions: Optional[str],
             click.echo("=" * 25)
 
             for provider, stats in results.items():
-                total_queries = stats['successful_queries'] + stats['failed_queries']
-                success_rate = (stats['successful_queries'] / total_queries * 100) if total_queries > 0 else 0
-                avg_time = stats['total_time'] / stats['successful_queries'] if stats['successful_queries'] > 0 else 0
+                total_queries = stats["successful_queries"] + stats["failed_queries"]
+                success_rate = (stats["successful_queries"] / total_queries * 100) if total_queries > 0 else 0
+                avg_time = stats["total_time"] / stats["successful_queries"] if stats["successful_queries"] > 0 else 0
 
                 click.echo(f"\n🤖 {provider.title()}:")
                 click.echo(f"   ✅ Success rate: {success_rate:.1f}%")
@@ -791,8 +804,7 @@ def benchmark(ctx, database_url: str, questions: Optional[str],
 
             # Find the best performer
             if results:
-                best_provider = max(results.keys(),
-                                  key=lambda p: results[p]['avg_confidence'])
+                best_provider = max(results.keys(), key=lambda p: results[p]["avg_confidence"])
                 click.echo(f"\n🏆 Best performer: {best_provider.title()}")
 
     asyncio.run(_benchmark())
@@ -804,10 +816,10 @@ def cache():
     pass
 
 
-@cache.command('clear')
-@click.option('--all', 'clear_all', is_flag=True, help='Clear all cache files')
-@click.option('--embeddings', is_flag=True, help='Clear embeddings cache')
-@click.option('--queries', is_flag=True, help='Clear query cache')
+@cache.command("clear")
+@click.option("--all", "clear_all", is_flag=True, help="Clear all cache files")
+@click.option("--embeddings", is_flag=True, help="Clear embeddings cache")
+@click.option("--queries", is_flag=True, help="Clear query cache")
 def cache_clear(clear_all: bool, embeddings: bool, queries: bool):
     """Clear various cache files."""
 
@@ -816,8 +828,8 @@ def cache_clear(clear_all: bool, embeddings: bool, queries: bool):
         return
 
     cache_paths = {
-        'embeddings': ['embeddings/', 'schema_embeddings.pkl', 'schema_index.faiss'],
-        'queries': ['query_cache.db', '.nlp2sql_cache/']
+        "embeddings": ["embeddings/", "schema_embeddings.pkl", "schema_index.faiss"],
+        "queries": ["query_cache.db", ".nlp2sql_cache/"],
     }
 
     cleared = []
@@ -827,10 +839,11 @@ def cache_clear(clear_all: bool, embeddings: bool, queries: bool):
 
     if embeddings:
         click.echo("🗑️  Clearing embeddings cache...")
-        for path in cache_paths['embeddings']:
+        for path in cache_paths["embeddings"]:
             if Path(path).exists():
                 if Path(path).is_dir():
                     import shutil
+
                     shutil.rmtree(path)
                 else:
                     Path(path).unlink()
@@ -838,10 +851,11 @@ def cache_clear(clear_all: bool, embeddings: bool, queries: bool):
 
     if queries:
         click.echo("🗑️  Clearing query cache...")
-        for path in cache_paths['queries']:
+        for path in cache_paths["queries"]:
             if Path(path).exists():
                 if Path(path).is_dir():
                     import shutil
+
                     shutil.rmtree(path)
                 else:
                     Path(path).unlink()
@@ -853,17 +867,17 @@ def cache_clear(clear_all: bool, embeddings: bool, queries: bool):
         click.echo("ℹ️  No cache files found to clear")
 
 
-@cache.command('info')
+@cache.command("info")
 def cache_info():
     """Show cache information and statistics."""
     click.echo("📊 Cache Information")
     click.echo("=" * 25)
 
     # Check embeddings cache
-    embeddings_path = Path('embeddings')
+    embeddings_path = Path("embeddings")
     if embeddings_path.exists():
-        size = sum(f.stat().st_size for f in embeddings_path.rglob('*') if f.is_file())
-        files = len([f for f in embeddings_path.rglob('*') if f.is_file()])
+        size = sum(f.stat().st_size for f in embeddings_path.rglob("*") if f.is_file())
+        files = len([f for f in embeddings_path.rglob("*") if f.is_file()])
         click.echo("🧠 Embeddings cache:")
         click.echo(f"   📁 Location: {embeddings_path.absolute()}")
         click.echo(f"   📊 Size: {size / 1024 / 1024:.2f} MB")
@@ -872,7 +886,7 @@ def cache_info():
         click.echo("🧠 Embeddings cache: Not found")
 
     # Check FAISS index
-    faiss_path = Path('schema_index.faiss')
+    faiss_path = Path("schema_index.faiss")
     if faiss_path.exists():
         size = faiss_path.stat().st_size
         click.echo("🔍 FAISS index:")
@@ -882,7 +896,7 @@ def cache_info():
         click.echo("🔍 FAISS index: Not found")
 
     # Check query cache
-    query_cache_path = Path('query_cache.db')
+    query_cache_path = Path("query_cache.db")
     if query_cache_path.exists():
         size = query_cache_path.stat().st_size
         click.echo("💾 Query cache:")
@@ -897,5 +911,5 @@ def main():
     cli()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

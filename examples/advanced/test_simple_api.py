@@ -1,4 +1,5 @@
 """Example using the simplified one-line API for SQL generation."""
+
 import asyncio
 import os
 
@@ -15,7 +16,7 @@ async def test_one_line_api():
     providers = [
         {"name": "openai", "env_var": "OPENAI_API_KEY", "key": os.getenv("OPENAI_API_KEY")},
         {"name": "anthropic", "env_var": "ANTHROPIC_API_KEY", "key": os.getenv("ANTHROPIC_API_KEY")},
-        {"name": "gemini", "env_var": "GOOGLE_API_KEY", "key": os.getenv("GOOGLE_API_KEY")}
+        {"name": "gemini", "env_var": "GOOGLE_API_KEY", "key": os.getenv("GOOGLE_API_KEY")},
     ]
 
     # Find first available provider
@@ -46,10 +47,7 @@ async def test_one_line_api():
 
     try:
         result = await generate_sql_from_db(
-            database_url,
-            "Count how many users we have in the system",
-            ai_provider=ai_provider,
-            api_key=api_key
+            database_url, "Count how many users we have in the system", ai_provider=ai_provider, api_key=api_key
         )
 
         print("❓ Question: Count how many users we have in the system")
@@ -67,11 +65,7 @@ async def test_one_line_api():
     try:
         # Initialize once
         print("⚡ Initializing service once...")
-        service = await create_and_initialize_service(
-            database_url,
-            ai_provider=ai_provider,
-            api_key=api_key
-        )
+        service = await create_and_initialize_service(database_url, ai_provider=ai_provider, api_key=api_key)
         print("✅ Service ready for multiple queries")
         print()
 
@@ -79,7 +73,7 @@ async def test_one_line_api():
         questions = [
             "Show me all products with their categories",
             "Find users without phone numbers",
-            "List all orders placed today"
+            "List all orders placed today",
         ]
 
         for question in questions:
@@ -108,7 +102,7 @@ async def test_advanced_options():
     providers = [
         {"name": "openai", "env_var": "OPENAI_API_KEY", "key": os.getenv("OPENAI_API_KEY")},
         {"name": "anthropic", "env_var": "ANTHROPIC_API_KEY", "key": os.getenv("ANTHROPIC_API_KEY")},
-        {"name": "gemini", "env_var": "GOOGLE_API_KEY", "key": os.getenv("GOOGLE_API_KEY")}
+        {"name": "gemini", "env_var": "GOOGLE_API_KEY", "key": os.getenv("GOOGLE_API_KEY")},
     ]
 
     selected_provider = None
@@ -134,7 +128,7 @@ async def test_advanced_options():
         api_key=api_key,
         max_tokens=1000,
         temperature=0.0,  # More deterministic
-        include_explanation=True
+        include_explanation=True,
     )
 
     print("❓ Question: Find the top 5 users who have placed the most orders")

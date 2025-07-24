@@ -1,4 +1,5 @@
 """Schema Repository Port - Interface for database schema management."""
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
@@ -8,6 +9,7 @@ from typing import Any, Dict, List, Optional
 @dataclass
 class TableInfo:
     """Information about a database table."""
+
     name: str
     schema: str
     columns: List[Dict[str, Any]]
@@ -23,6 +25,7 @@ class TableInfo:
 @dataclass
 class SchemaMetadata:
     """Metadata about the database schema."""
+
     database_name: str
     database_type: str  # postgres, mysql, etc.
     version: str

@@ -1,4 +1,5 @@
 """Anthropic Claude adapter for query generation."""
+
 import json
 from typing import Any, Dict, Optional
 
@@ -16,11 +17,13 @@ logger = structlog.get_logger()
 class AnthropicAdapter(AIProviderPort):
     """Anthropic Claude adapter for natural language to SQL generation."""
 
-    def __init__(self,
-                 api_key: Optional[str] = None,
-                 model: str = "claude-3-opus-20240229",
-                 max_tokens: int = 2000,
-                 temperature: float = 0.1):
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model: str = "claude-3-opus-20240229",
+        max_tokens: int = 2000,
+        temperature: float = 0.1,
+    ):
         self.api_key = api_key or settings.anthropic_api_key
         if not self.api_key:
             raise ProviderException("Anthropic API key is required")
@@ -52,10 +55,7 @@ class AnthropicAdapter(AIProviderPort):
         }
         return context_limits.get(self.model, 100000)
 
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=4, max=10)
-    )
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
     async def generate_query(self, context: QueryContext) -> QueryResponse:
         """Generate SQL query using Claude."""
         try:
@@ -67,12 +67,7 @@ class AnthropicAdapter(AIProviderPort):
             system_prompt = self._get_system_prompt(context.database_type)
 
             # Create messages
-            messages = [
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ]
+            messages = [{"role": "user", "content": prompt}]
 
             # Call Claude API
             response = await self.client.messages.create(
@@ -80,7 +75,7 @@ class AnthropicAdapter(AIProviderPort):
                 max_tokens=context.max_tokens,
                 temperature=context.temperature,
                 system=system_prompt,
-                messages=messages
+                messages=messages,
             )
 
             # Parse response
@@ -88,16 +83,16 @@ class AnthropicAdapter(AIProviderPort):
 
             # Create QueryResponse
             return QueryResponse(
-                sql=result['sql'],
-                explanation=result.get('explanation', ''),
-                confidence=result.get('confidence', 0.8),
+                sql=result["sql"],
+                explanation=result.get("explanation", ""),
+                confidence=result.get("confidence", 0.8),
                 tokens_used=response.usage.input_tokens + response.usage.output_tokens,
                 provider=self.provider_type.value,
                 metadata={
-                    'model': self.model,
-                    'input_tokens': response.usage.input_tokens,
-                    'output_tokens': response.usage.output_tokens
-                }
+                    "model": self.model,
+                    "input_tokens": response.usage.input_tokens,
+                    "output_tokens": response.usage.output_tokens,
+                },
             )
 
         except Exception as e:
@@ -155,7 +150,7 @@ Ensure the JSON is properly formatted with no syntax errors. Escape any quotes i
             "mysql": "You specialize in MySQL syntax and features. Use MySQL-specific functions and syntax when appropriate.",
             "sqlite": "You specialize in SQLite syntax and features. Use SQLite-specific functions and syntax when appropriate.",
             "mssql": "You specialize in SQL Server syntax and features. Use T-SQL syntax when appropriate.",
-            "oracle": "You specialize in Oracle SQL syntax and features. Use Oracle-specific functions and syntax when appropriate."
+            "oracle": "You specialize in Oracle SQL syntax and features. Use Oracle-specific functions and syntax when appropriate.",
         }
 
         specific_prompt = database_specific.get(database_type.lower(), "")
@@ -171,27 +166,28 @@ Ensure the JSON is properly formatted with no syntax errors. Escape any quotes i
             logger.debug("Raw Anthropic response", content=content)
 
             # Try to extract JSON if wrapped in markdown
-            if content.startswith('```json'):
-                content = content.replace('```json', '').replace('```', '').strip()
-            elif content.startswith('```'):
-                content = content.replace('```', '').strip()
+            if content.startswith("```json"):
+                content = content.replace("```json", "").replace("```", "").strip()
+            elif content.startswith("```"):
+                content = content.replace("```", "").strip()
 
             # Clean up control characters that can break JSON parsing
             # Replace newlines and tabs in SQL strings to avoid JSON parsing errors
             import re
-            content = re.sub(r'\\n\s+', ' ', content)  # Replace \n followed by spaces with single space
-            content = re.sub(r'\n\s+', ' ', content)   # Replace actual newlines with spaces
-            content = re.sub(r'\s+', ' ', content)     # Normalize multiple spaces to single space
+
+            content = re.sub(r"\\n\s+", " ", content)  # Replace \n followed by spaces with single space
+            content = re.sub(r"\n\s+", " ", content)  # Replace actual newlines with spaces
+            content = re.sub(r"\s+", " ", content)  # Normalize multiple spaces to single space
 
             result = json.loads(content)
 
             # Validate required fields
-            if 'sql' not in result:
+            if "sql" not in result:
                 raise ProviderException("Response missing required 'sql' field")
 
             # Set defaults
-            result.setdefault('explanation', '')
-            result.setdefault('confidence', 0.8)
+            result.setdefault("explanation", "")
+            result.setdefault("confidence", 0.8)
 
             return result
 
@@ -219,15 +215,15 @@ Ensure the JSON is properly formatted with no syntax errors. Escape any quotes i
         available_tokens = max_context - context.max_tokens  # Reserve space for response
 
         if total_tokens > available_tokens:
-            raise TokenLimitException(
-                f"Context too large: {total_tokens} tokens exceeds limit of {available_tokens}"
-            )
+            raise TokenLimitException(f"Context too large: {total_tokens} tokens exceeds limit of {available_tokens}")
 
-        logger.debug("Token validation passed",
-                    prompt_tokens=prompt_tokens,
-                    system_tokens=system_tokens,
-                    total_tokens=total_tokens,
-                    available_tokens=available_tokens)
+        logger.debug(
+            "Token validation passed",
+            prompt_tokens=prompt_tokens,
+            system_tokens=system_tokens,
+            total_tokens=total_tokens,
+            available_tokens=available_tokens,
+        )
 
     async def validate_query(self, sql: str, schema_context: str) -> Dict[str, Any]:
         """Validate generated SQL query using Claude."""
@@ -260,44 +256,44 @@ Check for:
                 max_tokens=1000,
                 temperature=0,
                 system="You are a SQL validation expert. Analyze the given SQL query and provide validation results in JSON format only.",
-                messages=[
-                    {
-                        "role": "user",
-                        "content": validation_prompt
-                    }
-                ]
+                messages=[{"role": "user", "content": validation_prompt}],
             )
 
             # Parse response
             content = message.content[0].text.strip()
-            if content.startswith('```json'):
-                content = content.replace('```json', '').replace('```', '').strip()
-            elif content.startswith('```'):
-                content = content.replace('```', '').strip()
+            if content.startswith("```json"):
+                content = content.replace("```json", "").replace("```", "").strip()
+            elif content.startswith("```"):
+                content = content.replace("```", "").strip()
 
             # Clean up control characters that can break JSON parsing (same fix as main parsing)
             import re
-            content = re.sub(r'\\n\s+', ' ', content)  # Replace \n followed by spaces
-            content = re.sub(r'\n\s+', ' ', content)   # Replace actual newlines
-            content = re.sub(r'\s+', ' ', content)     # Normalize multiple spaces
+
+            content = re.sub(r"\\n\s+", " ", content)  # Replace \n followed by spaces
+            content = re.sub(r"\n\s+", " ", content)  # Replace actual newlines
+            content = re.sub(r"\s+", " ", content)  # Normalize multiple spaces
 
             result = json.loads(content)
 
             # Set defaults
-            result.setdefault('is_valid', True)
-            result.setdefault('issues', [])
-            result.setdefault('suggestions', [])
-            result.setdefault('complexity', 'moderate')
+            result.setdefault("is_valid", True)
+            result.setdefault("issues", [])
+            result.setdefault("suggestions", [])
+            result.setdefault("complexity", "moderate")
 
             return result
 
         except Exception as e:
-            logger.error("Query validation failed", error=str(e), content=content if 'content' in locals() else 'No content received')
+            logger.error(
+                "Query validation failed",
+                error=str(e),
+                content=content if "content" in locals() else "No content received",
+            )
             # Return a basic validation result on error
             return {
                 "is_valid": True,
                 "issues": [],
                 "suggestions": [],
                 "complexity": "moderate",
-                "error": f"Validation error: {e!s}"
+                "error": f"Validation error: {e!s}",
             }

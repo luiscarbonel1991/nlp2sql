@@ -57,7 +57,7 @@ def show_usage_patterns():
         "Show me orders placed this month",
         "What's the most expensive product in each category?",
         "Users who have placed more than 3 orders",
-        "Show me all product reviews with ratings above 4"
+        "Show me all product reviews with ratings above 4",
     ]
 
     print("   Queries the library can handle:")
@@ -71,7 +71,7 @@ def show_usage_patterns():
         "SELECT COUNT(*) FROM orders WHERE order_date >= date_trunc('month', CURRENT_DATE - interval '1 month')",
         "SELECT p.name, SUM(oi.quantity) as total_sold FROM products p JOIN order_items oi ON p.id = oi.product_id GROUP BY p.id, p.name ORDER BY total_sold DESC LIMIT 5",
         "SELECT c.* FROM customers c LEFT JOIN orders o ON c.id = o.customer_id WHERE o.id IS NULL",
-        "SELECT city, SUM(total_amount) as total_sales FROM customers c JOIN orders o ON c.id = o.customer_id GROUP BY city"
+        "SELECT city, SUM(total_amount) as total_sales FROM customers c JOIN orders o ON c.id = o.customer_id GROUP BY city",
     ]
 
     for i, sql in enumerate(expected_sqls, 1):

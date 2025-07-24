@@ -6,6 +6,7 @@ This example consolidates multiple Odoo tests into one comprehensive demo that s
 - Real-world question examples
 - Optimized performance for production use
 """
+
 import asyncio
 import os
 
@@ -16,7 +17,7 @@ ODOO_CONFIGS = [
     "postgresql://odoo:odoo@localhost:5433/postgres",
     "postgresql://odoo:odoo@localhost:5432/postgres",
     "postgresql://postgres:postgres@localhost:5433/postgres",
-    "postgresql://postgres:postgres@localhost:5432/postgres"
+    "postgresql://postgres:postgres@localhost:5432/postgres",
 ]
 
 # Real-world Odoo questions for testing
@@ -25,7 +26,7 @@ ODOO_QUESTIONS = [
     "Show me all sales orders from this month",
     "What are the top 5 products by sales quantity?",
     "List all invoices that are in draft status",
-    "Count the number of employees in each department"
+    "Count the number of employees in each department",
 ]
 
 
@@ -45,10 +46,7 @@ async def test_odoo_connection():
     for config in ODOO_CONFIGS:
         print(f"🔍 Trying: {config}")
         try:
-            service = await create_and_initialize_service(
-                database_url=config,
-                api_key=api_key
-            )
+            service = await create_and_initialize_service(database_url=config, api_key=api_key)
             print("   ✅ Connection successful!")
             working_config = config
             break
@@ -74,10 +72,7 @@ async def test_schema_loading(database_url: str, api_key: str):
 
     try:
         print("⚡ Loading schema from database...")
-        service = await create_and_initialize_service(
-            database_url=database_url,
-            api_key=api_key
-        )
+        service = await create_and_initialize_service(database_url=database_url, api_key=api_key)
 
         # Get schema statistics from the service
         schema_repo = service.schema_repository
@@ -108,10 +103,7 @@ async def test_question_generation(service, questions: list):
 
         try:
             result = await service.generate_sql(
-                question=question,
-                database_type=DatabaseType.POSTGRES,
-                max_tokens=500,
-                temperature=0.1
+                question=question, database_type=DatabaseType.POSTGRES, max_tokens=500, temperature=0.1
             )
 
             print("   ✅ SQL Generated:")
@@ -119,20 +111,13 @@ async def test_question_generation(service, questions: list):
             print(f"   📊 Confidence: {result['confidence']}")
             print(f"   ⚡ Tokens: {result['tokens_used']}")
 
-            results.append({
-                'question': question,
-                'sql': result['sql'],
-                'confidence': result['confidence'],
-                'success': True
-            })
+            results.append(
+                {"question": question, "sql": result["sql"], "confidence": result["confidence"], "success": True}
+            )
 
         except Exception as e:
             print(f"   ❌ Generation failed: {e!s}")
-            results.append({
-                'question': question,
-                'error': str(e),
-                'success': False
-            })
+            results.append({"question": question, "error": str(e), "success": False})
 
     return results
 
@@ -146,17 +131,12 @@ async def test_performance_optimization(database_url: str, api_key: str):
         # Test with schema filters for better performance
         filters = {
             "exclude_system_tables": True,
-            "excluded_tables": [
-                "ir_logging", "ir_cron", "mail_tracking_value",
-                "ir_attachment", "ir_translation"
-            ]
+            "excluded_tables": ["ir_logging", "ir_cron", "mail_tracking_value", "ir_attachment", "ir_translation"],
         }
 
         print("🔧 Creating optimized service with schema filters...")
         service = await create_and_initialize_service(
-            database_url=database_url,
-            api_key=api_key,
-            schema_filters=filters
+            database_url=database_url, api_key=api_key, schema_filters=filters
         )
 
         print("✅ Optimized service created!")
@@ -164,10 +144,7 @@ async def test_performance_optimization(database_url: str, api_key: str):
         print("🚀 Service ready for production use")
 
         # Test a quick query
-        result = await service.generate_sql(
-            "Count active users",
-            database_type=DatabaseType.POSTGRES
-        )
+        result = await service.generate_sql("Count active users", database_type=DatabaseType.POSTGRES)
 
         print("🧪 Quick test query result:")
         print(f"   SQL: {result['sql']}")
@@ -233,15 +210,15 @@ async def main():
     results = await test_question_generation(service, ODOO_QUESTIONS)
 
     # Show results summary
-    successful = sum(1 for r in results if r['success'])
+    successful = sum(1 for r in results if r["success"])
     total = len(results)
 
     print("\n📊 Results Summary:")
     print(f"   ✅ Successful queries: {successful}/{total}")
-    print(f"   📈 Success rate: {successful/total*100:.1f}%")
+    print(f"   📈 Success rate: {successful / total * 100:.1f}%")
 
     if successful > 0:
-        avg_confidence = sum(r['confidence'] for r in results if r['success']) / successful
+        avg_confidence = sum(r["confidence"] for r in results if r["success"]) / successful
         print(f"   🎯 Average confidence: {avg_confidence:.2f}")
 
     # Test performance optimization

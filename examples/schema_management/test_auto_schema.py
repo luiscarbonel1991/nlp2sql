@@ -1,4 +1,5 @@
 """Example showing automatic schema loading from database - no manual schema needed."""
+
 import asyncio
 import logging
 import os
@@ -8,10 +9,7 @@ import structlog
 # Disable debug logs for cleaner output
 logging.basicConfig(level=logging.WARNING)
 structlog.configure(
-    processors=[
-        structlog.stdlib.filter_by_level,
-        structlog.dev.ConsoleRenderer()
-    ],
+    processors=[structlog.stdlib.filter_by_level, structlog.dev.ConsoleRenderer()],
     wrapper_class=structlog.stdlib.BoundLogger,
     logger_factory=structlog.stdlib.LoggerFactory(),
     cache_logger_on_first_use=True,
@@ -30,7 +28,7 @@ async def test_auto_schema_loading():
     providers = [
         {"name": "openai", "env_var": "OPENAI_API_KEY", "key": os.getenv("OPENAI_API_KEY")},
         {"name": "anthropic", "env_var": "ANTHROPIC_API_KEY", "key": os.getenv("ANTHROPIC_API_KEY")},
-        {"name": "gemini", "env_var": "GOOGLE_API_KEY", "key": os.getenv("GOOGLE_API_KEY")}
+        {"name": "gemini", "env_var": "GOOGLE_API_KEY", "key": os.getenv("GOOGLE_API_KEY")},
     ]
 
     # Find first available provider
@@ -61,7 +59,7 @@ async def test_auto_schema_loading():
             database_url=database_url,
             ai_provider=selected_provider["name"],
             api_key=selected_provider["key"],
-            database_type=DatabaseType.POSTGRES
+            database_type=DatabaseType.POSTGRES,
         )
         print("✅ Service created")
 
@@ -81,7 +79,7 @@ async def test_auto_schema_loading():
         schema_filters = {
             "exclude_system_tables": True,
             "include_schemas": ["sales", "hr", "finance"],
-            "exclude_tables": ["audit_logs", "temp_tables"]
+            "exclude_tables": ["audit_logs", "temp_tables"],
         }
 
         print("📋 Schema filters applied:")
@@ -95,7 +93,7 @@ async def test_auto_schema_loading():
             ai_provider=selected_provider["name"],
             api_key=selected_provider["key"],
             database_type=DatabaseType.POSTGRES,
-            schema_filters=schema_filters  # Apply filters
+            schema_filters=schema_filters,  # Apply filters
         )
 
         await service_filtered.initialize(DatabaseType.POSTGRES)
@@ -116,7 +114,7 @@ async def test_auto_schema_loading():
             "List all customers from the sales schema with their contact info",
             "Find employees hired in the last year from HR department",
             "Count total number of active products in inventory",
-            "Show me all unpaid invoices from the finance schema"
+            "Show me all unpaid invoices from the finance schema",
         ]
 
         print("\n🧠 Generating SQL from Natural Language:")
@@ -128,10 +126,7 @@ async def test_auto_schema_loading():
             try:
                 # Just ask the question - schema is already loaded!
                 result = await service.generate_sql(
-                    question=question,
-                    database_type=DatabaseType.POSTGRES,
-                    max_tokens=500,
-                    temperature=0.1
+                    question=question, database_type=DatabaseType.POSTGRES, max_tokens=500, temperature=0.1
                 )
 
                 print("   📝 Generated SQL:")
@@ -140,14 +135,14 @@ async def test_auto_schema_loading():
                 print(f"   ✅ Valid: {result['validation']['is_valid']}")
 
                 # Show which tables were considered
-                if 'metadata' in result and 'relevant_tables' in result['metadata']:
-                    tables = result['metadata']['relevant_tables'][:3]
+                if "metadata" in result and "relevant_tables" in result["metadata"]:
+                    tables = result["metadata"]["relevant_tables"][:3]
                     print(f"   🔍 Relevant tables: {', '.join(tables)}")
 
             except Exception as e:
                 print(f"   ❌ Error: {str(e)[:100]}...")
 
-        print("\n" + "="*50)
+        print("\n" + "=" * 50)
         print("🎉 Success! Key advantages of automatic schema loading:")
         print("   ✅ No manual schema definition needed")
         print("   ✅ Always up-to-date with database changes")
@@ -166,6 +161,7 @@ async def test_auto_schema_loading():
     except Exception as e:
         print(f"\n❌ Error: {e!s}")
         import traceback
+
         traceback.print_exc()
 
 
@@ -186,25 +182,20 @@ async def get_schema_statistics(service):
             for other_table in tables:
                 if other_table.foreign_keys:
                     for fk in other_table.foreign_keys:
-                        if fk.get('ref_table') == table.name:
+                        if fk.get("ref_table") == table.name:
                             connections += 1
             connection_counts[table.name] = connections
 
         most_connected = max(connection_counts.items(), key=lambda x: x[1])
 
         return {
-            'total_tables': len(tables),
-            'total_columns': total_columns,
-            'tables_with_fk': tables_with_fk,
-            'most_connected': f"{most_connected[0]} ({most_connected[1]} connections)"
+            "total_tables": len(tables),
+            "total_columns": total_columns,
+            "tables_with_fk": tables_with_fk,
+            "most_connected": f"{most_connected[0]} ({most_connected[1]} connections)",
         }
     except:
-        return {
-            'total_tables': 'N/A',
-            'total_columns': 'N/A',
-            'tables_with_fk': 'N/A',
-            'most_connected': 'N/A'
-        }
+        return {"total_tables": "N/A", "total_columns": "N/A", "tables_with_fk": "N/A", "most_connected": "N/A"}
 
 
 if __name__ == "__main__":

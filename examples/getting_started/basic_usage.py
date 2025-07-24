@@ -1,4 +1,5 @@
 """Basic usage example for nlp2sql library."""
+
 import asyncio
 import os
 
@@ -15,7 +16,7 @@ async def main():
     providers = [
         {"name": "openai", "env_var": "OPENAI_API_KEY", "key": os.getenv("OPENAI_API_KEY")},
         {"name": "anthropic", "env_var": "ANTHROPIC_API_KEY", "key": os.getenv("ANTHROPIC_API_KEY")},
-        {"name": "gemini", "env_var": "GOOGLE_API_KEY", "key": os.getenv("GOOGLE_API_KEY")}
+        {"name": "gemini", "env_var": "GOOGLE_API_KEY", "key": os.getenv("GOOGLE_API_KEY")},
     ]
 
     # Find first available provider
@@ -39,7 +40,7 @@ async def main():
             database_url=database_url,
             ai_provider=selected_provider["name"],
             api_key=selected_provider["key"],
-            database_type=DatabaseType.POSTGRES
+            database_type=DatabaseType.POSTGRES,
         )
 
         # Initialize service
@@ -51,7 +52,7 @@ async def main():
             "Show me all products with their categories",
             "Count how many orders were placed last month",
             "Find the top 5 products by sales revenue",
-            "Which users have placed the most orders?"
+            "Which users have placed the most orders?",
         ]
 
         print("🚀 nlp2sql Demo - Converting Natural Language to SQL")
@@ -64,9 +65,7 @@ async def main():
             try:
                 # Generate SQL
                 result = await service.generate_sql(
-                    question=question,
-                    database_type=DatabaseType.POSTGRES,
-                    include_explanation=True
+                    question=question, database_type=DatabaseType.POSTGRES, include_explanation=True
                 )
 
                 # Display results
@@ -74,7 +73,7 @@ async def main():
                 print("🔍 SQL Query:")
                 print(f"   {result['sql']}")
 
-                if result['explanation']:
+                if result["explanation"]:
                     print("💡 Explanation:")
                     print(f"   {result['explanation']}")
 
@@ -84,9 +83,9 @@ async def main():
                 print(f"   - Generation time: {result['generation_time_ms']:.1f}ms")
                 print(f"   - Valid: {result['validation'].get('is_valid', False)}")
 
-                if result['validation'].get('warnings'):
+                if result["validation"].get("warnings"):
                     print("⚠️  Warnings:")
-                    for warning in result['validation']['warnings']:
+                    for warning in result["validation"]["warnings"]:
                         print(f"   - {warning}")
 
             except Exception as e:
@@ -101,9 +100,7 @@ async def main():
         for partial in partial_queries:
             print(f"\nPartial input: '{partial}'")
             suggestions = await service.get_query_suggestions(
-                partial_question=partial,
-                database_type=DatabaseType.POSTGRES,
-                max_suggestions=3
+                partial_question=partial, database_type=DatabaseType.POSTGRES, max_suggestions=3
             )
 
             for i, suggestion in enumerate(suggestions, 1):
@@ -115,10 +112,7 @@ async def main():
 
         example_sql = "SELECT u.username, COUNT(o.order_id) as order_count FROM users u LEFT JOIN orders o ON u.user_id = o.user_id GROUP BY u.user_id, u.username HAVING COUNT(o.order_id) > 2"
 
-        explanation = await service.explain_query(
-            sql=example_sql,
-            database_type=DatabaseType.POSTGRES
-        )
+        explanation = await service.explain_query(sql=example_sql, database_type=DatabaseType.POSTGRES)
 
         print(f"SQL Query: {example_sql}")
         print(f"Explanation: {explanation['explanation']}")

@@ -1,4 +1,5 @@
 """Configuration settings for nlp2sql."""
+
 from enum import Enum
 from typing import Any, Dict, Optional
 
@@ -8,6 +9,7 @@ from pydantic_settings import BaseSettings
 
 class LogLevel(str, Enum):
     """Log levels."""
+
     DEBUG = "DEBUG"
     INFO = "INFO"
     WARNING = "WARNING"
@@ -66,6 +68,7 @@ class Settings(BaseSettings):
 
     class Config:
         """Pydantic config."""
+
         env_file = ".env"
         env_file_encoding = "utf-8"
         case_sensitive = False

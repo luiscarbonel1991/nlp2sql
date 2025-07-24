@@ -1,4 +1,5 @@
 """Google Gemini adapter for query generation."""
+
 import asyncio
 import json
 from typing import Any, Dict, Optional
@@ -17,11 +18,13 @@ logger = structlog.get_logger()
 class GeminiAdapter(AIProviderPort):
     """Google Gemini adapter for natural language to SQL generation."""
 
-    def __init__(self,
-                 api_key: Optional[str] = None,
-                 model: str = "gemini-1.5-flash",
-                 max_tokens: int = 2000,
-                 temperature: float = 0.1):
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model: str = "gemini-1.5-flash",
+        max_tokens: int = 2000,
+        temperature: float = 0.1,
+    ):
         self.api_key = api_key or settings.google_api_key
         if not self.api_key:
             raise ProviderException("Google API key is required")
@@ -56,10 +59,7 @@ class GeminiAdapter(AIProviderPort):
         }
         return context_limits.get(self.model_name, 30720)
 
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=4, max=10)
-    )
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
     async def generate_query(self, context: QueryContext) -> QueryResponse:
         """Generate SQL query using Gemini."""
         try:
@@ -71,16 +71,12 @@ class GeminiAdapter(AIProviderPort):
 
             # Configure generation
             generation_config = genai.types.GenerationConfig(
-                temperature=context.temperature,
-                max_output_tokens=context.max_tokens,
-                candidate_count=1
+                temperature=context.temperature, max_output_tokens=context.max_tokens, candidate_count=1
             )
 
             # Generate content
             response = await asyncio.to_thread(
-                self.model.generate_content,
-                full_prompt,
-                generation_config=generation_config
+                self.model.generate_content, full_prompt, generation_config=generation_config
             )
 
             # Parse response
@@ -92,17 +88,17 @@ class GeminiAdapter(AIProviderPort):
 
             # Create QueryResponse
             return QueryResponse(
-                sql=result['sql'],
-                explanation=result.get('explanation', ''),
-                confidence=result.get('confidence', 0.8),
+                sql=result["sql"],
+                explanation=result.get("explanation", ""),
+                confidence=result.get("confidence", 0.8),
                 tokens_used=prompt_tokens + output_tokens,
                 provider=self.provider_type.value,
                 metadata={
-                    'model': self.model_name,
-                    'prompt_tokens': prompt_tokens,
-                    'output_tokens': output_tokens,
-                    'finish_reason': getattr(response.candidates[0], 'finish_reason', None)
-                }
+                    "model": self.model_name,
+                    "prompt_tokens": prompt_tokens,
+                    "output_tokens": output_tokens,
+                    "finish_reason": getattr(response.candidates[0], "finish_reason", None),
+                },
             )
 
         except Exception as e:
@@ -167,7 +163,7 @@ Ensure the JSON is properly formatted with no syntax errors. Escape any quotes i
             "mysql": "You specialize in MySQL syntax and features. Use MySQL-specific functions and syntax when appropriate.",
             "sqlite": "You specialize in SQLite syntax and features. Use SQLite-specific functions and syntax when appropriate.",
             "mssql": "You specialize in SQL Server syntax and features. Use T-SQL syntax when appropriate.",
-            "oracle": "You specialize in Oracle SQL syntax and features. Use Oracle-specific functions and syntax when appropriate."
+            "oracle": "You specialize in Oracle SQL syntax and features. Use Oracle-specific functions and syntax when appropriate.",
         }
 
         specific_prompt = database_specific.get(database_type.lower(), "")
@@ -186,20 +182,20 @@ Ensure the JSON is properly formatted with no syntax errors. Escape any quotes i
             logger.debug("Raw Gemini response", content=content)
 
             # Try to extract JSON if wrapped in markdown
-            if content.startswith('```json'):
-                content = content.replace('```json', '').replace('```', '').strip()
-            elif content.startswith('```'):
-                content = content.replace('```', '').strip()
+            if content.startswith("```json"):
+                content = content.replace("```json", "").replace("```", "").strip()
+            elif content.startswith("```"):
+                content = content.replace("```", "").strip()
 
             result = json.loads(content)
 
             # Validate required fields
-            if 'sql' not in result:
+            if "sql" not in result:
                 raise ProviderException("Response missing required 'sql' field")
 
             # Set defaults
-            result.setdefault('explanation', '')
-            result.setdefault('confidence', 0.8)
+            result.setdefault("explanation", "")
+            result.setdefault("confidence", 0.8)
 
             return result
 
@@ -224,13 +220,9 @@ Ensure the JSON is properly formatted with no syntax errors. Escape any quotes i
         available_tokens = max_context - context.max_tokens  # Reserve space for response
 
         if total_tokens > available_tokens:
-            raise TokenLimitException(
-                f"Context too large: {total_tokens} tokens exceeds limit of {available_tokens}"
-            )
+            raise TokenLimitException(f"Context too large: {total_tokens} tokens exceeds limit of {available_tokens}")
 
-        logger.debug("Token validation passed",
-                    total_tokens=total_tokens,
-                    available_tokens=available_tokens)
+        logger.debug("Token validation passed", total_tokens=total_tokens, available_tokens=available_tokens)
 
     async def validate_query(self, sql: str, schema_context: str) -> Dict[str, Any]:
         """Validate generated SQL query using Gemini."""
@@ -258,32 +250,26 @@ Check for:
 4. Appropriate GROUP BY usage
 5. Proper aggregate function usage"""
 
-            generation_config = genai.types.GenerationConfig(
-                temperature=0.1,
-                max_output_tokens=1000,
-                candidate_count=1
-            )
+            generation_config = genai.types.GenerationConfig(temperature=0.1, max_output_tokens=1000, candidate_count=1)
 
             response = await asyncio.to_thread(
-                self.model.generate_content,
-                validation_prompt,
-                generation_config=generation_config
+                self.model.generate_content, validation_prompt, generation_config=generation_config
             )
 
             # Parse response
             content = response.text.strip()
-            if content.startswith('```json'):
-                content = content.replace('```json', '').replace('```', '').strip()
-            elif content.startswith('```'):
-                content = content.replace('```', '').strip()
+            if content.startswith("```json"):
+                content = content.replace("```json", "").replace("```", "").strip()
+            elif content.startswith("```"):
+                content = content.replace("```", "").strip()
 
             result = json.loads(content)
 
             # Set defaults
-            result.setdefault('is_valid', True)
-            result.setdefault('issues', [])
-            result.setdefault('suggestions', [])
-            result.setdefault('complexity', 'moderate')
+            result.setdefault("is_valid", True)
+            result.setdefault("issues", [])
+            result.setdefault("suggestions", [])
+            result.setdefault("complexity", "moderate")
 
             return result
 
@@ -295,5 +281,5 @@ Check for:
                 "issues": [],
                 "suggestions": [],
                 "complexity": "moderate",
-                "error": f"Validation error: {e!s}"
+                "error": f"Validation error: {e!s}",
             }

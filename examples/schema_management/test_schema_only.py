@@ -1,4 +1,5 @@
 """Test schema functionality without AI provider - shows cached embeddings working."""
+
 import asyncio
 
 from nlp2sql.adapters.postgres_repository import PostgreSQLRepository
@@ -38,15 +39,13 @@ async def test_schema_intelligence():
         print("   Loading existing embeddings...")
         try:
             results = await embedding_manager.search_similar(
-                "user login authentication",
-                top_k=5,
-                database_type=DatabaseType.POSTGRES
+                "user login authentication", top_k=5, database_type=DatabaseType.POSTGRES
             )
             print(f"   ✅ Found {len(results)} similar elements for 'user login authentication'")
 
             for element, score in results:
-                element_type = element.get('type', 'unknown')
-                element_name = element.get('name', 'unknown')
+                element_type = element.get("type", "unknown")
+                element_name = element.get("name", "unknown")
                 print(f"      - {element_type}: {element_name} (score: {score:.3f})")
 
         except Exception as e:
@@ -66,7 +65,7 @@ async def test_schema_intelligence():
             "customer sales representatives territories",
             "invoice payment financial transactions",
             "product inventory warehouse stock",
-            "sales opportunities contracts"
+            "sales opportunities contracts",
         ]
 
         print("\n🔍 Finding Relevant Tables (using cached embeddings):")
@@ -74,11 +73,7 @@ async def test_schema_intelligence():
 
         for query in test_queries:
             print(f"\n❓ Query: '{query}'")
-            relevant_tables = await schema_manager.find_relevant_tables(
-                query,
-                DatabaseType.POSTGRES,
-                max_tables=3
-            )
+            relevant_tables = await schema_manager.find_relevant_tables(query, DatabaseType.POSTGRES, max_tables=3)
 
             if relevant_tables:
                 print(f"   ✅ Found {len(relevant_tables)} relevant tables:")
@@ -134,6 +129,7 @@ async def test_schema_intelligence():
     except Exception as e:
         print(f"❌ Error: {e!s}")
         import traceback
+
         traceback.print_exc()
 
 

@@ -112,7 +112,8 @@ exclude = [
     "build",
     "dist",
     "*.iml",
-    "*.md"
+    "*.md",
+    "examples/"
 ]
 
 [tool.ruff.lint]
@@ -150,3 +151,4 @@ exclude_lines = [
     "raise NotImplementedError",
     "if __name__ == .__main__.:",
 ]
+

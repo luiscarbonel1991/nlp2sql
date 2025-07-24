@@ -1,4 +1,5 @@
 """Core domain entities for nlp2sql."""
+
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -7,6 +8,7 @@ from typing import Any, Dict, List, Optional
 
 class DatabaseType(Enum):
     """Supported database types."""
+
     POSTGRES = "postgres"
     MYSQL = "mysql"
     SQLITE = "sqlite"
@@ -16,6 +18,7 @@ class DatabaseType(Enum):
 
 class QueryIntent(Enum):
     """Types of query intents."""
+
     SELECT = "select"
     AGGREGATE = "aggregate"
     JOIN = "join"
@@ -28,6 +31,7 @@ class QueryIntent(Enum):
 @dataclass
 class Query:
     """Represents a natural language query."""
+
     text: str
     intent: Optional[QueryIntent] = None
     entities: List[str] = field(default_factory=list)
@@ -38,6 +42,7 @@ class Query:
 @dataclass
 class SQLQuery:
     """Represents a generated SQL query."""
+
     sql: str
     database_type: DatabaseType
     tables_used: List[str]
@@ -51,6 +56,7 @@ class SQLQuery:
 @dataclass
 class SchemaElement:
     """Represents a schema element (table, column, etc.)."""
+
     name: str
     type: str  # table, column, index, etc.
     data_type: Optional[str] = None
@@ -62,6 +68,7 @@ class SchemaElement:
 @dataclass
 class DatabaseSchema:
     """Represents a complete database schema."""
+
     name: str
     database_type: DatabaseType
     tables: List[SchemaElement]
@@ -74,6 +81,7 @@ class DatabaseSchema:
 @dataclass
 class QueryExample:
     """Example of natural language to SQL mapping."""
+
     natural_language: str
     sql: str
     database_type: DatabaseType
