@@ -1,0 +1,4 @@
+# Esta carpeta es temporal para testing
+# Se debe borrar después de las pruebas
+*
+!.gitignore

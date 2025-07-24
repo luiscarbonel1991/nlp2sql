@@ -9,7 +9,7 @@ from .core.entities import DatabaseType, Query, SQLQuery
 from .exceptions import *
 from .services.query_service import QueryGenerationService
 
-__version__ = "0.1.0"
+__version__ = "0.2.0rc1"
 __author__ = "Luis Carbonel"
 __email__ = "devhighlevel@gmail.com"
 
