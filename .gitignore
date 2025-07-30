@@ -171,3 +171,6 @@ query_cache.db
 *.idea/
 .venv_test/
 *.md
+
+# Claude Desktop configuration (contains credentials)
+claude_desktop_config.json

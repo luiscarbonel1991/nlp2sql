@@ -17,6 +17,12 @@ from .core.entities import DatabaseType
 from .exceptions import NLP2SQLException, ProviderException
 
 
+def get_embeddings_dir() -> Path:
+    """Get the embeddings directory path from environment variable."""
+    embeddings_dir = os.getenv("NLP2SQL_EMBEDDINGS_DIR", "./embeddings")
+    return Path(embeddings_dir)
+
+
 def setup_logging(verbose: bool = False):
     """Configure logging."""
     level = "DEBUG" if verbose else "INFO"
@@ -827,8 +833,11 @@ def cache_clear(clear_all: bool, embeddings: bool, queries: bool):
         click.echo("❌ Specify what to clear: --all, --embeddings, or --queries")
         return
 
+    # Get embeddings directory from environment variable
+    embeddings_dir = get_embeddings_dir()
+
     cache_paths = {
-        "embeddings": ["embeddings/", "schema_embeddings.pkl", "schema_index.faiss"],
+        "embeddings": [str(embeddings_dir) + "/", "schema_embeddings.pkl", "schema_index.faiss"],
         "queries": ["query_cache.db", ".nlp2sql_cache/"],
     }
 
@@ -873,8 +882,8 @@ def cache_info():
     click.echo("📊 Cache Information")
     click.echo("=" * 25)
 
-    # Check embeddings cache
-    embeddings_path = Path("embeddings")
+    # Check embeddings cache using environment variable
+    embeddings_path = get_embeddings_dir()
     if embeddings_path.exists():
         size = sum(f.stat().st_size for f in embeddings_path.rglob("*") if f.is_file())
         files = len([f for f in embeddings_path.rglob("*") if f.is_file()])

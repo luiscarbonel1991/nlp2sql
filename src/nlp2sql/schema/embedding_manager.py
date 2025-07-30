@@ -1,6 +1,7 @@
 """Embedding manager for schema vectorization and search."""
 
 import hashlib
+import os
 import pickle
 from datetime import datetime
 from pathlib import Path
@@ -33,8 +34,16 @@ class SchemaEmbeddingManager:
 
         # Create a unique directory for each database
         db_hash = hashlib.md5(database_url.encode()).hexdigest()
-        self.index_path = (index_path or Path("./embeddings")) / db_hash
-        self.index_path.mkdir(parents=True, exist_ok=True)
+
+        # Use environment variable for embeddings directory, fallback to ./embeddings
+        embeddings_dir = os.getenv("NLP2SQL_EMBEDDINGS_DIR", "./embeddings")
+        self.index_path = (index_path or Path(embeddings_dir)) / db_hash
+
+        try:
+            self.index_path.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            logger.error("Failed to create embeddings directory", path=str(self.index_path), error=str(e))
+            raise
 
         # FAISS index for similarity search
         self.index = None
