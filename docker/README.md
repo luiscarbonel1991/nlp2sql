@@ -16,6 +16,13 @@ This directory contains Docker configurations for testing nlp2sql with PostgreSQ
 - **Tables**: 20+ tables across 5 schemas (sales, hr, finance, inventory, analytics)
 - **Use case**: Testing large schema handling and filtering
 
+### 3. LocalStack Redshift (Port 5439)
+- **Connection**: `redshift://testuser:testpass123@localhost:5439/testdb`
+- **Alt Connection**: `postgresql://testuser:testpass123@localhost:5439/testdb`
+- **Schema**: Multi-schema setup with sales and analytics schemas
+- **Tables**: Test tables optimized for data warehouse patterns
+- **Use case**: Testing Redshift-specific functionality and compatibility
+
 ## 🚀 Quick Start
 
 ### Default Setup (No Configuration Needed)
@@ -42,6 +49,12 @@ docker-compose up -d postgres
 
 # Only large database
 docker-compose up -d postgres-large
+
+# Only LocalStack Redshift
+docker-compose up -d localstack
+
+# PostgreSQL databases only (skip Redshift)
+docker-compose up -d postgres postgres-large
 ```
 
 ### Stop Databases
@@ -70,6 +83,8 @@ All settings have sensible defaults and can be customized via environment variab
 | `LARGE_DB_PASSWORD` | `demo123` | Large database password |
 | `LARGE_DB_NAME` | `enterprise` | Large database name |
 | `LARGE_DB_PORT` | `5433` | Large database port |
+| `LOCALSTACK_CONTAINER_NAME` | `nlp2sql-localstack` | LocalStack container name |
+| `REDSHIFT_PORT` | `5439` | LocalStack Redshift port |
 
 ### Quick Customization Examples
 
@@ -143,6 +158,38 @@ uv run nlp2sql benchmark \
   --output-file benchmarks/enterprise_benchmark_results.json
 ```
 
+### LocalStack Redshift Examples
+```bash
+# Basic Redshift query
+uv run nlp2sql query \
+  --database-url redshift://testuser:testpass123@localhost:5439/testdb \
+  --question "Show me all active users from the users table"
+
+# Query with PostgreSQL-compatible URL
+uv run nlp2sql query \
+  --database-url postgresql://testuser:testpass123@localhost:5439/testdb \
+  --question "What are the top customers by transaction volume?" \
+  --explain
+
+# Query specific schema in Redshift
+uv run nlp2sql query \
+  --database-url redshift://testuser:testpass123@localhost:5439/testdb \
+  --question "Show sales transactions by region" \
+  --schema-filters '{"include_schemas": ["sales"]}'
+
+# Inspect Redshift schema
+uv run nlp2sql inspect \
+  --database-url redshift://testuser:testpass123@localhost:5439/testdb \
+  --schema sales \
+  --format table
+
+# Test multi-schema Redshift queries
+uv run nlp2sql query \
+  --database-url redshift://testuser:testpass123@localhost:5439/testdb \
+  --question "Compare sales performance with analytics summary data" \
+  --schema-filters '{"include_schemas": ["sales", "analytics"]}'
+```
+
 ## 🗂️ Database Schemas
 
 ### Simple Database (testdb)
@@ -187,6 +234,20 @@ enterprise/
     └── product_performance
 ```
 
+### LocalStack Redshift (testdb)
+```
+testdb/
+├── public/
+│   ├── users (customer accounts)
+│   ├── products (product catalog)
+│   └── orders (customer orders)
+├── sales/
+│   ├── customers (customer master data)
+│   └── transactions (sales transactions)
+└── analytics/
+    └── sales_summary (aggregated metrics)
+```
+
 ## 💡 Example Questions to Test
 
 ### Simple Database
@@ -203,6 +264,14 @@ enterprise/
 - "Find customers with overdue invoices"
 - "Show me department budgets vs actual spending"
 
+### LocalStack Redshift
+- "Show me all active users in the system"
+- "What are the top customers by transaction volume?"
+- "Calculate total revenue by sales rep"
+- "Show sales trends from the analytics summary"
+- "Which customers have the highest annual revenue?"
+- "Compare transaction amounts by product category"
+
 ## 🔧 Database Connection Details
 
 ### Default Configuration
@@ -210,6 +279,7 @@ enterprise/
 |----------|------|------|------|----------|----------|----------------|
 | Simple | localhost | 5432 | testuser | testpass | testdb | `postgresql://testuser:testpass@localhost:5432/testdb` |
 | Large | localhost | 5433 | demo | demo123 | enterprise | `postgresql://demo:demo123@localhost:5433/enterprise` |
+| Redshift | localhost | 5439 | testuser | testpass123 | testdb | `redshift://testuser:testpass123@localhost:5439/testdb` |
 
 ### With Custom Configuration
 If you customize environment variables, update your connection URLs accordingly:
