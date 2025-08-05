@@ -152,48 +152,7 @@ asyncio.run(main())
 
 ### Amazon Redshift Support
 
-```python
-import asyncio
-import os
-from nlp2sql import create_and_initialize_service, DatabaseType
-
-async def main():
-    # Connect to Amazon Redshift data warehouse
-    service = await create_and_initialize_service(
-        database_url="redshift://user:password@cluster.region.redshift.amazonaws.com:5439/analytics",
-        ai_provider="anthropic",  # Claude excels with large data warehouse schemas
-        api_key=os.getenv("ANTHROPIC_API_KEY"),
-        database_type=DatabaseType.REDSHIFT,
-        schema_filters={
-            "include_schemas": ["sales", "marketing", "finance"],
-            "exclude_system_tables": True,
-            "exclude_tables": ["temp_", "stg_", "test_"]  # Exclude staging/temp tables
-        }
-    )
-    
-    # Generate SQL optimized for Redshift analytics
-    result = await service.generate_sql(
-        question="What are the top 10 customer segments by revenue in Q4?",
-        database_type=DatabaseType.REDSHIFT
-    )
-    
-    print(f"Redshift SQL: {result['sql']}")
-    print(f"Confidence: {result['confidence']}")
-
-asyncio.run(main())
-```
-
-**Redshift Connection Examples:**
-```bash
-# Standard Redshift cluster
-redshift://username:password@cluster-id.region.redshift.amazonaws.com:5439/database
-
-# Redshift Serverless
-redshift://username:password@workgroup.account.region.redshift-serverless.amazonaws.com:5439/database
-
-# PostgreSQL-compatible connection (also supported)
-postgresql://username:password@cluster-id.region.redshift.amazonaws.com:5439/database
-```
+nlp2sql includes comprehensive support for Amazon Redshift data warehouses. See the complete [Redshift documentation](docs/Redshift.md) for setup, examples, and LocalStack testing.
 
 ## 🤖 Multiple AI Providers Support
 

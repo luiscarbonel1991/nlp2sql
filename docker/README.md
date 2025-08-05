@@ -159,36 +159,8 @@ uv run nlp2sql benchmark \
 ```
 
 ### LocalStack Redshift Examples
-```bash
-# Basic Redshift query
-uv run nlp2sql query \
-  --database-url redshift://testuser:testpass123@localhost:5439/testdb \
-  --question "Show me all active users from the users table"
 
-# Query with PostgreSQL-compatible URL
-uv run nlp2sql query \
-  --database-url postgresql://testuser:testpass123@localhost:5439/testdb \
-  --question "What are the top customers by transaction volume?" \
-  --explain
-
-# Query specific schema in Redshift
-uv run nlp2sql query \
-  --database-url redshift://testuser:testpass123@localhost:5439/testdb \
-  --question "Show sales transactions by region" \
-  --schema-filters '{"include_schemas": ["sales"]}'
-
-# Inspect Redshift schema
-uv run nlp2sql inspect \
-  --database-url redshift://testuser:testpass123@localhost:5439/testdb \
-  --schema sales \
-  --format table
-
-# Test multi-schema Redshift queries
-uv run nlp2sql query \
-  --database-url redshift://testuser:testpass123@localhost:5439/testdb \
-  --question "Compare sales performance with analytics summary data" \
-  --schema-filters '{"include_schemas": ["sales", "analytics"]}'
-```
+For comprehensive Redshift testing examples and setup, see the [Redshift documentation](../docs/Redshift.md).
 
 ## 🗂️ Database Schemas
 
@@ -234,19 +206,7 @@ enterprise/
     └── product_performance
 ```
 
-### LocalStack Redshift (testdb)
-```
-testdb/
-├── public/
-│   ├── users (customer accounts)
-│   ├── products (product catalog)
-│   └── orders (customer orders)
-├── sales/
-│   ├── customers (customer master data)
-│   └── transactions (sales transactions)
-└── analytics/
-    └── sales_summary (aggregated metrics)
-```
+
 
 ## 💡 Example Questions to Test
 
@@ -264,13 +224,7 @@ testdb/
 - "Find customers with overdue invoices"
 - "Show me department budgets vs actual spending"
 
-### LocalStack Redshift
-- "Show me all active users in the system"
-- "What are the top customers by transaction volume?"
-- "Calculate total revenue by sales rep"
-- "Show sales trends from the analytics summary"
-- "Which customers have the highest annual revenue?"
-- "Compare transaction amounts by product category"
+
 
 ## 🔧 Database Connection Details
 
