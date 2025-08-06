@@ -65,7 +65,7 @@ class RedshiftRepository(SchemaRepositoryPort):
         SELECT 
             t.table_name,
             t.table_schema,
-            '' as table_comment,  -- Redshift doesn't have obj_description
+            '' as table_comment,  -- Table comments are not available in Redshift; this field will always be empty.
             CASE 
                 WHEN st.size_mb IS NOT NULL THEN st.size_mb || ' MB'
                 ELSE 'Unknown'
