@@ -166,11 +166,21 @@ cython_debug/
 .claude/settings.local.json
 nplsql.toml
 embeddings/
+embeddings
 query_cache.db
 *.iml
 *.idea/
 .venv_test/
 *.md
+
+# macOS specific files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
 
 # Claude Desktop configuration (contains credentials)
 claude_desktop_config.json
