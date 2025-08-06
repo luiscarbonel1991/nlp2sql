@@ -135,7 +135,7 @@ class TestRedshiftLocalStackIntegration:
             repo = RedshiftRepository(self.POSTGRES_COMPAT_URL)
             await repo.initialize()
             
-            schema_info = await repo.get_database_schema()
+            schema_info = await repo.get_tables()
             assert len(schema_info) > 0
             
         except Exception as e:
