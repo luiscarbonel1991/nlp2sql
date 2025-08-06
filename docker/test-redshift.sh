@@ -10,7 +10,7 @@ cd "$(dirname "$0")"
 check_service() {
     local service_name=$1
     local check_command=$2
-    
+
     echo "Checking $service_name..."
     if eval "$check_command" > /dev/null 2>&1; then
         echo "✅ $service_name is running"
@@ -27,7 +27,7 @@ wait_for_service() {
     local check_command=$2
     local max_attempts=30
     local attempt=1
-    
+
     echo "Waiting for $service_name to be ready..."
     while [ $attempt -le $max_attempts ]; do
         if eval "$check_command" > /dev/null 2>&1; then
@@ -38,7 +38,7 @@ wait_for_service() {
         sleep 10
         attempt=$((attempt + 1))
     done
-    
+
     echo "❌ $service_name failed to start after $max_attempts attempts"
     return 1
 }
@@ -68,16 +68,16 @@ echo "=============================="
 echo "Testing PostgreSQL-compatible connection..."
 if PGPASSWORD=testpass123 psql -h localhost -p 5439 -U testuser -d testdb -c "SELECT version();" > /dev/null 2>&1; then
     echo "✅ PostgreSQL-compatible connection successful"
-    
+
     # Test schema discovery
     echo "Testing schema discovery..."
     PGPASSWORD=testpass123 psql -h localhost -p 5439 -U testuser -d testdb -c "
-        SELECT schemaname, tablename 
-        FROM pg_tables 
-        WHERE schemaname IN ('public', 'sales', 'analytics') 
+        SELECT schemaname, tablename
+        FROM pg_tables
+        WHERE schemaname IN ('public', 'sales', 'analytics')
         ORDER BY schemaname, tablename;
     "
-    
+
     # Test sample data
     echo ""
     echo "Testing sample data..."
@@ -118,33 +118,33 @@ from nlp2sql.core.entities import DatabaseType
 
 async def test_redshift():
     print("Testing RedshiftRepository with LocalStack...")
-    
+
     # Test both connection formats
     redshift_url = "redshift://testuser:testpass123@localhost:5439/testdb"
     postgres_url = "postgresql://testuser:testpass123@localhost:5439/testdb"
-    
+
     for url, name in [(redshift_url, "Redshift URL"), (postgres_url, "PostgreSQL URL")]:
         print(f"\n📡 Testing {name}: {url}")
-        
+
         try:
             repo = RedshiftRepository(url)
             await repo.initialize()
             print(f"✅ {name} connection successful")
-            
+
             # Test schema discovery
-            schema_info = await repo.get_database_schema()
+            schema_info = await repo.get_tables()
             print(f"✅ Schema discovery successful - found {len(schema_info)} tables")
-            
+
             # Print table info
             for table in schema_info[:5]:  # Show first 5 tables
                 print(f"   - {table.get('schema_name', 'unknown')}.{table.get('table_name', 'unknown')}")
-            
+
             await repo.close()
-            
+
         except Exception as e:
             print(f"❌ {name} failed: {e}")
             return False
-    
+
     return True
 
 if __name__ == "__main__":

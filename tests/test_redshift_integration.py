@@ -24,7 +24,7 @@ class TestRedshiftAdapter:
     def test_redshift_repository_with_custom_schema(self):
         """Test RedshiftRepository with custom schema."""
         repo = RedshiftRepository(
-            "redshift://user:pass@cluster.region.redshift.amazonaws.com:5439/testdb", 
+            "redshift://user:pass@cluster.region.redshift.amazonaws.com:5439/testdb",
             schema_name="analytics"
         )
         assert repo.schema_name == "analytics"
@@ -33,7 +33,7 @@ class TestRedshiftAdapter:
     async def test_redshift_initialize_converts_url(self):
         """Test that Redshift URL is properly converted for asyncpg."""
         repo = RedshiftRepository("redshift://user:pass@cluster.region.redshift.amazonaws.com:5439/testdb")
-        
+
         # Mock the async engine creation and connection
         with pytest.raises(Exception):  # Will fail on actual connection, but that's expected
             await repo.initialize()
@@ -57,7 +57,7 @@ class TestRedshiftAdapter:
 )
 class TestRedshiftLocalStackIntegration:
     """Integration tests with LocalStack Redshift."""
-    
+
     # LocalStack Redshift connection details
     REDSHIFT_URL = "redshift://testuser:testpass123@localhost:5439/testdb"
     POSTGRES_COMPAT_URL = "postgresql://testuser:testpass123@localhost:5439/testdb"
@@ -73,12 +73,12 @@ class TestRedshiftLocalStackIntegration:
         try:
             await redshift_repo.initialize()
             assert redshift_repo._initialized
-            
+
             # Test that we can get schema information
-            schema_info = await redshift_repo.get_database_schema()
+            schema_info = await redshift_repo.get_tables()
             assert schema_info is not None
             assert len(schema_info) > 0
-            
+
         except Exception as e:
             pytest.skip(f"LocalStack Redshift not available: {e}")
 
@@ -87,17 +87,17 @@ class TestRedshiftLocalStackIntegration:
         """Test that we can discover tables in LocalStack Redshift."""
         try:
             await redshift_repo.initialize()
-            
+
             # Get tables from public schema
-            schema_info = await redshift_repo.get_database_schema()
-            
+            schema_info = await redshift_repo.get_tables()
+
             # Should find our test tables
             table_names = [table['table_name'] for table in schema_info]
             expected_tables = ['users', 'products', 'orders']
-            
+
             for table in expected_tables:
                 assert table in table_names, f"Table {table} not found in schema"
-                
+
         except Exception as e:
             pytest.skip(f"LocalStack Redshift not available: {e}")
 
@@ -108,22 +108,22 @@ class TestRedshiftLocalStackIntegration:
             # Test sales schema
             sales_repo = RedshiftRepository(self.REDSHIFT_URL, schema_name="sales")
             await sales_repo.initialize()
-            
-            sales_schema = await sales_repo.get_database_schema()
+
+            sales_schema = await sales_repo.get_tables()
             sales_tables = [table['table_name'] for table in sales_schema]
-            
+
             assert 'customers' in sales_tables
             assert 'transactions' in sales_tables
-            
+
             # Test analytics schema
             analytics_repo = RedshiftRepository(self.REDSHIFT_URL, schema_name="analytics")
             await analytics_repo.initialize()
-            
-            analytics_schema = await analytics_repo.get_database_schema()
+
+            analytics_schema = await analytics_repo.get_tables()
             analytics_tables = [table['table_name'] for table in analytics_schema]
-            
+
             assert 'sales_summary' in analytics_tables
-            
+
         except Exception as e:
             pytest.skip(f"LocalStack Redshift not available: {e}")
 
@@ -134,10 +134,10 @@ class TestRedshiftLocalStackIntegration:
             # Use PostgreSQL-compatible connection string
             repo = RedshiftRepository(self.POSTGRES_COMPAT_URL)
             await repo.initialize()
-            
-            schema_info = await repo.get_database_schema()
+
+            schema_info = await repo.get_tables()
             assert len(schema_info) > 0
-            
+
         except Exception as e:
             pytest.skip(f"LocalStack Redshift not available: {e}")
 
@@ -146,22 +146,22 @@ class TestRedshiftLocalStackIntegration:
         """Test that Redshift-specific system view queries work."""
         try:
             await redshift_repo.initialize()
-            
+
             # Test the private method that builds system view queries
             # This should use svv_table_info for Redshift instead of pg_stat_user_tables
-            schema_info = await redshift_repo.get_database_schema()
-            
+            schema_info = await redshift_repo.get_tables()
+
             # Verify we get table statistics
             for table in schema_info:
                 assert 'table_name' in table
                 assert 'schema_name' in table
                 # Should have row count info from svv_table_info
                 assert 'row_count' in table or 'estimated_rows' in table
-                
+
         except Exception as e:
             pytest.skip(f"LocalStack Redshift not available: {e}")
 
-    @pytest.mark.asyncio 
+    @pytest.mark.asyncio
     async def test_end_to_end_service_creation(self):
         """Test creating a complete query service with Redshift."""
         try:
@@ -173,10 +173,10 @@ class TestRedshiftLocalStackIntegration:
                 database_type=DatabaseType.REDSHIFT,
                 schema_filters={'include_schemas': ['sales', 'public']}
             )
-            
+
             # Verify the repository is correct type
             assert isinstance(service.schema_repository, RedshiftRepository)
-            
+
             # Test initialization (will fail on AI provider but DB should work)
             try:
                 await service.initialize()
@@ -186,7 +186,7 @@ class TestRedshiftLocalStackIntegration:
                     raise  # Re-raise database-related errors
                 # AI provider errors are expected and ok
                 pass
-                
+
         except Exception as e:
             if 'connection' in str(e).lower() or 'localstack' in str(e).lower():
                 pytest.skip(f"LocalStack Redshift not available: {e}")
