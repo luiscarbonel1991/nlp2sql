@@ -14,6 +14,7 @@ class DatabaseType(Enum):
     SQLITE = "sqlite"
     MSSQL = "mssql"
     ORACLE = "oracle"
+    REDSHIFT = "redshift"
 
 
 class QueryIntent(Enum):

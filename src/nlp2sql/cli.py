@@ -55,14 +55,30 @@ def detect_command_confusion(ctx, param, value):
     return value
 
 
+def detect_database_type(database_url: str) -> DatabaseType:
+    """Detect database type from connection URL."""
+    if database_url.startswith("postgresql://"):
+        return DatabaseType.POSTGRES
+    elif database_url.startswith("redshift://"):
+        return DatabaseType.REDSHIFT
+    elif database_url.startswith("mysql://"):
+        return DatabaseType.MYSQL
+    elif database_url.startswith("sqlite://"):
+        return DatabaseType.SQLITE
+    else:
+        # Default to PostgreSQL for compatibility
+        return DatabaseType.POSTGRES
+
+
 def validate_database_url(ctx, param, value):
     """Validate database URL format."""
-    if value and not value.startswith(("postgresql://", "mysql://", "sqlite://")):
+    if value and not value.startswith(("postgresql://", "mysql://", "sqlite://", "redshift://")):
         click.echo(f"❌ Invalid database URL format: {value}", err=True)
         click.echo("💡 Expected format: postgresql://user:pass@host:port/database", err=True)
         click.echo("📝 Examples:", err=True)
         click.echo("   postgresql://testuser:testpass@localhost:5432/testdb", err=True)
         click.echo("   postgresql://demo:demo123@localhost:5433/enterprise", err=True)
+        click.echo("   redshift://user:pass@cluster.region.redshift.amazonaws.com:5439/database", err=True)
         ctx.exit(1)
     return value
 
@@ -196,8 +212,21 @@ def inspect(
 
     async def _inspect():
         try:
-            # Create repository
-            repo = PostgreSQLRepository(database_url, schema)
+            # Detect database type and create appropriate repository
+            database_type = detect_database_type(database_url)
+            
+            if verbose:
+                click.echo(f"🗄️ Detected database type: {database_type.value}")
+            
+            if database_type == DatabaseType.POSTGRES:
+                repo = PostgreSQLRepository(database_url, schema)
+            elif database_type == DatabaseType.REDSHIFT:
+                from .adapters.redshift_adapter import RedshiftRepository
+                repo = RedshiftRepository(database_url, schema)
+            else:
+                click.echo(f"❌ Database type {database_type.value} not supported for inspection yet", err=True)
+                sys.exit(1)
+                
             await repo.initialize()
 
             # Get schema information
@@ -311,15 +340,25 @@ def query(
                     click.echo(f"❌ No API key provided. Set {env_var} or use --api-key", err=True)
                     sys.exit(1)
 
+            # Detect database type from URL
+            database_type = detect_database_type(database_url)
+            
+            if verbose:
+                click.echo(f"🗄️ Detected database type: {database_type.value}")
+
             # Create service
             service = await create_and_initialize_service(
-                database_url=database_url, ai_provider=provider, api_key=final_api_key, schema_filters=filters
+                database_url=database_url, 
+                ai_provider=provider, 
+                api_key=final_api_key, 
+                database_type=database_type,
+                schema_filters=filters
             )
 
             # Generate SQL
             result = await service.generate_sql(
                 question=question,
-                database_type=DatabaseType.POSTGRES,
+                database_type=database_type,
                 temperature=temperature,
                 max_tokens=max_tokens,
                 include_explanation=explain,

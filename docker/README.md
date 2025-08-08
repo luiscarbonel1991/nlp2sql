@@ -16,6 +16,13 @@ This directory contains Docker configurations for testing nlp2sql with PostgreSQ
 - **Tables**: 20+ tables across 5 schemas (sales, hr, finance, inventory, analytics)
 - **Use case**: Testing large schema handling and filtering
 
+### 3. LocalStack Redshift (Port 5439)
+- **Connection**: `redshift://testuser:testpass123@localhost:5439/testdb`
+- **Alt Connection**: `postgresql://testuser:testpass123@localhost:5439/testdb`
+- **Schema**: Multi-schema setup with sales and analytics schemas
+- **Tables**: Test tables optimized for data warehouse patterns
+- **Use case**: Testing Redshift-specific functionality and compatibility
+
 ## 🚀 Quick Start
 
 ### Default Setup (No Configuration Needed)
@@ -42,6 +49,12 @@ docker-compose up -d postgres
 
 # Only large database
 docker-compose up -d postgres-large
+
+# Only LocalStack Redshift
+docker-compose up -d localstack
+
+# PostgreSQL databases only (skip Redshift)
+docker-compose up -d postgres postgres-large
 ```
 
 ### Stop Databases
@@ -70,6 +83,8 @@ All settings have sensible defaults and can be customized via environment variab
 | `LARGE_DB_PASSWORD` | `demo123` | Large database password |
 | `LARGE_DB_NAME` | `enterprise` | Large database name |
 | `LARGE_DB_PORT` | `5433` | Large database port |
+| `LOCALSTACK_CONTAINER_NAME` | `nlp2sql-localstack` | LocalStack container name |
+| `REDSHIFT_PORT` | `5439` | LocalStack Redshift port |
 
 ### Quick Customization Examples
 
@@ -143,6 +158,10 @@ uv run nlp2sql benchmark \
   --output-file benchmarks/enterprise_benchmark_results.json
 ```
 
+### LocalStack Redshift Examples
+
+For comprehensive Redshift testing examples and setup, see the [Redshift documentation](../docs/Redshift.md).
+
 ## 🗂️ Database Schemas
 
 ### Simple Database (testdb)
@@ -187,6 +206,8 @@ enterprise/
     └── product_performance
 ```
 
+
+
 ## 💡 Example Questions to Test
 
 ### Simple Database
@@ -203,6 +224,8 @@ enterprise/
 - "Find customers with overdue invoices"
 - "Show me department budgets vs actual spending"
 
+
+
 ## 🔧 Database Connection Details
 
 ### Default Configuration
@@ -210,6 +233,7 @@ enterprise/
 |----------|------|------|------|----------|----------|----------------|
 | Simple | localhost | 5432 | testuser | testpass | testdb | `postgresql://testuser:testpass@localhost:5432/testdb` |
 | Large | localhost | 5433 | demo | demo123 | enterprise | `postgresql://demo:demo123@localhost:5433/enterprise` |
+| Redshift | localhost | 5439 | testuser | testpass123 | testdb | `redshift://testuser:testpass123@localhost:5439/testdb` |
 
 ### With Custom Configuration
 If you customize environment variables, update your connection URLs accordingly:
