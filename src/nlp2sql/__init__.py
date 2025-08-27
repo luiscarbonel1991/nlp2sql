@@ -4,6 +4,7 @@ from typing import Any, Dict
 
 from .adapters.openai_adapter import OpenAIAdapter
 from .adapters.postgres_repository import PostgreSQLRepository
+from .adapters.redshift_adapter import RedshiftRepository
 from .config.settings import settings
 from .core.entities import DatabaseType, Query, SQLQuery
 from .exceptions import *
@@ -23,6 +24,7 @@ __all__ = [
     # Adapters
     "OpenAIAdapter",
     "PostgreSQLRepository",
+    "RedshiftRepository",
     # Core entities
     "DatabaseType",
     "Query",
@@ -64,10 +66,13 @@ def create_query_service(
     """
     from .adapters.openai_adapter import OpenAIAdapter
     from .adapters.postgres_repository import PostgreSQLRepository
+    from .adapters.redshift_adapter import RedshiftRepository
 
     # Create repository
     if database_type == DatabaseType.POSTGRES:
         repository = PostgreSQLRepository(database_url)
+    elif database_type == DatabaseType.REDSHIFT:
+        repository = RedshiftRepository(database_url)
     else:
         raise NotImplementedError(f"Database type {database_type} not yet supported")
 

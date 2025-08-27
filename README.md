@@ -22,7 +22,7 @@ Unlike academic frameworks focused on composability, **nlp2sql is built for ente
 ## ✨ Features
 
 - **🤖 Multiple AI Providers**: OpenAI, Anthropic, Google Gemini, AWS Bedrock, Azure OpenAI
-- **🗄️ Database Support**: PostgreSQL (with MySQL, SQLite, Oracle, MSSQL coming soon)
+- **🗄️ Database Support**: PostgreSQL, Amazon Redshift (with MySQL, SQLite, Oracle, MSSQL coming soon)
 - **📊 Large Schema Handling**: Advanced strategies for databases with 1000+ tables
 - **⚡ Smart Caching**: Intelligent result caching for improved performance
 - **🔍 Query Optimization**: Built-in SQL query optimization
@@ -150,6 +150,10 @@ async def main():
 asyncio.run(main())
 ```
 
+### Amazon Redshift Support
+
+nlp2sql includes comprehensive support for Amazon Redshift data warehouses. See the complete [Redshift documentation](docs/Redshift.md) for setup, examples, and LocalStack testing.
+
 ## 🤖 Multiple AI Providers Support
 
 nlp2sql supports multiple AI providers - you're not locked into OpenAI!
@@ -251,6 +255,7 @@ export GOOGLE_API_KEY="your-google-key"  # Note: GOOGLE_API_KEY, not GEMINI_API_
 # Database (Docker test databases)
 export DATABASE_URL="postgresql://testuser:testpass@localhost:5432/testdb"  # Simple DB
 # export DATABASE_URL="postgresql://demo:demo123@localhost:5433/enterprise"  # Large DB
+# export DATABASE_URL="redshift://user:pass@cluster.region.redshift.amazonaws.com:5439/analytics"  # Redshift
 
 # Optional Settings
 export NLP2SQL_MAX_SCHEMA_TOKENS=8000
@@ -281,6 +286,13 @@ uv run nlp2sql query \
   --database-url "postgresql://testuser:testpass@localhost:5432/testdb" \
   --question "How many users are there?" \
   --provider openai
+
+# Test CLI with Redshift data warehouse
+export ANTHROPIC_API_KEY=your-key
+uv run nlp2sql query \
+  --database-url "redshift://user:pass@cluster.region.redshift.amazonaws.com:5439/analytics" \
+  --question "Show top customers by revenue this quarter" \
+  --provider anthropic
 
 # Run tests
 uv run pytest

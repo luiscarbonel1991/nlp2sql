@@ -37,6 +37,29 @@ services:
       timeout: 5s
       retries: 5
 
+  # LocalStack for Redshift testing
+  localstack:
+    image: localstack/localstack:latest
+    container_name: ${LOCALSTACK_CONTAINER_NAME:-nlp2sql-localstack}
+    environment:
+      - SERVICES=redshift
+      - DEBUG=1
+      - DOCKER_HOST=unix:///var/run/docker.sock
+      - REDSHIFT_PORT=5439
+      - DEFAULT_REGION=us-east-1
+    ports:
+      - "4566:4566"  # LocalStack main endpoint
+      - "${REDSHIFT_PORT:-5439}:5439"  # Redshift port
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock"
+      - "./localstack-init.sh:/etc/localstack/init/ready.d/init-redshift.sh"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
 volumes:
   postgres_data:
   postgres_large_data:
