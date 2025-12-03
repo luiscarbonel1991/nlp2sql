@@ -47,6 +47,10 @@ services:
       - DOCKER_HOST=unix:///var/run/docker.sock
       - REDSHIFT_PORT=5439
       - DEFAULT_REGION=us-east-1
+      # AWS credentials for LocalStack (dummy values work)
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+      - AWS_DEFAULT_REGION=us-east-1
     ports:
       - "4566:4566"  # LocalStack main endpoint
       - "${REDSHIFT_PORT:-5439}:5439"  # Redshift port
