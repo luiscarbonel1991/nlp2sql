@@ -1,9 +1,11 @@
-"""Basic tests for nlp2sql library."""
-
-import pytest
+"""Basic unit tests for nlp2sql core functionality."""
 
 from nlp2sql.core.entities import DatabaseType
-from nlp2sql.ports.ai_provider import AIProviderType, QueryContext, QueryResponse
+from nlp2sql.ports.ai_provider import (
+    AIProviderType,
+    QueryContext,
+    QueryResponse,
+)
 
 
 class TestBasicFunctionality:
@@ -14,6 +16,7 @@ class TestBasicFunctionality:
         assert DatabaseType.POSTGRES.value == "postgres"
         assert DatabaseType.MYSQL.value == "mysql"
         assert DatabaseType.SQLITE.value == "sqlite"
+        assert DatabaseType.REDSHIFT.value == "redshift"
 
     def test_ai_provider_types(self):
         """Test AI provider type enumeration."""
@@ -48,7 +51,3 @@ class TestBasicFunctionality:
         assert response.sql == "SELECT * FROM users"
         assert response.confidence == 0.95
         assert response.provider == "openai"
-
-
-if __name__ == "__main__":
-    pytest.main([__file__])
