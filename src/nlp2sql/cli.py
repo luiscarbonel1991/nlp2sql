@@ -47,10 +47,10 @@ def setup_logging(verbose: bool = False):
 def detect_command_confusion(ctx, param, value):
     """Detect common command confusions and provide helpful suggestions."""
     if ctx.info_name == "inspect" and param.name == "question":
-        click.echo("❌ Error: 'inspect' command doesn't accept --question option", err=True)
-        click.echo('💡 Did you mean: nlp2sql query --database-url [...] --question "..."', err=True)
-        click.echo("🔍 Use 'inspect' to analyze database schema", err=True)
-        click.echo("🤖 Use 'query' to generate SQL from natural language", err=True)
+        click.echo("Error: 'inspect' command doesn't accept --question option", err=True)
+        click.echo('Hint: Did you mean: nlp2sql query --database-url [...] --question "..."', err=True)
+        click.echo("Info: Use 'inspect' to analyze database schema", err=True)
+        click.echo("AI: Use 'query' to generate SQL from natural language", err=True)
         ctx.exit(1)
     return value
 
@@ -73,9 +73,9 @@ def detect_database_type(database_url: str) -> DatabaseType:
 def validate_database_url(ctx, param, value):
     """Validate database URL format."""
     if value and not value.startswith(("postgresql://", "mysql://", "sqlite://", "redshift://")):
-        click.echo(f"❌ Invalid database URL format: {value}", err=True)
-        click.echo("💡 Expected format: postgresql://user:pass@host:port/database", err=True)
-        click.echo("📝 Examples:", err=True)
+        click.echo(f"[ERROR] Invalid database URL format: {value}", err=True)
+        click.echo("Hint: Expected format: postgresql://user:pass@host:port/database", err=True)
+        click.echo("Note: Examples:", err=True)
         click.echo("   postgresql://testuser:testpass@localhost:5432/testdb", err=True)
         click.echo("   postgresql://demo:demo123@localhost:5433/enterprise", err=True)
         click.echo("   redshift://user:pass@cluster.region.redshift.amazonaws.com:5439/database", err=True)
@@ -97,7 +97,7 @@ def cli(ctx, verbose, config):
     setup_logging(verbose)
 
     if verbose:
-        click.echo("🔧 Verbose mode enabled")
+        click.echo("[CONFIG] Verbose mode enabled")
 
 
 @cli.command(name="version")
@@ -115,7 +115,7 @@ def config(ctx):
     verbose = ctx.obj.get("verbose", False)
     config_path = ctx.obj.get("config", "Not set")
 
-    click.echo("🔧 Current Configuration")
+    click.echo("[CONFIG] Current Configuration")
     click.echo("=" * 25)
     click.echo(f"Verbose mode: {'✅' if verbose else '❌'}")
     click.echo(f"Config file: {config_path}")
@@ -128,16 +128,16 @@ def config(ctx):
     }
     for provider, key in api_keys.items():
         if key:
-            click.echo(f"   ✅ {provider}: Set")
+            click.echo(f"   [OK] {provider}: Set")
         else:
-            click.echo(f"   ❌ {provider}: Not set")
+            click.echo(f"   [ERROR] {provider}: Not set")
 
     db_url = os.getenv("DATABASE_URL")
-    click.echo("\n🗄️ Database Connection:")
+    click.echo("\n[DATABASE] Database Connection:")
     if db_url:
-        click.echo(f"   ✅ DATABASE_URL: {db_url}")
+        click.echo(f"   [OK] DATABASE_URL: {db_url}")
     else:
-        click.echo("   ❌ DATABASE_URL: Not set")
+        click.echo("   [ERROR] DATABASE_URL: Not set")
 
 
 @cli.command(name="init")
@@ -145,7 +145,7 @@ def init():
     """Create a new configuration file."""
     config_path = Path("nplsql.toml")
     if config_path.exists():
-        click.echo("❌ Configuration file already exists.")
+        click.echo("[ERROR] Configuration file already exists.")
         return
 
     config_content = """# nplsql configuration file
@@ -164,7 +164,7 @@ api_key = "$ANTHROPIC_API_KEY"
 api_key = "$GOOGLE_API_KEY"
 """
     config_path.write_text(config_content)
-    click.echo(f"✅ Created configuration file: {config_path}")
+    click.echo(f"[OK] Created configuration file: {config_path}")
 
 
 @cli.command()
@@ -202,10 +202,10 @@ def inspect(
 ):
     """Inspect database schema with advanced filtering and analysis."""
     if "question" in ctx.params:
-        click.echo("❌ Error: 'inspect' command doesn't accept --question option", err=True)
-        click.echo('💡 Did you mean: nlp2sql query --database-url [...] --question "..."', err=True)
-        click.echo("🔍 Use 'inspect' to analyze database schema", err=True)
-        click.echo("🤖 Use 'query' to generate SQL from natural language", err=True)
+        click.echo("Error: 'inspect' command doesn't accept --question option", err=True)
+        click.echo('Hint: Did you mean: nlp2sql query --database-url [...] --question "..."', err=True)
+        click.echo("Info: Use 'inspect' to analyze database schema", err=True)
+        click.echo("AI: Use 'query' to generate SQL from natural language", err=True)
         ctx.exit(1)
 
     verbose = ctx.obj.get("verbose", False)
@@ -216,7 +216,7 @@ def inspect(
             database_type = detect_database_type(database_url)
             
             if verbose:
-                click.echo(f"🗄️ Detected database type: {database_type.value}")
+                click.echo(f"[DATABASE] Detected database type: {database_type.value}")
             
             if database_type == DatabaseType.POSTGRES:
                 repo = PostgreSQLRepository(database_url, schema)
@@ -224,7 +224,7 @@ def inspect(
                 from .adapters.redshift_adapter import RedshiftRepository
                 repo = RedshiftRepository(database_url, schema)
             else:
-                click.echo(f"❌ Database type {database_type.value} not supported for inspection yet", err=True)
+                click.echo(f"[ERROR] Database type {database_type.value} not supported for inspection yet", err=True)
                 sys.exit(1)
                 
             await repo.initialize()
@@ -255,7 +255,7 @@ def inspect(
                 total_columns = sum(len(t.columns) for t in tables)
                 tables_with_fk = sum(1 for t in tables if t.foreign_keys)
 
-                click.echo("📊 Database Schema Summary", file=output)
+                click.echo("[STATS] Database Schema Summary", file=output)
                 click.echo("=" * 30, file=output)
                 click.echo(f"Database URL: {database_url}", file=output)
                 click.echo(f"Schema: {schema}", file=output)
@@ -264,13 +264,13 @@ def inspect(
                 click.echo(f"Tables with foreign keys: {tables_with_fk}", file=output)
 
         except NLP2SQLException as e:
-            click.echo(f"❌ Application Error: {e!s}", err=True)
+            click.echo(f"[ERROR] Application Error: {e!s}", err=True)
             if verbose and hasattr(e, "details"):
                 click.echo(f"   Details: {e.details}", err=True)
             sys.exit(1)
 
         except Exception as e:
-            click.echo(f"❌ An unexpected error occurred: {e!s}", err=True)
+            click.echo(f"[ERROR] An unexpected error occurred: {e!s}", err=True)
             if verbose:
                 import traceback
 
@@ -283,6 +283,7 @@ def inspect(
 @cli.command()
 @click.option("--database-url", required=True, callback=validate_database_url, help="Database connection URL")
 @click.option("--question", required=True, help="Natural language question")
+@click.option("--schema", default="public", help="Database schema name")
 @click.option(
     "--provider",
     default="openai",
@@ -299,6 +300,7 @@ def query(
     ctx,
     database_url: str,
     question: str,
+    schema: str,
     provider: str,
     api_key: Optional[str],
     explain: bool,
@@ -312,7 +314,7 @@ def query(
     async def _query():
         try:
             if verbose:
-                click.echo(f"🔧 Using provider: {provider}")
+                click.echo(f"[CONFIG] Using provider: {provider}")
                 click.echo(f"🌡️  Temperature: {temperature}")
                 click.echo(f"📏 Max tokens: {max_tokens}")
 
@@ -322,7 +324,7 @@ def query(
                 try:
                     filters = json.loads(schema_filters)
                 except json.JSONDecodeError:
-                    click.echo("❌ Invalid JSON in schema-filters", err=True)
+                    click.echo("[ERROR] Invalid JSON in schema-filters", err=True)
                     sys.exit(1)
 
             # Get API key from parameter or environment
@@ -337,22 +339,23 @@ def query(
                 env_var = env_var_mapping.get(provider, f"{provider.upper()}_API_KEY")
                 final_api_key = os.getenv(env_var)
                 if not final_api_key:
-                    click.echo(f"❌ No API key provided. Set {env_var} or use --api-key", err=True)
+                    click.echo(f"[ERROR] No API key provided. Set {env_var} or use --api-key", err=True)
                     sys.exit(1)
 
             # Detect database type from URL
             database_type = detect_database_type(database_url)
             
             if verbose:
-                click.echo(f"🗄️ Detected database type: {database_type.value}")
+                click.echo(f"[DATABASE] Detected database type: {database_type.value}")
 
             # Create service
             service = await create_and_initialize_service(
-                database_url=database_url, 
-                ai_provider=provider, 
-                api_key=final_api_key, 
+                database_url=database_url,
+                ai_provider=provider,
+                api_key=final_api_key,
                 database_type=database_type,
-                schema_filters=filters
+                schema_filters=filters,
+                schema_name=schema,
             )
 
             # Generate SQL
@@ -366,23 +369,23 @@ def query(
 
             # Output results
             click.echo(f"❓ Question: {question}")
-            click.echo(f"🤖 Provider: {provider.title()}")
-            click.echo(f"📝 SQL: {result['sql']}")
-            click.echo(f"📊 Confidence: {result['confidence']}")
-            click.echo(f"⚡ Tokens used: {result['tokens_used']}")
+            click.echo(f"AI: Provider: {provider.title()}")
+            click.echo(f"Note: SQL: {result['sql']}")
+            click.echo(f"[STATS] Confidence: {result['confidence']}")
+            click.echo(f"[PERF] Tokens used: {result['tokens_used']}")
 
             if explain and "explanation" in result:
-                click.echo(f"💡 Explanation: {result['explanation']}")
+                click.echo(f"Hint: Explanation: {result['explanation']}")
 
             if "validation" in result:
                 validation = result["validation"]
                 if validation["is_valid"]:
-                    click.echo("✅ SQL validation: Passed")
+                    click.echo("[OK] SQL validation: Passed")
                 else:
-                    click.echo(f"⚠️  SQL validation issues: {validation.get('issues', [])}")
+                    click.echo(f"[WARNING] SQL validation issues: {validation.get('issues', [])}")
 
         except ProviderException as e:
-            click.echo(f"❌ Provider Error: {e!s}", err=True)
+            click.echo(f"[ERROR] Provider Error: {e!s}", err=True)
             if hasattr(e, "provider"):
                 click.echo(f"   Provider: {e.provider}", err=True)
             if hasattr(e, "status_code"):
@@ -392,13 +395,13 @@ def query(
             sys.exit(1)
 
         except NLP2SQLException as e:
-            click.echo(f"❌ Application Error: {e!s}", err=True)
+            click.echo(f"[ERROR] Application Error: {e!s}", err=True)
             if verbose and hasattr(e, "details"):
                 click.echo(f"   Details: {e.details}", err=True)
             sys.exit(1)
 
         except Exception as e:
-            click.echo(f"❌ An unexpected error occurred: {e!s}", err=True)
+            click.echo(f"[ERROR] An unexpected error occurred: {e!s}", err=True)
             if verbose:
                 import traceback
 
@@ -414,7 +417,7 @@ def setup(ctx):
     """Interactive setup and configuration for nlp2sql."""
     verbose = ctx.obj.get("verbose", False)
 
-    click.echo("🚀 nlp2sql - Interactive Setup")
+    click.echo("nlp2sql - Interactive Setup")
     click.echo("=" * 40)
 
     # Check API keys
@@ -430,31 +433,31 @@ def setup(ctx):
     for provider, key in api_keys.items():
         if key:
             masked_key = f"{key[:8]}...{key[-4:]}" if len(key) > 12 else "***"
-            click.echo(f"   ✅ {provider}: {masked_key}")
+            click.echo(f"   [OK] {provider}: {masked_key}")
             available_providers.append(provider.lower())
         else:
-            click.echo(f"   ❌ {provider}: Not set")
+            click.echo(f"   [ERROR] {provider}: Not set")
 
     if not available_providers:
-        click.echo("\n⚠️  No API keys found!")
-        click.echo("💡 Set at least one API key:")
+        click.echo("\n[WARNING] No API keys found!")
+        click.echo("Hint: Set at least one API key:")
         click.echo("   export OPENAI_API_KEY=your-openai-key")
         click.echo("   export ANTHROPIC_API_KEY=your-anthropic-key")
         click.echo("   export GOOGLE_API_KEY=your-google-key")
         return
 
-    click.echo(f"\n✅ Available providers: {', '.join(available_providers)}")
+    click.echo(f"\n[OK] Available providers: {', '.join(available_providers)}")
 
     # Interactive configuration
-    if click.confirm("\n🔧 Would you like to test your API keys?"):
+    if click.confirm("\n[CONFIG] Would you like to test your API keys?"):
         asyncio.run(_test_providers(available_providers, verbose))
 
     # Database setup
-    if click.confirm("\n🗄️ Would you like to configure a database connection?"):
+    if click.confirm("\n[DATABASE] Would you like to configure a database connection?"):
         _setup_database()
 
-    click.echo("\n🎉 Setup completed!")
-    click.echo("💡 Run 'nlp2sql validate' to verify your configuration")
+    click.echo("\n[SUCCESS] Setup completed!")
+    click.echo("Hint: Run 'nlp2sql validate' to verify your configuration")
 
 
 async def _test_providers(providers: list, verbose: bool = False):
@@ -463,7 +466,7 @@ async def _test_providers(providers: list, verbose: bool = False):
 
     for provider in providers:
         if verbose:
-            click.echo(f"🔍 Testing {provider}...")
+            click.echo(f"Info: Testing {provider}...")
 
         try:
             # Map provider to correct environment variable
@@ -474,15 +477,15 @@ async def _test_providers(providers: list, verbose: bool = False):
             service = create_query_service(
                 database_url="postgresql://test:test@localhost/test", ai_provider=provider, api_key=os.getenv(env_var)
             )
-            click.echo(f"   ✅ {provider.title()}: Connection successful")
+            click.echo(f"   [OK] {provider.title()}: Connection successful")
 
         except Exception as e:
-            click.echo(f"   ❌ {provider.title()}: {e!s}")
+            click.echo(f"   [ERROR] {provider.title()}: {e!s}")
 
 
 def _setup_database():
     """Interactive database setup."""
-    click.echo("\n📊 Database Configuration")
+    click.echo("\n[STATS] Database Configuration")
     click.echo("-" * 30)
 
     db_type = click.choice(["postgresql", "mysql", "sqlite"], prompt="Select database type")
@@ -509,8 +512,8 @@ def _setup_database():
         db_path = click.prompt("Database file path")
         db_url = f"sqlite:///{db_path}"
 
-    click.echo(f"\n📝 Connection string: {db_url}")
-    click.echo("💡 Save this to your environment:")
+    click.echo(f"\nNote: Connection string: {db_url}")
+    click.echo("Hint: Save this to your environment:")
     click.echo(f'   export DATABASE_URL="{db_url}"')
 
 
@@ -520,7 +523,7 @@ def validate(ctx):
     """Validate nlp2sql configuration and test all components."""
     verbose = ctx.obj.get("verbose", False)
 
-    click.echo("🔍 nlp2sql - Configuration Validation")
+    click.echo("Info: nlp2sql - Configuration Validation")
     click.echo("=" * 45)
 
     tests = []
@@ -538,54 +541,54 @@ def validate(ctx):
     for provider, key in api_keys.items():
         if not key:
             if verbose:
-                click.echo(f"   ⚠️  {provider.title()}: Not configured")
+                click.echo(f"   [WARNING] {provider.title()}: Not configured")
             continue
 
         try:
             service = create_query_service(
                 database_url="postgresql://test:test@localhost/test", ai_provider=provider, api_key=key
             )
-            click.echo(f"   ✅ {provider.title()}: Valid")
+            click.echo(f"   [OK] {provider.title()}: Valid")
             working_providers.append(provider)
             tests.append(True)
 
         except Exception as e:
-            click.echo(f"   ❌ {provider.title()}: {e!s}")
+            click.echo(f"   [ERROR] {provider.title()}: {e!s}")
             tests.append(False)
 
     # Test database connection if provided
     db_url = os.getenv("DATABASE_URL")
     if db_url:
-        click.echo("\n🗄️ Testing Database Connection...")
+        click.echo("\n[DATABASE] Testing Database Connection...")
         try:
             asyncio.run(_test_database(db_url, verbose))
-            click.echo("   ✅ Database connection: Success")
+            click.echo("   [OK] Database connection: Success")
             tests.append(True)
         except Exception as e:
-            click.echo(f"   ❌ Database connection: {e!s}")
+            click.echo(f"   [ERROR] Database connection: {e!s}")
             tests.append(False)
     elif verbose:
-        click.echo("\n⚠️  No DATABASE_URL configured")
+        click.echo("\n[WARNING] No DATABASE_URL configured")
 
     # Summary
     passed = sum(tests)
     total = len(tests)
 
-    click.echo("\n📊 Validation Summary:")
+    click.echo("\n[STATS] Validation Summary:")
     click.echo(f"   Tests passed: {passed}/{total}")
 
     if passed == total and total > 0:
-        click.echo("🎉 All tests passed! nlp2sql is ready to use!")
+        click.echo("[SUCCESS] All tests passed! nlp2sql is ready to use!")
     elif passed > 0:
-        click.echo("⚠️  Some tests passed. Check failures above.")
+        click.echo("[WARNING] Some tests passed. Check failures above.")
     else:
-        click.echo("❌ All tests failed. Please check your configuration.")
+        click.echo("[ERROR] All tests failed. Please check your configuration.")
 
 
 async def _test_database(db_url: str, verbose: bool = False):
     """Test database connection."""
     if verbose:
-        click.echo(f"🔍 Connecting to: {db_url[:30]}...")
+        click.echo(f"Info: Connecting to: {db_url[:30]}...")
 
     repo = PostgreSQLRepository(db_url)
     await repo.connect()
@@ -602,7 +605,7 @@ def providers():
 @providers.command("list")
 def providers_list():
     """List all available AI providers."""
-    click.echo("🤖 Available AI Providers")
+    click.echo("AI: Available AI Providers")
     click.echo("=" * 30)
 
     providers_info = [
@@ -631,9 +634,9 @@ def providers_list():
 
     for provider in providers_info:
         api_key = os.getenv(provider["env_var"])
-        status = "✅ Configured" if api_key else "❌ Not configured"
+        status = "[OK] Configured" if api_key else "[ERROR] Not configured"
 
-        click.echo(f"\n🤖 {provider['name']}")
+        click.echo(f"\nAI: {provider['name']}")
         click.echo(f"   Provider: {provider['provider']}")
         click.echo(f"   Models: {provider['models']}")
         click.echo(f"   Context: {provider['context']}")
@@ -661,14 +664,14 @@ def providers_test(provider):
                     providers_to_test.append(p)
 
         if not providers_to_test:
-            click.echo("❌ No providers configured or specified")
+            click.echo("[ERROR] No providers configured or specified")
             return
 
         click.echo("🧪 Testing AI Providers")
         click.echo("=" * 25)
 
         for p in providers_to_test:
-            click.echo(f"\n🔍 Testing {p.title()}...")
+            click.echo(f"\nInfo: Testing {p.title()}...")
 
             try:
                 # Map provider to correct environment variable
@@ -683,14 +686,14 @@ def providers_test(provider):
                     database_url="postgresql://test:test@localhost/test", ai_provider=p, api_key=os.getenv(env_var)
                 )
 
-                click.echo(f"   ✅ {p.title()}: Connection successful")
-                click.echo("   📊 Provider initialized and ready")
+                click.echo(f"   [OK] {p.title()}: Connection successful")
+                click.echo("   [STATS] Provider initialized and ready")
 
             except ImportError:
-                click.echo(f"   ❌ {p.title()}: Missing dependency")
-                click.echo(f"   💡 Install with: pip install nlp2sql[{p}]")
+                click.echo(f"   [ERROR] {p.title()}: Missing dependency")
+                click.echo(f"   Hint: Install with: pip install nlp2sql[{p}]")
             except Exception as e:
-                click.echo(f"   ❌ {p.title()}: {e!s}")
+                click.echo(f"   [ERROR] {p.title()}: {e!s}")
 
     asyncio.run(_test())
 
@@ -722,7 +725,7 @@ def benchmark(
             try:
                 filters = json.loads(schema_filters)
             except json.JSONDecodeError:
-                click.echo("❌ Invalid JSON in schema-filters", err=True)
+                click.echo("[ERROR] Invalid JSON in schema-filters", err=True)
                 sys.exit(1)
 
         # Default test questions
@@ -741,7 +744,7 @@ def benchmark(
                 with open(questions) as f:
                     test_questions = [line.strip() for line in f if line.strip()]
             except FileNotFoundError:
-                click.echo(f"❌ Questions file not found: {questions}", err=True)
+                click.echo(f"[ERROR] Questions file not found: {questions}", err=True)
                 return
 
         # Determine providers to test
@@ -759,12 +762,12 @@ def benchmark(
                     test_providers.append(p)
 
         if not test_providers:
-            click.echo("❌ No providers configured", err=True)
+            click.echo("[ERROR] No providers configured", err=True)
             return
 
         click.echo("🏁 nlp2sql Provider Benchmark")
         click.echo("=" * 35)
-        click.echo(f"📊 Testing {len(test_providers)} providers")
+        click.echo(f"[STATS] Testing {len(test_providers)} providers")
         click.echo(f"❓ {len(test_questions)} questions")
         click.echo(f"🔄 {iterations} iterations each")
         click.echo()
@@ -805,12 +808,12 @@ def benchmark(
                             provider_results["confidences"].append(result.get("confidence", 0))
 
                             if verbose:
-                                click.echo(f"   ✅ '{question}' - {end_time - start_time:.2f}s")
+                                click.echo(f"   [OK] '{question}' - {end_time - start_time:.2f}s")
 
                         except Exception as e:
                             provider_results["failed_queries"] += 1
                             if verbose:
-                                click.echo(f"   ❌ '{question}' - {e!s}")
+                                click.echo(f"   [ERROR] '{question}' - {e!s}")
 
                 # Calculate averages
                 if provider_results["confidences"]:
@@ -819,21 +822,21 @@ def benchmark(
                     )
 
                 results[provider] = provider_results
-                click.echo(f"   ✅ {provider.title()} completed")
+                click.echo(f"   [OK] {provider.title()} completed")
 
             except Exception as e:
-                click.echo(f"   ❌ {provider.title()} failed: {e!s}")
+                click.echo(f"   [ERROR] {provider.title()} failed: {e!s}")
 
         # Display results
         if output_file:
             try:
                 with open(output_file, "w") as f:
                     json.dump(results, f, indent=2)
-                click.echo(f"✅ Benchmark results saved to {output_file}")
+                click.echo(f"[OK] Benchmark results saved to {output_file}")
             except Exception as e:
-                click.echo(f"❌ Failed to save results to {output_file}: {e!s}", err=True)
+                click.echo(f"[ERROR] Failed to save results to {output_file}: {e!s}", err=True)
         else:
-            click.echo("\n📊 Benchmark Results")
+            click.echo("\n[STATS] Benchmark Results")
             click.echo("=" * 25)
 
             for provider, stats in results.items():
@@ -841,16 +844,16 @@ def benchmark(
                 success_rate = (stats["successful_queries"] / total_queries * 100) if total_queries > 0 else 0
                 avg_time = stats["total_time"] / stats["successful_queries"] if stats["successful_queries"] > 0 else 0
 
-                click.echo(f"\n🤖 {provider.title()}:")
-                click.echo(f"   ✅ Success rate: {success_rate:.1f}%")
+                click.echo(f"\nAI: {provider.title()}:")
+                click.echo(f"   [OK] Success rate: {success_rate:.1f}%")
                 click.echo(f"   ⏱️  Avg response time: {avg_time:.2f}s")
                 click.echo(f"   🎯 Avg confidence: {stats['avg_confidence']:.2f}")
-                click.echo(f"   ⚡ Total tokens: {stats['total_tokens']:,}")
+                click.echo(f"   [PERF] Total tokens: {stats['total_tokens']:,}")
 
             # Find the best performer
             if results:
                 best_provider = max(results.keys(), key=lambda p: results[p]["avg_confidence"])
-                click.echo(f"\n🏆 Best performer: {best_provider.title()}")
+                click.echo(f"\n[BEST] Best performer: {best_provider.title()}")
 
     asyncio.run(_benchmark())
 
@@ -869,7 +872,7 @@ def cache_clear(clear_all: bool, embeddings: bool, queries: bool):
     """Clear various cache files."""
 
     if not any([clear_all, embeddings, queries]):
-        click.echo("❌ Specify what to clear: --all, --embeddings, or --queries")
+        click.echo("[ERROR] Specify what to clear: --all, --embeddings, or --queries")
         return
 
     # Get embeddings directory from environment variable
@@ -910,7 +913,7 @@ def cache_clear(clear_all: bool, embeddings: bool, queries: bool):
                 cleared.append(path)
 
     if cleared:
-        click.echo(f"✅ Cleared: {', '.join(cleared)}")
+        click.echo(f"[OK] Cleared: {', '.join(cleared)}")
     else:
         click.echo("ℹ️  No cache files found to clear")
 
@@ -918,7 +921,7 @@ def cache_clear(clear_all: bool, embeddings: bool, queries: bool):
 @cache.command("info")
 def cache_info():
     """Show cache information and statistics."""
-    click.echo("📊 Cache Information")
+    click.echo("[STATS] Cache Information")
     click.echo("=" * 25)
 
     # Check embeddings cache using environment variable
@@ -928,7 +931,7 @@ def cache_info():
         files = len([f for f in embeddings_path.rglob("*") if f.is_file()])
         click.echo("🧠 Embeddings cache:")
         click.echo(f"   📁 Location: {embeddings_path.absolute()}")
-        click.echo(f"   📊 Size: {size / 1024 / 1024:.2f} MB")
+        click.echo(f"   [STATS] Size: {size / 1024 / 1024:.2f} MB")
         click.echo(f"   📄 Files: {files}")
     else:
         click.echo("🧠 Embeddings cache: Not found")
@@ -937,11 +940,11 @@ def cache_info():
     faiss_path = Path("schema_index.faiss")
     if faiss_path.exists():
         size = faiss_path.stat().st_size
-        click.echo("🔍 FAISS index:")
+        click.echo("Info: FAISS index:")
         click.echo(f"   📁 Location: {faiss_path.absolute()}")
-        click.echo(f"   📊 Size: {size / 1024 / 1024:.2f} MB")
+        click.echo(f"   [STATS] Size: {size / 1024 / 1024:.2f} MB")
     else:
-        click.echo("🔍 FAISS index: Not found")
+        click.echo("Info: FAISS index: Not found")
 
     # Check query cache
     query_cache_path = Path("query_cache.db")
@@ -949,7 +952,7 @@ def cache_info():
         size = query_cache_path.stat().st_size
         click.echo("💾 Query cache:")
         click.echo(f"   📁 Location: {query_cache_path.absolute()}")
-        click.echo(f"   📊 Size: {size / 1024:.2f} KB")
+        click.echo(f"   [STATS] Size: {size / 1024:.2f} KB")
     else:
         click.echo("💾 Query cache: Not found")
 

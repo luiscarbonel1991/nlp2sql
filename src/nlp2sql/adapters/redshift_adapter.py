@@ -1,29 +1,69 @@
 """Amazon Redshift repository for schema management."""
 
+import asyncio
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+import psycopg2
+from psycopg2.extras import RealDictCursor
 import structlog
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import create_async_engine
 
 from ..exceptions import SchemaException
-from ..ports.schema_repository import SchemaMetadata, SchemaRepositoryPort, TableInfo
+from ..ports.schema_repository import (
+    SchemaMetadata,
+    SchemaRepositoryPort,
+    TableInfo,
+)
 
 logger = structlog.get_logger()
 
 
 class RedshiftRepository(SchemaRepositoryPort):
-    """Amazon Redshift implementation of schema repository."""
+    """Amazon Redshift implementation of schema repository.
+
+    Uses psycopg2 directly for maximum compatibility with Redshift.
+    SQLAlchemy dialects have issues with Redshift's custom configuration.
+    """
 
     def __init__(self, connection_string: str, schema_name: str = "public"):
         self.connection_string = connection_string
-        self.database_url = connection_string  # Add this line
+        self.database_url = connection_string
         self.schema_name = schema_name
-        self.engine = None
-        self.async_engine = None
-        self._connection_pool = None
+        self._connection_params = self._parse_connection_string(connection_string)
         self._initialized = False
+
+    def _parse_connection_string(self, conn_str: str) -> Dict[str, Any]:
+        """Parse connection string into psycopg2 parameters."""
+        # Handle redshift:// or postgresql:// prefix
+        if conn_str.startswith("redshift://"):
+            conn_str = conn_str[11:]  # Remove "redshift://"
+        elif conn_str.startswith("postgresql://"):
+            conn_str = conn_str[13:]  # Remove "postgresql://"
+
+        # Parse user:password@host:port/database
+        auth_host, database = conn_str.rsplit("/", 1)
+        auth, host_port = auth_host.rsplit("@", 1)
+        user, password = auth.split(":", 1)
+
+        if ":" in host_port:
+            host, port = host_port.split(":", 1)
+            port = int(port)
+        else:
+            host = host_port
+            port = 5439  # Default Redshift port
+
+        return {
+            "host": host,
+            "port": port,
+            "database": database,
+            "user": user,
+            "password": password,
+            "sslmode": "prefer",
+        }
+
+    def _get_connection(self):
+        """Create a new database connection."""
+        return psycopg2.connect(**self._connection_params)
 
     async def initialize(self) -> None:
         """Initialize database connections."""
@@ -31,20 +71,15 @@ class RedshiftRepository(SchemaRepositoryPort):
             return
 
         try:
-            # Convert connection string to asyncpg format for Redshift
-            # Redshift is PostgreSQL-compatible, so we can use asyncpg
-            asyncpg_url = self.connection_string.replace("redshift://", "postgresql+asyncpg://")
-            
-            # If the URL already starts with postgresql, use it as-is
-            if self.connection_string.startswith("postgresql://"):
-                asyncpg_url = self.connection_string.replace("postgresql://", "postgresql+asyncpg://")
-
-            # Create async engine
-            self.async_engine = create_async_engine(asyncpg_url, echo=False, pool_size=10, max_overflow=20)
-
             # Test connection
-            async with self.async_engine.begin() as conn:
-                await conn.execute(text("SELECT 1"))
+            def test_connection():
+                conn = self._get_connection()
+                cursor = conn.cursor()
+                cursor.execute("SELECT 1")
+                cursor.close()
+                conn.close()
+
+            await asyncio.to_thread(test_connection)
 
             self._initialized = True
             logger.info("Redshift repository initialized")
@@ -53,136 +88,125 @@ class RedshiftRepository(SchemaRepositoryPort):
             logger.error("Failed to initialize Redshift repository", error=str(e))
             raise SchemaException(f"Database initialization failed: {e!s}")
 
+    def _execute_query(self, query: str, params: tuple = None) -> List[Dict]:
+        """Execute a query and return results as list of dicts."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            cursor.execute(query, params)
+            results = cursor.fetchall()
+            cursor.close()
+            return [dict(row) for row in results]
+        finally:
+            conn.close()
+
+    def _execute_query_one(self, query: str, params: tuple = None) -> Optional[Dict]:
+        """Execute a query and return one result as dict."""
+        results = self._execute_query(query, params)
+        return results[0] if results else None
+
     async def get_tables(self, schema_name: Optional[str] = None) -> List[TableInfo]:
-        """Get all tables in the schema."""
+        """Get all tables in the schema.
+
+        Uses SVV_TABLES (Redshift system view) instead of information_schema.tables
+        for better permission handling. See AWS docs:
+        https://docs.aws.amazon.com/redshift/latest/dg/cm_chap_system-tables.html
+        """
         if not self._initialized:
             await self.initialize()
 
         schema = schema_name or self.schema_name
 
-        # Modified query for Redshift - using SVV_TABLE_INFO for better compatibility
+        # Use SVV_TABLES for better Redshift compatibility and permissions
         query = """
-        SELECT 
-            t.table_name,
-            t.table_schema,
-            '' as table_comment,  -- Table comments are not available in Redshift; this field will always be empty.
-            CASE 
-                WHEN st.size_mb IS NOT NULL THEN st.size_mb || ' MB'
-                ELSE 'Unknown'
-            END as table_size,
-            COALESCE(st.size_mb * 1024 * 1024, 0) as size_bytes,
-            COALESCE(st.rows, 0) as row_count
-        FROM information_schema.tables t
-        LEFT JOIN (
-            SELECT 
-                schemaname,
-                tablename,
-                size_mb,
-                rows
-            FROM pg_catalog.svv_table_info 
-        ) st ON st.schemaname = t.table_schema AND st.tablename = t.table_name
-        WHERE t.table_schema = :schema
-        AND t.table_type = 'BASE TABLE'
-        ORDER BY t.table_name
+        SELECT
+            table_name,
+            table_schema,
+            '' as table_comment
+        FROM svv_tables
+        WHERE table_schema = %s
+        ORDER BY table_name
         """
 
         try:
-            async with self.async_engine.begin() as conn:
-                result = await conn.execute(text(query), {"schema": schema})
-                rows = result.fetchall()
+            rows = await asyncio.to_thread(self._execute_query, query, (schema,))
 
-                tables = []
-                for row in rows:
-                    table_info = await self._build_table_info(row, schema)
-                    tables.append(table_info)
+            tables = []
+            for row in rows:
+                table_info = await self._build_table_info(row, schema)
+                tables.append(table_info)
 
-                return tables
+            return tables
 
         except Exception as e:
             logger.error("Failed to get tables", error=str(e))
             raise SchemaException(f"Failed to get tables: {e!s}")
 
-    async def get_table_info(self, table_name: str, schema_name: Optional[str] = None) -> TableInfo:
+    async def get_table_info(
+        self, table_name: str, schema_name: Optional[str] = None
+    ) -> TableInfo:
         """Get detailed information about a specific table."""
+        if not self._initialized:
+            await self.initialize()
+
         schema = schema_name or self.schema_name
 
+        # Use SVV_TABLES for better Redshift compatibility
+        query = """
+        SELECT
+            table_name,
+            table_schema,
+            '' as table_comment
+        FROM svv_tables
+        WHERE table_name = %s AND table_schema = %s
+        """
+
         try:
-            # Get basic table info using Redshift-compatible query
-            table_query = """
-            SELECT 
-                t.table_name,
-                t.table_schema,
-                '' as table_comment,  -- Redshift doesn't have obj_description
-                CASE 
-                    WHEN st.size_mb IS NOT NULL THEN st.size_mb || ' MB'
-                    ELSE 'Unknown'
-                END as table_size,
-                COALESCE(st.size_mb * 1024 * 1024, 0) as size_bytes,
-                COALESCE(st.rows, 0) as row_count
-            FROM information_schema.tables t
-            LEFT JOIN (
-                SELECT 
-                    schemaname,
-                    tablename,
-                    size_mb,
-                    rows
-                FROM pg_catalog.svv_table_info 
-            ) st ON st.schemaname = t.table_schema AND st.tablename = t.table_name
-            WHERE t.table_name = :table_name AND t.table_schema = :schema
-            """
+            row = await asyncio.to_thread(
+                self._execute_query_one, query, (table_name, schema)
+            )
 
-            async with self.async_engine.begin() as conn:
-                result = await conn.execute(text(table_query), {"table_name": table_name, "schema": schema})
-                row = result.fetchone()
+            if not row:
+                raise SchemaException(
+                    f"Table {table_name} not found in schema {schema}"
+                )
 
-                if not row:
-                    raise SchemaException(f"Table {table_name} not found in schema {schema}")
+            return await self._build_table_info(row, schema)
 
-                return await self._build_table_info(row, schema)
-
+        except SchemaException:
+            raise
         except Exception as e:
             logger.error("Failed to get table info", table=table_name, error=str(e))
             raise SchemaException(f"Failed to get table info: {e!s}")
 
     async def search_tables(self, pattern: str) -> List[TableInfo]:
         """Search tables by name pattern."""
+        if not self._initialized:
+            await self.initialize()
+
+        # Use SVV_TABLES for better Redshift compatibility
         query = """
-        SELECT 
-            t.table_name,
-            t.table_schema,
-            '' as table_comment,  -- Redshift doesn't have obj_description
-            CASE 
-                WHEN st.size_mb IS NOT NULL THEN st.size_mb || ' MB'
-                ELSE 'Unknown'
-            END as table_size,
-            COALESCE(st.size_mb * 1024 * 1024, 0) as size_bytes,
-            COALESCE(st.rows, 0) as row_count
-        FROM information_schema.tables t
-        LEFT JOIN (
-            SELECT 
-                schemaname,
-                tablename,
-                size_mb,
-                rows
-            FROM pg_catalog.svv_table_info 
-        ) st ON st.schemaname = t.table_schema AND st.tablename = t.table_name
-        WHERE t.table_schema = :schema
-        AND t.table_type = 'BASE TABLE'
-        AND t.table_name ILIKE :pattern
-        ORDER BY t.table_name
+        SELECT
+            table_name,
+            table_schema,
+            '' as table_comment
+        FROM svv_tables
+        WHERE table_schema = %s
+        AND table_name ILIKE %s
+        ORDER BY table_name
         """
 
         try:
-            async with self.async_engine.begin() as conn:
-                result = await conn.execute(text(query), {"schema": self.schema_name, "pattern": f"%{pattern}%"})
-                rows = result.fetchall()
+            rows = await asyncio.to_thread(
+                self._execute_query, query, (self.schema_name, f"%{pattern}%")
+            )
 
-                tables = []
-                for row in rows:
-                    table_info = await self._build_table_info(row, self.schema_name)
-                    tables.append(table_info)
+            tables = []
+            for row in rows:
+                table_info = await self._build_table_info(row, self.schema_name)
+                tables.append(table_info)
 
-                return tables
+            return tables
 
         except Exception as e:
             logger.error("Failed to search tables", pattern=pattern, error=str(e))
@@ -190,101 +214,40 @@ class RedshiftRepository(SchemaRepositoryPort):
 
     async def get_related_tables(self, table_name: str) -> List[TableInfo]:
         """Get tables related through foreign keys."""
-        query = """
-        WITH related_tables AS (
-            -- Tables that reference this table
-            SELECT DISTINCT
-                kcu.table_name as related_table,
-                kcu.table_schema as related_schema
-            FROM information_schema.key_column_usage kcu
-            JOIN information_schema.referential_constraints rc ON kcu.constraint_name = rc.constraint_name
-            JOIN information_schema.key_column_usage kcu2 ON rc.unique_constraint_name = kcu2.constraint_name
-            WHERE kcu2.table_name = :table_name AND kcu2.table_schema = :schema
-            
-            UNION
-            
-            -- Tables that this table references
-            SELECT DISTINCT
-                kcu2.table_name as related_table,
-                kcu2.table_schema as related_schema
-            FROM information_schema.key_column_usage kcu
-            JOIN information_schema.referential_constraints rc ON kcu.constraint_name = rc.constraint_name
-            JOIN information_schema.key_column_usage kcu2 ON rc.unique_constraint_name = kcu2.constraint_name
-            WHERE kcu.table_name = :table_name AND kcu.table_schema = :schema
-        )
-        SELECT 
-            t.table_name,
-            t.table_schema,
-            '' as table_comment,  -- Redshift doesn't have obj_description
-            CASE 
-                WHEN st.size_mb IS NOT NULL THEN st.size_mb || ' MB'
-                ELSE 'Unknown'
-            END as table_size,
-            COALESCE(st.size_mb * 1024 * 1024, 0) as size_bytes,
-            COALESCE(st.rows, 0) as row_count
-        FROM related_tables rt
-        JOIN information_schema.tables t ON rt.related_table = t.table_name AND rt.related_schema = t.table_schema
-        LEFT JOIN (
-            SELECT 
-                schemaname,
-                tablename,
-                size_mb,
-                rows
-            FROM pg_catalog.svv_table_info 
-        ) st ON st.schemaname = t.table_schema AND st.tablename = t.table_name
-        WHERE t.table_type = 'BASE TABLE'
-        ORDER BY t.table_name
-        """
+        if not self._initialized:
+            await self.initialize()
 
-        try:
-            async with self.async_engine.begin() as conn:
-                result = await conn.execute(text(query), {"table_name": table_name, "schema": self.schema_name})
-                rows = result.fetchall()
-
-                tables = []
-                for row in rows:
-                    table_info = await self._build_table_info(row, self.schema_name)
-                    tables.append(table_info)
-
-                return tables
-
-        except Exception as e:
-            logger.error("Failed to get related tables", table=table_name, error=str(e))
-            raise SchemaException(f"Failed to get related tables: {e!s}")
+        # Redshift has limited FK support, return empty list
+        return []
 
     async def get_schema_metadata(self) -> SchemaMetadata:
         """Get metadata about the entire schema."""
+        if not self._initialized:
+            await self.initialize()
+
+        # Use SVV_TABLES for better Redshift compatibility
         query = """
-        SELECT 
+        SELECT
             current_database() as database_name,
             version() as database_version,
-            COUNT(*) as total_tables,
-            COALESCE(SUM(st.size_mb * 1024 * 1024), 0) as total_size
-        FROM information_schema.tables t
-        LEFT JOIN (
-            SELECT 
-                schemaname,
-                tablename,
-                size_mb
-            FROM pg_catalog.svv_table_info 
-        ) st ON st.schemaname = t.table_schema AND st.tablename = t.table_name
-        WHERE t.table_schema = :schema
-        AND t.table_type = 'BASE TABLE'
+            COUNT(*) as total_tables
+        FROM svv_tables
+        WHERE table_schema = %s
         """
 
         try:
-            async with self.async_engine.begin() as conn:
-                result = await conn.execute(text(query), {"schema": self.schema_name})
-                row = result.fetchone()
+            row = await asyncio.to_thread(
+                self._execute_query_one, query, (self.schema_name,)
+            )
 
-                return SchemaMetadata(
-                    database_name=row[0],
-                    database_type="redshift",
-                    version=row[1],
-                    total_tables=row[2],
-                    total_size_bytes=row[3] or 0,
-                    last_analyzed=datetime.now(),
-                )
+            return SchemaMetadata(
+                database_name=row["database_name"],
+                database_type="redshift",
+                version=row["database_version"],
+                total_tables=row["total_tables"],
+                total_size_bytes=0,
+                last_analyzed=datetime.now(),
+            )
 
         except Exception as e:
             logger.error("Failed to get schema metadata", error=str(e))
@@ -295,36 +258,27 @@ class RedshiftRepository(SchemaRepositoryPort):
         if not self._initialized:
             await self.initialize()
 
-        try:
-            # Update table statistics using Redshift ANALYZE
-            async with self.async_engine.begin() as conn:
-                await conn.execute(text("ANALYZE"))
+        logger.info("Schema refresh requested (no-op for Redshift)")
 
-            logger.info("Schema refreshed successfully")
-
-        except Exception as e:
-            logger.error("Failed to refresh schema", error=str(e))
-            raise SchemaException(f"Failed to refresh schema: {e!s}")
-
-    async def get_table_sample_data(self, table_name: str, limit: int = 5) -> List[Dict[str, Any]]:
+    async def get_table_sample_data(
+        self, table_name: str, limit: int = 5
+    ) -> List[Dict[str, Any]]:
         """Get sample data from a table."""
-        query = f"SELECT * FROM {self.schema_name}.{table_name} LIMIT :limit"
+        if not self._initialized:
+            await self.initialize()
+
+        query = f'SELECT * FROM "{self.schema_name}"."{table_name}" LIMIT %s'
 
         try:
-            async with self.async_engine.begin() as conn:
-                result = await conn.execute(text(query), {"limit": limit})
-                rows = result.fetchall()
-                columns = result.keys()
-
-                return [dict(zip(columns, row)) for row in rows]
+            return await asyncio.to_thread(self._execute_query, query, (limit,))
 
         except Exception as e:
             logger.error("Failed to get sample data", table=table_name, error=str(e))
             raise SchemaException(f"Failed to get sample data: {e!s}")
 
-    async def _build_table_info(self, row, schema: str) -> TableInfo:
+    async def _build_table_info(self, row: Dict, schema: str) -> TableInfo:
         """Build TableInfo from database row."""
-        table_name = row[0]
+        table_name = row["table_name"]
 
         # Get columns
         columns = await self._get_table_columns(table_name, schema)
@@ -332,110 +286,74 @@ class RedshiftRepository(SchemaRepositoryPort):
         # Get primary keys
         primary_keys = await self._get_primary_keys(table_name, schema)
 
-        # Get foreign keys
-        foreign_keys = await self._get_foreign_keys(table_name, schema)
-
-        # Get indexes (simplified for Redshift)
-        indexes = await self._get_indexes(table_name, schema)
-
         return TableInfo(
             name=table_name,
             schema=schema,
             columns=columns,
             primary_keys=primary_keys,
-            foreign_keys=foreign_keys,
-            indexes=indexes,
-            row_count=row[5],
-            size_bytes=row[4],
-            description=row[2],
+            foreign_keys=[],
+            indexes=[],
+            row_count=0,
+            size_bytes=0,
+            description=row.get("table_comment", ""),
             last_updated=datetime.now(),
         )
 
-    async def _get_table_columns(self, table_name: str, schema: str) -> List[Dict[str, Any]]:
-        """Get column information for a table."""
+    async def _get_table_columns(
+        self, table_name: str, schema: str
+    ) -> List[Dict[str, Any]]:
+        """Get column information for a table.
+
+        Uses SVV_COLUMNS (Redshift system view) for better permission handling.
+        See: https://docs.aws.amazon.com/redshift/latest/dg/r_SVV_COLUMNS.html
+        """
         query = """
-        SELECT 
+        SELECT
             column_name,
             data_type,
             is_nullable,
             column_default,
             character_maximum_length,
             numeric_precision,
-            numeric_scale,
-            '' as column_comment  -- Redshift doesn't have column comments in same way
-        FROM information_schema.columns c
-        WHERE c.table_name = :table_name AND c.table_schema = :schema
+            numeric_scale
+        FROM svv_columns
+        WHERE table_name = %s AND table_schema = %s
         ORDER BY ordinal_position
         """
 
-        async with self.async_engine.begin() as conn:
-            result = await conn.execute(text(query), {"table_name": table_name, "schema": schema})
-            rows = result.fetchall()
+        rows = await asyncio.to_thread(
+            self._execute_query, query, (table_name, schema)
+        )
 
-            columns = []
-            for row in rows:
-                columns.append(
-                    {
-                        "name": row[0],
-                        "type": row[1],
-                        "nullable": row[2] == "YES",
-                        "default": row[3],
-                        "max_length": row[4],
-                        "precision": row[5],
-                        "scale": row[6],
-                        "description": row[7],
-                    }
-                )
+        columns = []
+        for row in rows:
+            columns.append({
+                "name": row["column_name"],
+                "type": row["data_type"],
+                "nullable": row["is_nullable"] == "YES",
+                "default": row["column_default"],
+                "max_length": row["character_maximum_length"],
+                "precision": row["numeric_precision"],
+                "scale": row["numeric_scale"],
+                "description": "",
+            })
 
-            return columns
+        return columns
 
     async def _get_primary_keys(self, table_name: str, schema: str) -> List[str]:
         """Get primary key columns for a table."""
         query = """
         SELECT kcu.column_name
         FROM information_schema.table_constraints tc
-        JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name
-        WHERE tc.table_name = :table_name AND tc.table_schema = :schema
+        JOIN information_schema.key_column_usage kcu
+            ON tc.constraint_name = kcu.constraint_name
+        WHERE tc.table_name = %s AND tc.table_schema = %s
         AND tc.constraint_type = 'PRIMARY KEY'
         ORDER BY kcu.ordinal_position
         """
 
-        async with self.async_engine.begin() as conn:
-            result = await conn.execute(text(query), {"table_name": table_name, "schema": schema})
-            rows = result.fetchall()
+        rows = await asyncio.to_thread(
+            self._execute_query, query, (table_name, schema)
+        )
 
-            return [row[0] for row in rows]
-
-    async def _get_foreign_keys(self, table_name: str, schema: str) -> List[Dict[str, Any]]:
-        """Get foreign key constraints for a table."""
-        query = """
-        SELECT 
-            kcu.column_name,
-            kcu2.table_name as referenced_table,
-            kcu2.column_name as referenced_column,
-            rc.constraint_name
-        FROM information_schema.key_column_usage kcu
-        JOIN information_schema.referential_constraints rc ON kcu.constraint_name = rc.constraint_name
-        JOIN information_schema.key_column_usage kcu2 ON rc.unique_constraint_name = kcu2.constraint_name
-        WHERE kcu.table_name = :table_name AND kcu.table_schema = :schema
-        ORDER BY kcu.ordinal_position
-        """
-
-        async with self.async_engine.begin() as conn:
-            result = await conn.execute(text(query), {"table_name": table_name, "schema": schema})
-            rows = result.fetchall()
-
-            foreign_keys = []
-            for row in rows:
-                foreign_keys.append(
-                    {"column": row[0], "ref_table": row[1], "ref_column": row[2], "constraint_name": row[3]}
-                )
-
-            return foreign_keys
-
-    async def _get_indexes(self, table_name: str, schema: str) -> List[Dict[str, Any]]:
-        """Get indexes for a table - simplified for Redshift."""
-        # Redshift has different index system (dist keys, sort keys)
-        # For now, return empty list as indexes work differently in Redshift
-        # Could be enhanced later to include dist keys and sort keys information
-        return []
+        return [row["column_name"] for row in rows]

@@ -3,7 +3,7 @@
 from enum import Enum
 from typing import Any, Dict, Optional
 
-from pydantic import Field, validator
+from pydantic import ConfigDict, Field, field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -20,65 +20,83 @@ class LogLevel(str, Enum):
 class Settings(BaseSettings):
     """Application settings."""
 
+    model_config = ConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
+
     # General settings
     app_name: str = "nlp2sql"
     version: str = "0.2.0rc2"
-    debug: bool = Field(default=False, env="NLP2SQL_DEBUG")
-    log_level: LogLevel = Field(default=LogLevel.INFO, env="NLP2SQL_LOG_LEVEL")
+    debug: bool = Field(default=False, validation_alias="NLP2SQL_DEBUG")
+    log_level: LogLevel = Field(default=LogLevel.INFO, validation_alias="NLP2SQL_LOG_LEVEL")
 
     # AI Provider settings
-    openai_api_key: Optional[str] = Field(default=None, env="OPENAI_API_KEY")
-    anthropic_api_key: Optional[str] = Field(default=None, env="ANTHROPIC_API_KEY")
-    google_api_key: Optional[str] = Field(default=None, env="GOOGLE_API_KEY")
-    azure_openai_api_key: Optional[str] = Field(default=None, env="AZURE_OPENAI_API_KEY")
-    azure_openai_endpoint: Optional[str] = Field(default=None, env="AZURE_OPENAI_ENDPOINT")
-    aws_access_key_id: Optional[str] = Field(default=None, env="AWS_ACCESS_KEY_ID")
-    aws_secret_access_key: Optional[str] = Field(default=None, env="AWS_SECRET_ACCESS_KEY")
-    aws_region: str = Field(default="us-east-1", env="AWS_DEFAULT_REGION")
+    openai_api_key: Optional[str] = Field(default=None)
+    anthropic_api_key: Optional[str] = Field(default=None)
+    google_api_key: Optional[str] = Field(default=None)
+    azure_openai_api_key: Optional[str] = Field(default=None)
+    azure_openai_endpoint: Optional[str] = Field(default=None)
+    aws_access_key_id: Optional[str] = Field(default=None)
+    aws_secret_access_key: Optional[str] = Field(default=None)
+    aws_region: str = Field(default="us-east-1", validation_alias="AWS_DEFAULT_REGION")
 
     # Database settings
-    default_database_type: str = Field(default="postgres", env="NLP2SQL_DEFAULT_DB_TYPE")
-    database_url: Optional[str] = Field(default=None, env="DATABASE_URL")
-    database_pool_size: int = Field(default=10, env="NLP2SQL_DB_POOL_SIZE")
-    database_max_overflow: int = Field(default=20, env="NLP2SQL_DB_MAX_OVERFLOW")
+    default_database_type: str = Field(default="postgres", validation_alias="NLP2SQL_DEFAULT_DB_TYPE")
+    database_url: Optional[str] = Field(default=None)
+    database_pool_size: int = Field(default=10, validation_alias="NLP2SQL_DB_POOL_SIZE")
+    database_max_overflow: int = Field(default=20, validation_alias="NLP2SQL_DB_MAX_OVERFLOW")
 
     # Cache settings
-    cache_enabled: bool = Field(default=True, env="NLP2SQL_CACHE_ENABLED")
-    cache_ttl_seconds: int = Field(default=3600, env="NLP2SQL_CACHE_TTL")
-    redis_url: Optional[str] = Field(default=None, env="REDIS_URL")
+    cache_enabled: bool = Field(default=True, validation_alias="NLP2SQL_CACHE_ENABLED")
+    cache_ttl_seconds: int = Field(default=3600, validation_alias="NLP2SQL_CACHE_TTL")
+    redis_url: Optional[str] = Field(default=None)
 
     # Schema settings
-    max_schema_tokens: int = Field(default=8000, env="NLP2SQL_MAX_SCHEMA_TOKENS")
-    schema_cache_enabled: bool = Field(default=True, env="NLP2SQL_SCHEMA_CACHE_ENABLED")
-    schema_refresh_interval_hours: int = Field(default=24, env="NLP2SQL_SCHEMA_REFRESH_HOURS")
+    max_schema_tokens: int = Field(default=8000, validation_alias="NLP2SQL_MAX_SCHEMA_TOKENS")
+    schema_cache_enabled: bool = Field(default=True, validation_alias="NLP2SQL_SCHEMA_CACHE_ENABLED")
+    schema_refresh_interval_hours: int = Field(default=24, validation_alias="NLP2SQL_SCHEMA_REFRESH_HOURS")
 
     # Query generation settings
-    default_temperature: float = Field(default=0.1, env="NLP2SQL_TEMPERATURE")
-    default_max_tokens: int = Field(default=2000, env="NLP2SQL_MAX_TOKENS")
-    retry_attempts: int = Field(default=3, env="NLP2SQL_RETRY_ATTEMPTS")
-    retry_delay_seconds: float = Field(default=1.0, env="NLP2SQL_RETRY_DELAY")
+    default_temperature: float = Field(default=0.1, validation_alias="NLP2SQL_TEMPERATURE")
+    default_max_tokens: int = Field(default=2000, validation_alias="NLP2SQL_MAX_TOKENS")
+    retry_attempts: int = Field(default=3, validation_alias="NLP2SQL_RETRY_ATTEMPTS")
+    retry_delay_seconds: float = Field(default=1.0, validation_alias="NLP2SQL_RETRY_DELAY")
 
     # Embedding settings
-    embedding_model: str = Field(default="all-MiniLM-L6-v2", env="NLP2SQL_EMBEDDING_MODEL")
-    embedding_cache_enabled: bool = Field(default=True, env="NLP2SQL_EMBEDDING_CACHE")
+    embedding_provider: str = Field(default="local", validation_alias="NLP2SQL_EMBEDDING_PROVIDER")
+    embedding_model: str = Field(default="all-MiniLM-L6-v2", validation_alias="NLP2SQL_EMBEDDING_MODEL")
+    openai_embedding_model: str = Field(default="text-embedding-3-small", validation_alias="NLP2SQL_OPENAI_EMBEDDING_MODEL")
+    embedding_cache_enabled: bool = Field(default=True, validation_alias="NLP2SQL_EMBEDDING_CACHE")
 
     # Rate limiting
-    rate_limit_enabled: bool = Field(default=True, env="NLP2SQL_RATE_LIMIT_ENABLED")
-    rate_limit_requests_per_minute: int = Field(default=60, env="NLP2SQL_RATE_LIMIT_RPM")
+    rate_limit_enabled: bool = Field(default=True, validation_alias="NLP2SQL_RATE_LIMIT_ENABLED")
+    rate_limit_requests_per_minute: int = Field(default=60, validation_alias="NLP2SQL_RATE_LIMIT_RPM")
 
-    class Config:
-        """Pydantic config."""
-
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = False
-
-    @validator("openai_api_key", "anthropic_api_key", "google_api_key", pre=True)
+    @field_validator("openai_api_key", "anthropic_api_key", "google_api_key", mode="before")
+    @classmethod
     def validate_api_keys(cls, v: Optional[str]) -> Optional[str]:
         """Validate API keys are not empty strings."""
         if v == "":
             return None
         return v
+
+    @field_validator("debug", mode="before")
+    @classmethod
+    def validate_debug(cls, v: Any) -> bool:
+        """Validate debug is a boolean, ignore invalid values."""
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, str):
+            v_lower = v.lower()
+            if v_lower in ("true", "1", "yes", "on"):
+                return True
+            if v_lower in ("false", "0", "no", "off", ""):
+                return False
+        # If invalid value, return default
+        return False
 
     def get_provider_config(self, provider: str) -> Dict[str, Any]:
         """Get configuration for specific provider."""

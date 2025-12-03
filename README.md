@@ -8,31 +8,31 @@
 
 A powerful Python library for converting natural language queries to optimized SQL using multiple AI providers. Built with Clean Architecture principles for enterprise-scale applications handling 1000+ table databases.
 
-## 🚀 Why nlp2sql?
+## Why nlp2sql?
 
 Unlike academic frameworks focused on composability, **nlp2sql is built for enterprise production environments** from day one:
 
-- **🏢 Enterprise Scale**: Handle databases with 1000+ tables efficiently
-- **🤖 Multi-Provider Native**: OpenAI, Anthropic, Gemini support - no vendor lock-in
-- **⚡ Production Ready**: Advanced caching, async support, schema optimization
-- **🛠️ Developer First**: Professional CLI, Docker setup, automated installation
-- **🏗️ Clean Architecture**: Maintainable, testable, extensible codebase
-- **📊 Performance Focused**: Benchmarking, schema filtering, vector embeddings
+- **Enterprise Scale**: Handle databases with 1000+ tables efficiently
+- **Multi-Provider Native**: OpenAI, Anthropic, Gemini support - no vendor lock-in
+- **Production Ready**: Advanced caching, async support, schema optimization
+- **Developer First**: Professional CLI, Docker setup, automated installation
+- **Clean Architecture**: Maintainable, testable, extensible codebase
+- **Performance Focused**: Benchmarking, schema filtering, vector embeddings
 
-## ✨ Features
+## Features
 
-- **🤖 Multiple AI Providers**: OpenAI, Anthropic, Google Gemini, AWS Bedrock, Azure OpenAI
-- **🗄️ Database Support**: PostgreSQL, Amazon Redshift (with MySQL, SQLite, Oracle, MSSQL coming soon)
-- **📊 Large Schema Handling**: Advanced strategies for databases with 1000+ tables
-- **⚡ Smart Caching**: Intelligent result caching for improved performance
-- **🔍 Query Optimization**: Built-in SQL query optimization
-- **🧠 Schema Analysis**: AI-powered relevance scoring and schema compression
-- **🔍 Vector Embeddings**: Semantic search for schema elements
-- **📈 Token Management**: Efficient token usage across different providers
-- **⚡ Async Support**: Full async/await support for better performance
-- **🏗️ Clean Architecture**: Ports & Adapters pattern for maintainability
+- **Multiple AI Providers**: OpenAI, Anthropic, Google Gemini, AWS Bedrock, Azure OpenAI
+- **Database Support**: PostgreSQL, Amazon Redshift (with MySQL, SQLite, Oracle, MSSQL coming soon)
+- **Large Schema Handling**: Advanced strategies for databases with 1000+ tables
+- **Smart Caching**: Intelligent result caching for improved performance
+- **Query Optimization**: Built-in SQL query optimization
+- **Schema Analysis**: AI-powered relevance scoring and schema compression
+- **Vector Embeddings**: Semantic search for schema elements with flexible provider support
+- **Token Management**: Efficient token usage across different providers
+- **Async Support**: Full async/await support for better performance
+- **Clean Architecture**: Ports & Adapters pattern for maintainability
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Installation
 
@@ -43,12 +43,17 @@ uv add nlp2sql
 # Or with pip
 pip install nlp2sql
 
-# Release candidate with latest features (multi-provider support)
-pip install nlp2sql==0.2.0rc1
+# Release candidate with latest features
+pip install nlp2sql==0.2.0rc2
 
-# With specific providers
+# With specific AI providers
 pip install nlp2sql[anthropic,gemini]  # Multiple providers
 pip install nlp2sql[all-providers]     # All providers
+
+# With embedding providers (optional)
+pip install nlp2sql[embeddings-local]   # Local embeddings (sentence-transformers)
+pip install nlp2sql[embeddings-openai]  # OpenAI embeddings (no extra deps)
+pip install nlp2sql[all-embeddings]     # All embedding options
 ```
 
 ### One-Line Usage (Simplest)
@@ -75,7 +80,8 @@ async def main():
         database_url="postgresql://testuser:testpass@localhost:5432/testdb",
         question="Show me all active users",
         ai_provider=selected["name"],
-        api_key=selected["key"]
+        api_key=selected["key"],
+        embedding_provider_type="local"  # Use local embeddings (default, no API cost)
     )
     print(result['sql'])
 
@@ -96,10 +102,12 @@ async def main():
                "anthropic" if os.getenv("ANTHROPIC_API_KEY") else "gemini"
     
     # Initialize once with Docker test database
+    # Uses local embeddings by default (no extra cost)
     service = await create_and_initialize_service(
         database_url="postgresql://testuser:testpass@localhost:5432/testdb",
         ai_provider=provider,
-        api_key=api_key
+        api_key=api_key,
+        embedding_provider_type="local"  # Local embeddings (default, no API cost)
     )
     
     # Use multiple times
@@ -130,7 +138,8 @@ async def main():
         schema_filters={
             "include_schemas": ["sales", "finance"],
             "exclude_system_tables": True
-        }
+        },
+        embedding_provider_type="local"  # Use local embeddings
     )
     
     # Initialize (loads schema automatically)
@@ -154,7 +163,7 @@ asyncio.run(main())
 
 nlp2sql includes comprehensive support for Amazon Redshift data warehouses. See the complete [Redshift documentation](docs/Redshift.md) for setup, examples, and LocalStack testing.
 
-## 🤖 Multiple AI Providers Support
+## Multiple AI Providers Support
 
 nlp2sql supports multiple AI providers - you're not locked into OpenAI!
 
@@ -191,7 +200,47 @@ service = await create_and_initialize_service(
 | Anthropic Claude | 200K | $0.015 | Large schemas |
 | Google Gemini | 1M | $0.001 | High volume/cost |
 
-## 📊 Large Schema Support
+## Embedding Providers
+
+nlp2sql supports flexible embedding providers for schema search and relevance scoring:
+
+- **Local Embeddings** (default): Uses `sentence-transformers` locally - no API costs, works offline
+- **OpenAI Embeddings**: Uses OpenAI's embedding API for potentially better accuracy
+
+```python
+# Use local embeddings (default, recommended for production)
+service = await create_and_initialize_service(
+    database_url="postgresql://testuser:testpass@localhost:5432/testdb",
+    ai_provider="openai",
+    api_key="your-key",
+    embedding_provider_type="local"  # No extra cost, works offline
+)
+
+# Use OpenAI embeddings
+service = await create_and_initialize_service(
+    database_url="postgresql://testuser:testpass@localhost:5432/testdb",
+    ai_provider="openai",
+    api_key="your-key",
+    embedding_provider_type="openai"  # Uses OpenAI embedding API
+)
+
+# Create custom embedding provider
+from nlp2sql import create_embedding_provider
+
+local_provider = create_embedding_provider("local", model="all-MiniLM-L6-v2")
+openai_provider = create_embedding_provider("openai", api_key="your-key")
+
+service = create_query_service(
+    database_url="postgresql://testuser:testpass@localhost:5432/testdb",
+    ai_provider="openai",
+    api_key="your-key",
+    embedding_provider=local_provider  # Use custom provider instance
+)
+```
+
+**Note**: Local embeddings require `pip install nlp2sql[embeddings-local]`. They're free, work offline, and are ideal for production use. The library defaults to local embeddings when available.
+
+## Large Schema Support
 
 For databases with 1000+ tables, use schema filters:
 
@@ -227,7 +276,7 @@ enterprise_filters = {
 }
 ```
 
-## 🏗️ Architecture
+## Architecture
 
 nlp2sql follows Clean Architecture principles with clear separation of concerns:
 
@@ -261,6 +310,8 @@ export DATABASE_URL="postgresql://testuser:testpass@localhost:5432/testdb"  # Si
 export NLP2SQL_MAX_SCHEMA_TOKENS=8000
 export NLP2SQL_CACHE_ENABLED=true
 export NLP2SQL_LOG_LEVEL=INFO
+export NLP2SQL_EMBEDDING_PROVIDER=local  # 'local' or 'openai'
+export NLP2SQL_EMBEDDING_MODEL=all-MiniLM-L6-v2  # For local embeddings
 ```
 
 ## Development
@@ -277,7 +328,7 @@ uv sync
 
 # Setup Docker test databases
 cd docker
-docker-compose up -d
+docker-compose up -d postgres  # Start simple test database
 cd ..
 
 # Test CLI with Docker database
@@ -307,7 +358,7 @@ uv run ruff check .
 uv run mypy src/
 ```
 
-## 🏢 Enterprise Use Cases
+## Enterprise Use Cases
 
 ### Data Analytics Teams
 - **Large Schema Navigation**: Query enterprise databases with 1000+ tables
@@ -324,18 +375,19 @@ uv run mypy src/
 - **Audit & Compliance**: Explainable queries with confidence scoring
 - **Cost Management**: Provider comparison and optimization
 
-## 📊 Performance & Scale
+## Performance & Scale
 
 | Metric | nlp2sql | Typical Framework |
 |--------|---------|-------------------|
 | **Max Tables Supported** | 1000+ | ~100 |
 | **AI Providers** | 3+ (OpenAI, Anthropic, Gemini) | Usually 1 |
-| **Query Cache** | ✅ Advanced | ❌ Basic/None |
-| **Schema Optimization** | ✅ Vector embeddings | ❌ Manual |
-| **Enterprise CLI** | ✅ Professional | ❌ Basic/None |
-| **Docker Setup** | ✅ Production-ready | ❌ Manual |
+| **Query Cache** | Advanced | Basic/None |
+| **Schema Optimization** | Vector embeddings | Manual |
+| **Embedding Providers** | Local & OpenAI | Single option |
+| **Enterprise CLI** | Professional | Basic/None |
+| **Docker Setup** | Production-ready | Manual |
 
-## 🔄 Migration from Other Frameworks
+## Migration from Other Frameworks
 
 Coming from other NLP-to-SQL frameworks? nlp2sql provides:
 - **Drop-in replacement** for most common patterns
@@ -344,7 +396,7 @@ Coming from other NLP-to-SQL frameworks? nlp2sql provides:
 
 See our [Migration Guide](docs/migration.md) for framework-specific instructions.
 
-## 🤝 Contributing
+## Contributing
 
 We welcome contributions! This project follows enterprise development practices:
 - Clean Architecture patterns
@@ -354,11 +406,11 @@ We welcome contributions! This project follows enterprise development practices:
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
-## 📄 License
+## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 👨‍💻 Author & Maintainer
+## Author & Maintainer
 
 **Luis Carbonel** - *Initial work and ongoing development*
 - GitHub: [@luiscarbonel1991](https://github.com/luiscarbonel1991)

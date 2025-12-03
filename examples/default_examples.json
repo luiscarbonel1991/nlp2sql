@@ -1,0 +1,92 @@
+[
+    {
+        "question": "Show me all customers",
+        "sql": "SELECT * FROM customers",
+        "database_type": "postgres",
+        "metadata": {
+            "category": "basic_select",
+            "difficulty": "easy"
+        }
+    },
+    {
+        "question": "Count total orders",
+        "sql": "SELECT COUNT(*) FROM orders",
+        "database_type": "postgres",
+        "metadata": {
+            "category": "aggregation",
+            "difficulty": "easy"
+        }
+    },
+    {
+        "question": "Find customers with orders",
+        "sql": "SELECT DISTINCT c.* FROM customers c JOIN orders o ON c.id = o.customer_id",
+        "database_type": "postgres",
+        "metadata": {
+            "category": "join",
+            "difficulty": "medium"
+        }
+    },
+    {
+        "question": "Get top 10 products by sales",
+        "sql": "SELECT p.name, SUM(oi.quantity * oi.price) as total_sales FROM products p JOIN order_items oi ON p.id = oi.product_id GROUP BY p.id, p.name ORDER BY total_sales DESC LIMIT 10",
+        "database_type": "postgres",
+        "metadata": {
+            "category": "aggregation_join",
+            "difficulty": "hard"
+        }
+    },
+    {
+        "question": "Find customers who haven't ordered in the last 30 days",
+        "sql": "SELECT c.* FROM customers c WHERE c.id NOT IN (SELECT DISTINCT customer_id FROM orders WHERE created_at > CURRENT_DATE - INTERVAL '30 days')",
+        "database_type": "postgres",
+        "metadata": {
+            "category": "subquery",
+            "difficulty": "medium"
+        }
+    },
+    {
+        "question": "Calculate average order value by month",
+        "sql": "SELECT DATE_TRUNC('month', created_at) as month, AVG(total_amount) as avg_order_value FROM orders GROUP BY month ORDER BY month DESC",
+        "database_type": "postgres",
+        "metadata": {
+            "category": "time_series",
+            "difficulty": "medium"
+        }
+    },
+    {
+        "question": "List products that are out of stock",
+        "sql": "SELECT * FROM products WHERE stock_quantity = 0 OR stock_quantity IS NULL",
+        "database_type": "postgres",
+        "metadata": {
+            "category": "filtering",
+            "difficulty": "easy"
+        }
+    },
+    {
+        "question": "Find duplicate email addresses in users table",
+        "sql": "SELECT email, COUNT(*) as count FROM users GROUP BY email HAVING COUNT(*) > 1",
+        "database_type": "postgres",
+        "metadata": {
+            "category": "data_quality",
+            "difficulty": "medium"
+        }
+    },
+    {
+        "question": "Get customer lifetime value",
+        "sql": "SELECT c.id, c.name, SUM(o.total_amount) as lifetime_value FROM customers c LEFT JOIN orders o ON c.id = o.customer_id GROUP BY c.id, c.name ORDER BY lifetime_value DESC",
+        "database_type": "postgres",
+        "metadata": {
+            "category": "analytics",
+            "difficulty": "medium"
+        }
+    },
+    {
+        "question": "Show recent orders with customer details",
+        "sql": "SELECT o.id, o.created_at, o.total_amount, c.name as customer_name, c.email FROM orders o JOIN customers c ON o.customer_id = c.id ORDER BY o.created_at DESC LIMIT 50",
+        "database_type": "postgres",
+        "metadata": {
+            "category": "join",
+            "difficulty": "easy"
+        }
+    }
+]

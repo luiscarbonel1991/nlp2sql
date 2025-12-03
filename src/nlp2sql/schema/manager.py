@@ -1,6 +1,8 @@
 """Schema manager that coordinates all schema strategies."""
 
+import pickle
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import structlog
@@ -9,6 +11,7 @@ from ..config.settings import settings
 from ..core.entities import DatabaseType
 from ..exceptions import SchemaException
 from ..ports.cache import CachePort
+from ..ports.embedding_provider import EmbeddingProviderPort
 from ..ports.schema_repository import SchemaRepositoryPort, TableInfo
 from ..ports.schema_strategy import SchemaContext
 from .analyzer import SchemaAnalyzer
@@ -24,16 +27,41 @@ class SchemaManager:
         self,
         repository: SchemaRepositoryPort,
         cache: Optional[CachePort] = None,
+        embedding_provider: Optional[EmbeddingProviderPort] = None,
         embedding_manager: Optional[SchemaEmbeddingManager] = None,
         analyzer: Optional[SchemaAnalyzer] = None,
         schema_filters: Optional[Dict[str, Any]] = None,
     ):
+        """
+        Initialize schema manager.
+
+        Args:
+            repository: Schema repository port
+            cache: Optional cache port
+            embedding_provider: Optional embedding provider (passed to children if not explicitly provided)
+            embedding_manager: Optional embedding manager (will use embedding_provider if provided)
+            analyzer: Optional schema analyzer (will use embedding_provider if provided)
+            schema_filters: Optional schema filters
+        """
         self.repository = repository
         self.cache = cache
-        self.embedding_manager = embedding_manager or SchemaEmbeddingManager(
-            database_url=repository.database_url, cache=cache
-        )
-        self.analyzer = analyzer or SchemaAnalyzer()
+        self.embedding_provider = embedding_provider
+
+        # Create or use provided embedding manager
+        if embedding_manager is None:
+            self.embedding_manager = SchemaEmbeddingManager(
+                database_url=repository.database_url,
+                embedding_provider=embedding_provider,
+                cache=cache,
+            )
+        else:
+            self.embedding_manager = embedding_manager
+
+        # Create or use provided analyzer
+        if analyzer is None:
+            self.analyzer = SchemaAnalyzer(embedding_provider=embedding_provider)
+        else:
+            self.analyzer = analyzer
 
         # Configuration
         self.max_schema_tokens = settings.max_schema_tokens
@@ -52,23 +80,45 @@ class SchemaManager:
         self._last_refresh = None
         self._schema_cache = {}
         self._table_relevance_cache = {}
+        
+        # Load refresh state early if index exists
+        self._load_refresh_state_early()
 
     async def initialize(self, database_type: DatabaseType) -> None:
         """Initialize schema manager with database schema."""
         try:
-            # Refresh schema if needed
+            index_file = self.embedding_manager.index_path / "schema_index.faiss"
+            metadata_file = self.embedding_manager.index_path / "schema_metadata.pkl"
+
+            if index_file.exists() and metadata_file.exists():
+                try:
+                    with open(metadata_file, "rb") as f:
+                        metadata = pickle.load(f)
+                        existing_elements = len(metadata.get("id_to_schema", {}))
+
+                    if existing_elements > 0:
+                        logger.info(
+                            "Schema index already exists, skipping full initialization",
+                            elements=existing_elements,
+                        )
+                        await self._refresh_schema_if_needed()
+                        if self.embedding_provider and hasattr(self.embedding_provider, "_load_model"):
+                            try:
+                                self.embedding_provider._load_model()
+                            except Exception:
+                                pass
+                        return
+                except Exception as e:
+                    logger.warning("Failed to check existing index, proceeding with full initialization", error=str(e))
+
             await self._refresh_schema_if_needed()
 
-            # Get all tables
             tables = await self.repository.get_tables()
 
-            # Apply schema filters
             tables = self._apply_schema_filters(tables)
 
-            # Convert to embedding format
             schema_elements = []
             for table in tables:
-                # Add table element
                 schema_elements.append(
                     {
                         "type": "table",
@@ -80,7 +130,6 @@ class SchemaManager:
                     }
                 )
 
-                # Add column elements
                 for column in table.columns:
                     schema_elements.append(
                         {
@@ -93,7 +142,6 @@ class SchemaManager:
                         }
                     )
 
-            # Add to embedding index
             await self.embedding_manager.add_schema_elements(schema_elements, database_type)
 
             logger.info("Schema manager initialized", tables=len(tables), elements=len(schema_elements))
@@ -218,6 +266,7 @@ class SchemaManager:
         """Manually refresh schema cache."""
         await self.repository.refresh_schema()
         self._last_refresh = datetime.now()
+        self._save_refresh_state()
 
         # Clear relevant caches
         if self.cache:
@@ -257,16 +306,44 @@ class SchemaManager:
                     table_scores[table_name] = max(table_scores.get(table_name, 0), score * 0.8)
 
         # Strategy 2: Direct schema analysis
+        # Always analyze tables that have potential token matches with the query
+        # This ensures tables like "organization" are found for queries like "count organizations"
+        query_tokens = set(self.analyzer._tokenize(query.lower()))
+        # Normalize tokens for better singular/plural matching
+        normalized_query_tokens = {self.analyzer._normalize_word(t) for t in query_tokens}
         all_tables = await self.repository.get_tables()
-        for table in all_tables:
-            if table.name not in table_scores:
-                table_dict = self._table_info_to_dict(table)
-                score = await self.analyzer.score_relevance(query, table_dict)
-                if score > 0.1:  # Minimum threshold
-                    table_scores[table.name] = score
 
-        # Sort by relevance
-        sorted_tables = sorted(table_scores.items(), key=lambda x: x[1], reverse=True)
+        for table in all_tables:
+            table_name_tokens = set(self.analyzer._tokenize(table.name.lower()))
+            normalized_table_tokens = {self.analyzer._normalize_word(t) for t in table_name_tokens}
+            # Check both exact token match and normalized token match
+            has_token_match = bool(query_tokens & table_name_tokens) or bool(normalized_query_tokens & normalized_table_tokens)
+
+            # Analyze if: has token match OR (not in results AND we need more)
+            should_analyze = has_token_match or (
+                table.name not in table_scores and len(table_scores) < max_tables * 2
+            )
+
+            if should_analyze:
+                table_dict = self._table_info_to_dict(table)
+                # Use semantic=False for speed when we already have a token match
+                score = await self.analyzer.score_relevance(
+                    query, table_dict, use_semantic=not has_token_match
+                )
+                if score > 0.1:  # Minimum threshold
+                    # Use max to keep higher score if already exists
+                    table_scores[table.name] = max(table_scores.get(table.name, 0), score)
+
+        # Separate exact matches (score >= 1.0) to ensure they come first
+        exact_matches = [(name, score) for name, score in table_scores.items() if score >= 1.0]
+        other_matches = [(name, score) for name, score in table_scores.items() if score < 1.0]
+
+        # Sort each group by score
+        exact_matches.sort(key=lambda x: x[1], reverse=True)
+        other_matches.sort(key=lambda x: x[1], reverse=True)
+
+        # Combine: exact matches first, then others
+        sorted_tables = exact_matches + other_matches
 
         # Apply minimum threshold and limit
         relevant_tables = []
@@ -282,8 +359,53 @@ class SchemaManager:
 
     async def _refresh_schema_if_needed(self) -> None:
         """Refresh schema if the refresh interval has passed."""
+        if self._last_refresh is None:
+            self._last_refresh = self._load_refresh_state()
+
         if self._last_refresh is None or datetime.now() - self._last_refresh > self.refresh_interval:
             await self.refresh_schema()
+
+    def _load_refresh_state_early(self) -> None:
+        """Load refresh state early in initialization if index exists."""
+        metadata_file = self.embedding_manager.index_path / "schema_metadata.pkl"
+        if metadata_file.exists():
+            self._last_refresh = self._load_refresh_state()
+
+    def _load_refresh_state(self) -> Optional[datetime]:
+        """Load last refresh time from metadata file."""
+        metadata_file = self.embedding_manager.index_path / "schema_metadata.pkl"
+        if not metadata_file.exists():
+            return None
+
+        try:
+            with open(metadata_file, "rb") as f:
+                metadata = pickle.load(f)
+                last_refresh_str = metadata.get("last_refresh")
+                if last_refresh_str:
+                    return datetime.fromisoformat(last_refresh_str)
+        except Exception as e:
+            logger.warning("Failed to load refresh state", error=str(e))
+        return None
+
+    def _save_refresh_state(self) -> None:
+        """Save refresh state to metadata file."""
+        if self._last_refresh is None:
+            return
+
+        metadata_file = self.embedding_manager.index_path / "schema_metadata.pkl"
+        try:
+            metadata = {}
+            if metadata_file.exists():
+                with open(metadata_file, "rb") as f:
+                    metadata = pickle.load(f)
+
+            metadata["last_refresh"] = self._last_refresh.isoformat()
+            metadata["refresh_interval_hours"] = self.refresh_interval.total_seconds() / 3600
+
+            with open(metadata_file, "wb") as f:
+                pickle.dump(metadata, f)
+        except Exception as e:
+            logger.warning("Failed to save refresh state", error=str(e))
 
     def _table_info_to_dict(self, table_info: TableInfo) -> Dict[str, Any]:
         """Convert TableInfo to dictionary."""

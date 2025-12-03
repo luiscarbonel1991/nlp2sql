@@ -10,9 +10,11 @@ from ..core.entities import DatabaseType, Query
 from ..exceptions import QueryGenerationException, ValidationException
 from ..ports.ai_provider import AIProviderPort, QueryContext
 from ..ports.cache import CachePort
+from ..ports.embedding_provider import EmbeddingProviderPort
 from ..ports.query_optimizer import QueryOptimizerPort
 from ..ports.schema_repository import SchemaRepositoryPort
 from ..schema.manager import SchemaManager
+from ..schema.example_store import ExampleStore
 
 logger = structlog.get_logger()
 
@@ -27,14 +29,24 @@ class QueryGenerationService:
         cache: Optional[CachePort] = None,
         query_optimizer: Optional[QueryOptimizerPort] = None,
         schema_filters: Optional[Dict[str, Any]] = None,
+        embedding_provider: Optional[EmbeddingProviderPort] = None,
+        example_store: Optional[ExampleStore] = None,
     ):
         self.ai_provider = ai_provider
         self.schema_repository = schema_repository
         self.cache = cache
         self.query_optimizer = query_optimizer
 
-        # Initialize schema manager
-        self.schema_manager = SchemaManager(repository=schema_repository, cache=cache, schema_filters=schema_filters)
+        # Initialize schema manager with embedding provider
+        self.schema_manager = SchemaManager(
+            repository=schema_repository,
+            cache=cache,
+            embedding_provider=embedding_provider,
+            schema_filters=schema_filters,
+        )
+        
+        # Initialize example store
+        self.example_store = example_store
 
         # Configuration
         self.max_examples = 5
@@ -262,9 +274,22 @@ class QueryGenerationService:
             raise QueryGenerationException(f"Query explanation failed: {e!s}")
 
     async def _find_relevant_examples(self, question: str, database_type: DatabaseType) -> List[Dict[str, str]]:
-        """Find relevant example queries."""
-        # This is a simplified implementation
-        # In production, you'd have a repository of example queries
+        """Find relevant example queries using vector similarity."""
+        # If example store is available, use it for dynamic retrieval
+        if self.example_store:
+            try:
+                examples = await self.example_store.search_similar(
+                    question=question,
+                    top_k=self.max_examples,
+                    database_type=database_type.value,
+                    min_score=0.3,
+                )
+                # Format for compatibility with existing code
+                return [{"question": ex["question"], "sql": ex["sql"]} for ex in examples]
+            except Exception as e:
+                logger.warning("Failed to retrieve examples from store, using fallback", error=str(e))
+        
+        # Fallback to hardcoded examples if store is not available
         examples = [
             {"question": "Show me all customers", "sql": "SELECT * FROM customers"},
             {"question": "Count total orders", "sql": "SELECT COUNT(*) FROM orders"},
@@ -274,8 +299,7 @@ class QueryGenerationService:
             },
         ]
 
-        # Filter by similarity (simplified)
-        # In production, you'd use embeddings for better similarity matching
+        # Simple keyword matching fallback
         relevant_examples = []
         question_lower = question.lower()
 
