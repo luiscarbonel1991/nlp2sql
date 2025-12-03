@@ -10,10 +10,13 @@ from typing import Any, Dict, List, Optional, Tuple
 import faiss
 import numpy as np
 import structlog
-from sentence_transformers import SentenceTransformer
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 
 from ..core.entities import DatabaseType
+from ..exceptions import SchemaException
 from ..ports.cache import CachePort
+from ..ports.embedding_provider import EmbeddingProviderPort
 
 logger = structlog.get_logger()
 
@@ -24,12 +27,41 @@ class SchemaEmbeddingManager:
     def __init__(
         self,
         database_url: str,
+        embedding_provider: Optional[EmbeddingProviderPort] = None,
         embedding_model: str = "all-MiniLM-L6-v2",
         cache: Optional[CachePort] = None,
         index_path: Optional[Path] = None,
     ):
-        self.model = SentenceTransformer(embedding_model)
-        self.embedding_dim = self.model.get_sentence_embedding_dimension()
+        """
+        Initialize schema embedding manager.
+
+        Args:
+            database_url: Database connection URL
+            embedding_provider: Optional embedding provider. If None, attempts to create local adapter.
+            embedding_model: Model name for local adapter (only used if embedding_provider is None).
+            cache: Optional cache port for caching results
+            index_path: Optional custom path for index storage
+
+        Raises:
+            ImportError: If no embedding provider and sentence-transformers is not installed
+            SchemaException: If dimension mismatch with existing index
+        """
+        if embedding_provider is None:
+            # Attempt to create local adapter for backward compatibility
+            try:
+                from ..adapters.local_embedding_adapter import LocalEmbeddingAdapter
+
+                self.embedding_provider = LocalEmbeddingAdapter(model_name=embedding_model)
+                logger.info("Using default local embedding adapter", model=embedding_model)
+            except ImportError as e:
+                raise ImportError(
+                    "No embedding provider configured and sentence-transformers is not installed. "
+                    "To use local embeddings, install with: pip install nlp2sql[embeddings-local] "
+                    "or provide an EmbeddingProviderPort instance."
+                ) from e
+        else:
+            self.embedding_provider = embedding_provider
+
         self.cache = cache
 
         # Create a unique directory for each database
@@ -51,11 +83,33 @@ class SchemaEmbeddingManager:
         self.schema_to_id = {}
         self._next_id = 0
 
+        # Hybrid Search (TF-IDF)
+        self.tfidf_vectorizer = None
+        self.tfidf_matrix = None
+        self.tfidf_texts = []
+
+        # Try to load dimension from metadata if index exists
+        index_file = self.index_path / "schema_index.faiss"
+        metadata_file = self.index_path / "schema_metadata.pkl"
+
+        if index_file.exists() and metadata_file.exists():
+            try:
+                with open(metadata_file, "rb") as f:
+                    metadata = pickle.load(f)
+                    self.embedding_dim = metadata.get("embedding_dimension")
+                    if self.embedding_dim is None:
+                        self.embedding_dim = self.embedding_provider.get_embedding_dimension()
+            except Exception as e:
+                logger.warning("Failed to load dimension from metadata, loading model", error=str(e))
+                self.embedding_dim = self.embedding_provider.get_embedding_dimension()
+        else:
+            self.embedding_dim = self.embedding_provider.get_embedding_dimension()
+
         # Initialize or load index
         self._initialize_index()
 
     def _initialize_index(self) -> None:
-        """Initialize or load FAISS index."""
+        """Initialize or load FAISS index with dimension validation."""
         index_file = self.index_path / "schema_index.faiss"
         metadata_file = self.index_path / "schema_metadata.pkl"
 
@@ -67,11 +121,56 @@ class SchemaEmbeddingManager:
                 self.id_to_schema = metadata["id_to_schema"]
                 self.schema_to_id = metadata["schema_to_id"]
                 self._next_id = metadata["next_id"]
-            logger.info("Loaded existing embedding index", elements=len(self.id_to_schema))
+                
+                # Load TF-IDF data if available
+                if "tfidf_vectorizer" in metadata:
+                    self.tfidf_vectorizer = metadata["tfidf_vectorizer"]
+                    self.tfidf_matrix = metadata["tfidf_matrix"]
+                    self.tfidf_texts = metadata.get("tfidf_texts", [])
+
+            # Check dimension mismatch
+            existing_dim = self.index.d
+            stored_provider = metadata.get("provider_type", "unknown")
+            stored_dim = metadata.get("embedding_dimension", existing_dim)
+
+            if existing_dim != self.embedding_dim:
+                logger.warning(
+                    "Embedding dimension mismatch detected",
+                    existing_dim=existing_dim,
+                    new_dim=self.embedding_dim,
+                    stored_provider=stored_provider,
+                    current_provider=self.embedding_provider.provider_type,
+                )
+                raise SchemaException(
+                    f"Embedding provider changed. Existing index dimensions ({existing_dim}) "
+                    f"don't match new provider ({self.embedding_dim}). "
+                    f"Please clear the index or migrate to the new provider. "
+                    f"Previous provider: {stored_provider}, Current provider: {self.embedding_provider.provider_type}"
+                )
+
+            # Warn if provider type changed but dimensions match (unlikely but possible)
+            if stored_provider != "unknown" and stored_provider != self.embedding_provider.provider_type:
+                logger.warning(
+                    "Embedding provider type changed but dimensions match",
+                    previous_provider=stored_provider,
+                    current_provider=self.embedding_provider.provider_type,
+                    dimension=self.embedding_dim,
+                )
+
+            logger.info(
+                "Loaded existing embedding index",
+                elements=len(self.id_to_schema),
+                dimension=self.embedding_dim,
+                provider=self.embedding_provider.provider_type,
+            )
         else:
             # Create new index
             self.index = faiss.IndexFlatIP(self.embedding_dim)  # Inner product for cosine similarity
-            logger.info("Created new embedding index")
+            logger.info(
+                "Created new embedding index",
+                dimension=self.embedding_dim,
+                provider=self.embedding_provider.provider_type,
+            )
 
     async def add_schema_elements(self, elements: List[Dict[str, Any]], database_type: DatabaseType) -> None:
         """Add schema elements to the embedding index."""
@@ -100,11 +199,14 @@ class SchemaEmbeddingManager:
                 self._next_id += 1
 
         if new_elements:
-            # Create embeddings
-            embeddings = self.model.encode(descriptions, normalize_embeddings=True, show_progress_bar=True)
+            # Create embeddings using provider
+            embeddings = await self.embedding_provider.encode(descriptions)
 
             # Add to FAISS index
             self.index.add(np.array(embeddings, dtype=np.float32))
+
+            # Update TF-IDF index
+            self._update_tfidf_index(descriptions)
 
             # Save index
             await self._save_index()
@@ -127,33 +229,73 @@ class SchemaEmbeddingManager:
             if cached_result:
                 return cached_result
 
-        # Create query embedding
-        query_embedding = self.model.encode([query], normalize_embeddings=True, show_progress_bar=False)
+        # Create query embedding using provider
+        query_embedding = await self.embedding_provider.encode([query])
 
-        # Search in FAISS
-        k = min(top_k * 2, self.index.ntotal)  # Search more to filter by database type
-        scores, indices = self.index.search(query_embedding.astype(np.float32), k)
+        # Search in FAISS (Dense Search)
+        # Get more candidates for re-ranking
+        k = min(top_k * 3, self.index.ntotal)
+        dense_scores, dense_indices = self.index.search(query_embedding.astype(np.float32), k)
 
-        # Filter and format results
-        results = []
-        for idx, score in zip(indices[0], scores[0]):
-            if idx < 0:  # FAISS returns -1 for not found
+        # Prepare results map for merging
+        # Map: index -> {element, dense_score, sparse_score}
+        candidates = {}
+
+        # Process Dense Results
+        for idx, score in zip(dense_indices[0], dense_scores[0]):
+            if idx < 0:
                 continue
+            candidates[idx] = {"score": float(score), "dense_score": float(score), "sparse_score": 0.0}
 
+        # Sparse Search (TF-IDF)
+        if self.tfidf_vectorizer and self.tfidf_matrix is not None:
+            try:
+                query_vec = self.tfidf_vectorizer.transform([query])
+                # Calculate cosine similarity between query and all docs
+                sparse_scores = cosine_similarity(query_vec, self.tfidf_matrix).flatten()
+                
+                # Get top sparse results
+                # We look at all docs because sparse search is fast
+                sparse_indices = sparse_scores.argsort()[::-1][:k]
+                
+                for idx in sparse_indices:
+                    score = float(sparse_scores[idx])
+                    if score > 0:
+                        if idx in candidates:
+                            candidates[idx]["sparse_score"] = score
+                        else:
+                            # If not in dense results, add it
+                            # Note: Dense score is 0 here, which is a penalty
+                            candidates[idx] = {"score": 0.0, "dense_score": 0.0, "sparse_score": score}
+            except Exception as e:
+                logger.warning("TF-IDF search failed, falling back to dense only", error=str(e))
+
+        # Combine Scores (Hybrid Reranking)
+        # Weight: 0.5 Dense + 0.5 Sparse
+        # Balanced weighting gives equal priority to semantic meaning and exact keyword matches
+        # This helps ensure tables with exact name matches (like "organization" for "count organizations")
+        # are properly ranked even when dense embeddings favor other tables
+        alpha = 0.5
+        final_results = []
+        
+        for idx, data in candidates.items():
             schema_info = self.id_to_schema[idx]
-
+            
             # Filter by database type if specified
             if database_type and schema_info["database_type"] != database_type.value:
                 continue
 
-            # Filter by minimum score
-            if score < min_score:
+            # Calculate hybrid score
+            hybrid_score = (data["dense_score"] * alpha) + (data["sparse_score"] * (1 - alpha))
+            
+            if hybrid_score < min_score:
                 continue
+                
+            final_results.append((schema_info["element"], hybrid_score))
 
-            results.append((schema_info["element"], float(score)))
-
-            if len(results) >= top_k:
-                break
+        # Sort by hybrid score
+        final_results.sort(key=lambda x: x[1], reverse=True)
+        results = final_results[:top_k]
 
         # Cache results
         if self.cache:
@@ -174,10 +316,10 @@ class SchemaEmbeddingManager:
                 embedding = self.index.reconstruct(idx)
                 embeddings[table_name] = embedding
             else:
-                # Create new embedding
+                # Create new embedding using provider
                 description = f"Table {table_name}"
-                embedding = self.model.encode([description], normalize_embeddings=True, show_progress_bar=False)[0]
-                embeddings[table_name] = embedding
+                embedding_array = await self.embedding_provider.encode([description])
+                embeddings[table_name] = embedding_array[0]
 
         return embeddings
 
@@ -268,15 +410,53 @@ class SchemaEmbeddingManager:
         # Save FAISS index
         faiss.write_index(self.index, str(index_file))
 
-        # Save metadata
+        # Load existing metadata to preserve fields managed by other components
+        existing_metadata = {}
+        if metadata_file.exists():
+            try:
+                with open(metadata_file, "rb") as f:
+                    existing_metadata = pickle.load(f)
+            except Exception:
+                pass
+
+        # Save metadata including provider information
         metadata = {
             "id_to_schema": self.id_to_schema,
             "schema_to_id": self.schema_to_id,
             "next_id": self._next_id,
             "saved_at": datetime.now().isoformat(),
+            "provider_type": self.embedding_provider.provider_type,
+            "embedding_dimension": self.embedding_dim,
+            "tfidf_vectorizer": self.tfidf_vectorizer,
+            "tfidf_matrix": self.tfidf_matrix,
+            "tfidf_texts": self.tfidf_texts,
         }
+
+        # Preserve refresh state fields managed by SchemaManager
+        if "last_refresh" in existing_metadata:
+            metadata["last_refresh"] = existing_metadata["last_refresh"]
+        if "refresh_interval_hours" in existing_metadata:
+            metadata["refresh_interval_hours"] = existing_metadata["refresh_interval_hours"]
+
         with open(metadata_file, "wb") as f:
             pickle.dump(metadata, f)
+
+    def _update_tfidf_index(self, new_texts: List[str]) -> None:
+        """Update TF-IDF index with new texts."""
+        # Append new texts
+        self.tfidf_texts.extend(new_texts)
+        
+        # Re-fit vectorizer on all texts
+        # Note: For very large schemas, this might be slow and need optimization
+        # (e.g., incremental fitting or batching), but for <100k elements it's fine.
+        if self.tfidf_texts:
+            self.tfidf_vectorizer = TfidfVectorizer(
+                analyzer="word",
+                ngram_range=(1, 2),  # Use unigrams and bigrams
+                min_df=1,            # Include terms that appear even once
+                stop_words="english"
+            )
+            self.tfidf_matrix = self.tfidf_vectorizer.fit_transform(self.tfidf_texts)
 
     async def clear_index(self) -> None:
         """Clear the embedding index."""
@@ -284,6 +464,11 @@ class SchemaEmbeddingManager:
         self.id_to_schema = {}
         self.schema_to_id = {}
         self._next_id = 0
+        
+        # Clear TF-IDF
+        self.tfidf_vectorizer = None
+        self.tfidf_matrix = None
+        self.tfidf_texts = []
 
         # Clear cache if available
         if self.cache:

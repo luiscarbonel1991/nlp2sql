@@ -6,10 +6,10 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import structlog
-from sentence_transformers import SentenceTransformer
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
+from ..ports.embedding_provider import EmbeddingProviderPort
 from ..ports.schema_strategy import SchemaChunk, SchemaContext, SchemaStrategyPort
 
 logger = structlog.get_logger()
@@ -29,8 +29,37 @@ class RelevanceScore:
 class SchemaAnalyzer(SchemaStrategyPort):
     """Analyzes and scores schema elements for relevance."""
 
-    def __init__(self, embedding_model: str = "all-MiniLM-L6-v2"):
-        self.embedding_model = SentenceTransformer(embedding_model)
+    def __init__(
+        self,
+        embedding_provider: Optional[EmbeddingProviderPort] = None,
+        embedding_model: str = "all-MiniLM-L6-v2",
+    ):
+        """
+        Initialize schema analyzer.
+
+        Args:
+            embedding_provider: Optional embedding provider. If None, attempts to create local adapter.
+            embedding_model: Model name for local adapter (only used if embedding_provider is None).
+
+        Raises:
+            ImportError: If no embedding provider and sentence-transformers is not installed
+        """
+        if embedding_provider is None:
+            # Attempt to create local adapter for backward compatibility
+            try:
+                from ..adapters.local_embedding_adapter import LocalEmbeddingAdapter
+
+                self.embedding_provider = LocalEmbeddingAdapter(model_name=embedding_model)
+                logger.info("Using default local embedding adapter", model=embedding_model)
+            except ImportError as e:
+                raise ImportError(
+                    "No embedding provider configured and sentence-transformers is not installed. "
+                    "To use local embeddings, install with: pip install nlp2sql[embeddings-local] "
+                    "or provide an EmbeddingProviderPort instance."
+                ) from e
+        else:
+            self.embedding_provider = embedding_provider
+
         self.tfidf_vectorizer = TfidfVectorizer(ngram_range=(1, 3), stop_words="english", max_features=10000)
         self._schema_embeddings = {}
         self._schema_descriptions = {}
@@ -77,8 +106,23 @@ class SchemaAnalyzer(SchemaStrategyPort):
         logger.info("Schema chunked", chunks=len(chunks), total_tables=len(tables))
         return chunks
 
-    async def score_relevance(self, query: str, schema_element: Dict[str, Any]) -> float:
-        """Score relevance of schema element to query."""
+    async def score_relevance(
+        self,
+        query: str,
+        schema_element: Dict[str, Any],
+        use_semantic: bool = True,
+    ) -> float:
+        """
+        Score relevance of schema element to query.
+
+        Args:
+            query: The search query
+            schema_element: Schema element to score
+            use_semantic: Whether to use semantic similarity via embeddings (default: True)
+
+        Returns:
+            Relevance score between 0 and 1
+        """
         element_name = schema_element.get("name", "")
         element_type = schema_element.get("type", "table")
 
@@ -86,44 +130,82 @@ class SchemaAnalyzer(SchemaStrategyPort):
         scores = []
         reasons = []
 
-        # 1. Exact match
-        if element_name.lower() in query.lower():
+        query_lower = query.lower()
+        element_name_lower = element_name.lower()
+
+        # 1. Exact match (fast) - check both exact substring and normalized forms
+        # Check exact substring match first
+        if element_name_lower in query_lower:
             scores.append(1.0)
             reasons.append("Exact name match in query")
+        else:
+            # Check normalized forms for singular/plural matching
+            normalized_element = self._normalize_word(element_name_lower)
+            normalized_query = self._normalize_word(query_lower)
+            
+            # Check if normalized element name is in normalized query
+            if normalized_element in normalized_query and len(normalized_element) >= 3:
+                scores.append(1.0)
+                reasons.append(f"Exact name match (normalized): {element_name_lower} -> {normalized_element}")
+            # Also check if normalized query contains the element (for cases like "organization" in "organizations")
+            elif normalized_element in query_lower or element_name_lower in normalized_query:
+                scores.append(1.0)
+                reasons.append(f"Exact name match (cross-normalized): {element_name_lower}")
 
-        # 2. Partial match
-        query_tokens = self._tokenize(query.lower())
-        element_tokens = self._tokenize(element_name.lower())
-
+        # 2. Partial match (fast) - with normalization for singular/plural
+        query_tokens = self._tokenize(query_lower)
+        element_tokens = self._tokenize(element_name_lower)
+        
+        # Normalize tokens for better matching (handles singular/plural)
+        normalized_query_tokens = {self._normalize_word(t) for t in query_tokens}
+        normalized_element_tokens = {self._normalize_word(t) for t in element_tokens}
+        
+        # Check both exact token match and normalized token match
         common_tokens = set(query_tokens) & set(element_tokens)
-        if common_tokens:
-            score = len(common_tokens) / max(len(query_tokens), len(element_tokens))
+        common_normalized_tokens = normalized_query_tokens & normalized_element_tokens
+        
+        if common_tokens or common_normalized_tokens:
+            # Use the better match (exact tokens are preferred, but normalized also counts)
+            match_count = max(len(common_tokens), len(common_normalized_tokens))
+            score = match_count / max(len(query_tokens), len(element_tokens))
             scores.append(score)
-            reasons.append(f"Partial token match: {common_tokens}")
+            if common_normalized_tokens and not common_tokens:
+                reasons.append(f"Partial token match (normalized): {common_normalized_tokens}")
+            else:
+                reasons.append(f"Partial token match: {common_tokens}")
 
-        # 3. Semantic similarity using embeddings
-        semantic_score = await self._calculate_semantic_similarity(query, element_name, schema_element)
-        if semantic_score > 0.5:
-            scores.append(semantic_score)
-            reasons.append(f"High semantic similarity: {semantic_score:.2f}")
+        # 3. Semantic similarity using embeddings (expensive - only when explicitly requested)
+        if use_semantic:
+            semantic_score = await self._calculate_semantic_similarity(query, element_name, schema_element)
+            if semantic_score > 0.5:
+                scores.append(semantic_score)
+                reasons.append(f"High semantic similarity: {semantic_score:.2f}")
 
-        # 4. Column-based relevance for tables
+        # 4. Column-based relevance for tables (optimized - no recursion)
         if element_type == "table" and "columns" in schema_element:
-            column_scores = []
-            for column in schema_element["columns"]:
-                col_score = await self.score_relevance(query, {"name": column.get("name", ""), "type": "column"})
-                column_scores.append(col_score)
+            column_matches = 0
+            columns_to_check = schema_element["columns"][:15]  # Limit to first 15 columns
 
-            if column_scores:
-                avg_column_score = np.mean(column_scores)
-                if avg_column_score > 0.3:
-                    scores.append(avg_column_score * 0.8)  # Weight columns slightly less
-                    reasons.append("Relevant columns found")
+            for column in columns_to_check:
+                col_name = column.get("name", "").lower()
+                # Fast token matching without recursion
+                if col_name in query_lower:
+                    column_matches += 2  # Exact match worth more
+                elif any(token in col_name for token in query_tokens):
+                    column_matches += 1
+
+            if column_matches > 0:
+                column_score = min(column_matches / len(columns_to_check), 1.0) * 0.8
+                if column_score > 0.2:
+                    scores.append(column_score)
+                    reasons.append(f"Relevant columns found ({column_matches} matches)")
 
         # Combine scores
         final_score = max(scores) if scores else 0.0
 
-        logger.debug("Relevance scored", element=element_name, score=final_score, reasons=reasons)
+        # Only log significant scores to reduce overhead
+        if final_score > 0.3:
+            logger.debug("Relevance scored", element=element_name, score=final_score, reasons=reasons)
 
         return final_score
 
@@ -173,7 +255,7 @@ class SchemaAnalyzer(SchemaStrategyPort):
 
     async def create_embeddings(self, texts: List[str]) -> np.ndarray:
         """Create embeddings for schema elements."""
-        return self.embedding_model.encode(texts, show_progress_bar=False)
+        return await self.embedding_provider.encode(texts)
 
     async def find_similar_schemas(self, query_embedding: np.ndarray, top_k: int = 5) -> List[Tuple[str, float]]:
         """Find similar schema elements using embeddings."""
@@ -243,6 +325,32 @@ class SchemaAnalyzer(SchemaStrategyPort):
         text = str(element)
         # Rough estimation: ~4 characters per token
         return len(text) // 4
+
+    def _normalize_word(self, word: str) -> str:
+        """
+        Normalize word by removing common plural endings to match singular/plural forms.
+        
+        Examples:
+            "organizations" -> "organization"
+            "companies" -> "compani" -> "company" (handled by common patterns)
+            "categories" -> "categori" -> "category"
+        """
+        word_lower = word.lower().strip()
+        
+        # Common plural patterns (order matters - check longer patterns first)
+        plural_patterns = [
+            ("ies", "y"),      # categories -> category
+            ("es", ""),        # boxes -> box, organizations -> organization
+            ("s", ""),         # organizations -> organization, users -> user
+        ]
+        
+        for plural_end, singular_end in plural_patterns:
+            if word_lower.endswith(plural_end) and len(word_lower) > len(plural_end) + 2:
+                # Only remove plural if word is long enough (avoid removing 's' from 'is', 'as', etc.)
+                normalized = word_lower[:-len(plural_end)] + singular_end
+                return normalized
+        
+        return word_lower
 
     def _tokenize(self, text: str) -> List[str]:
         """Tokenize text for matching."""
