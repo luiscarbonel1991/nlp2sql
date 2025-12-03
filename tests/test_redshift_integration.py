@@ -59,8 +59,10 @@ class TestRedshiftLocalStackIntegration:
     """Integration tests with LocalStack Redshift."""
 
     # LocalStack Redshift connection details
-    REDSHIFT_URL = "redshift://testuser:testpass123@localhost:5439/testdb"
-    POSTGRES_COMPAT_URL = "postgresql://testuser:testpass123@localhost:5439/testdb"
+    # Use REDSHIFT_PORT environment variable or default to 5439
+    REDSHIFT_PORT = os.getenv("REDSHIFT_PORT", "5439")
+    REDSHIFT_URL = f"redshift://testuser:testpass123@localhost:{REDSHIFT_PORT}/testdb"
+    POSTGRES_COMPAT_URL = f"postgresql://testuser:testpass123@localhost:{REDSHIFT_PORT}/testdb"
 
     @pytest.fixture(scope="class")
     def redshift_repo(self):
@@ -179,7 +181,7 @@ class TestRedshiftLocalStackIntegration:
 
             # Test initialization (will fail on AI provider but DB should work)
             try:
-                await service.initialize()
+                await service.initialize(DatabaseType.REDSHIFT)
             except Exception as e:
                 # Expected to fail on AI provider with invalid key
                 if 'RedshiftRepository' in str(e) or 'database' in str(e).lower():
