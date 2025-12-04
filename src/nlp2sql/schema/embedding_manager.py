@@ -37,30 +37,23 @@ class SchemaEmbeddingManager:
 
         Args:
             database_url: Database connection URL
-            embedding_provider: Optional embedding provider. If None, attempts to create local adapter.
-            embedding_model: Model name for local adapter (only used if embedding_provider is None).
+            embedding_provider: Optional embedding provider. If None, embedding-based search is disabled.
+            embedding_model: Model name for local adapter (unused, kept for API compatibility).
             cache: Optional cache port for caching results
             index_path: Optional custom path for index storage
 
-        Raises:
-            ImportError: If no embedding provider and sentence-transformers is not installed
-            SchemaException: If dimension mismatch with existing index
+        Note:
+            If embedding_provider is None, the manager will work but search_similar() will
+            always return empty results. This allows the system to function without embeddings
+            (using text-based matching only in SchemaAnalyzer).
         """
-        if embedding_provider is None:
-            # Attempt to create local adapter for backward compatibility
-            try:
-                from ..adapters.local_embedding_adapter import LocalEmbeddingAdapter
+        self.embedding_provider = embedding_provider
 
-                self.embedding_provider = LocalEmbeddingAdapter(model_name=embedding_model)
-                logger.info("Using default local embedding adapter", model=embedding_model)
-            except ImportError as e:
-                raise ImportError(
-                    "No embedding provider configured and sentence-transformers is not installed. "
-                    "To use local embeddings, install with: pip install nlp2sql[embeddings-local] "
-                    "or provide an EmbeddingProviderPort instance."
-                ) from e
-        else:
-            self.embedding_provider = embedding_provider
+        if embedding_provider is None:
+            logger.info(
+                "SchemaEmbeddingManager initialized without embedding provider. "
+                "Embedding-based search will be disabled."
+            )
 
         self.cache = cache
 
@@ -88,6 +81,11 @@ class SchemaEmbeddingManager:
         self.tfidf_matrix = None
         self.tfidf_texts = []
 
+        # Skip index initialization if no embedding provider
+        if embedding_provider is None:
+            self.embedding_dim = None
+            return
+
         # Try to load dimension from metadata if index exists
         index_file = self.index_path / "schema_index.faiss"
         metadata_file = self.index_path / "schema_metadata.pkl"
@@ -96,9 +94,11 @@ class SchemaEmbeddingManager:
             try:
                 with open(metadata_file, "rb") as f:
                     metadata = pickle.load(f)
-                    self.embedding_dim = metadata.get("embedding_dimension")
-                    if self.embedding_dim is None:
-                        self.embedding_dim = self.embedding_provider.get_embedding_dimension()
+                    provider_dim = self.embedding_provider.get_embedding_dimension()
+                    
+                    # Use provider dimension, not stored dimension
+                    # This ensures we detect mismatches correctly
+                    self.embedding_dim = provider_dim
             except Exception as e:
                 logger.warning("Failed to load dimension from metadata, loading model", error=str(e))
                 self.embedding_dim = self.embedding_provider.get_embedding_dimension()
@@ -132,21 +132,26 @@ class SchemaEmbeddingManager:
             existing_dim = self.index.d
             stored_provider = metadata.get("provider_type", "unknown")
             stored_dim = metadata.get("embedding_dimension", existing_dim)
+            provider_dimension = self.embedding_provider.get_embedding_dimension()
 
-            if existing_dim != self.embedding_dim:
-                logger.warning(
+            # Compare with current provider dimension, not stored dimension
+            if existing_dim != provider_dimension:
+                logger.error(
                     "Embedding dimension mismatch detected",
                     existing_dim=existing_dim,
-                    new_dim=self.embedding_dim,
+                    provider_dimension=provider_dimension,
                     stored_provider=stored_provider,
                     current_provider=self.embedding_provider.provider_type,
                 )
-                raise SchemaException(
+                error_msg = (
                     f"Embedding provider changed. Existing index dimensions ({existing_dim}) "
-                    f"don't match new provider ({self.embedding_dim}). "
+                    f"don't match new provider ({provider_dimension}). "
                     f"Please clear the index or migrate to the new provider. "
-                    f"Previous provider: {stored_provider}, Current provider: {self.embedding_provider.provider_type}"
+                    f"Previous provider: {stored_provider}, "
+                    f"Current provider: {self.embedding_provider.provider_type}. "
+                    f"Run: nlp2sql cache clear --embeddings"
                 )
+                raise SchemaException(error_msg)
 
             # Warn if provider type changed but dimensions match (unlikely but possible)
             if stored_provider != "unknown" and stored_provider != self.embedding_provider.provider_type:
@@ -174,6 +179,11 @@ class SchemaEmbeddingManager:
 
     async def add_schema_elements(self, elements: List[Dict[str, Any]], database_type: DatabaseType) -> None:
         """Add schema elements to the embedding index."""
+        # Skip if no embedding provider
+        if self.embedding_provider is None or self.index is None:
+            logger.debug("Skipping schema element indexing - no embedding provider")
+            return
+
         new_elements = []
         descriptions = []
 
@@ -219,6 +229,10 @@ class SchemaEmbeddingManager:
         self, query: str, top_k: int = 10, database_type: Optional[DatabaseType] = None, min_score: float = 0.3
     ) -> List[Tuple[Dict[str, Any], float]]:
         """Search for similar schema elements."""
+        # Return empty if no embedding provider or no index
+        if self.embedding_provider is None or self.index is None:
+            return []
+
         if self.index.ntotal == 0:
             return []
 
@@ -305,6 +319,10 @@ class SchemaEmbeddingManager:
 
     async def get_table_embeddings(self, table_names: List[str], database_type: DatabaseType) -> Dict[str, np.ndarray]:
         """Get embeddings for specific tables."""
+        # Return empty if no embedding provider
+        if self.embedding_provider is None or self.index is None:
+            return {}
+
         embeddings = {}
 
         for table_name in table_names:

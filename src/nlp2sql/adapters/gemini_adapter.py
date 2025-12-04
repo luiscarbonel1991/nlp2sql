@@ -87,18 +87,24 @@ class GeminiAdapter(AIProviderPort):
             output_tokens = self.get_token_count(response.text)
 
             # Create QueryResponse
+            metadata = {
+                "model": self.model_name,
+                "prompt_tokens": prompt_tokens,
+                "output_tokens": output_tokens,
+                "finish_reason": getattr(response.candidates[0], "finish_reason", None),
+            }
+            
+            # Include raw response if available
+            if "_raw_response" in result:
+                metadata["raw_response"] = result.pop("_raw_response")
+            
             return QueryResponse(
                 sql=result["sql"],
                 explanation=result.get("explanation", ""),
                 confidence=result.get("confidence", 0.8),
                 tokens_used=prompt_tokens + output_tokens,
                 provider=self.provider_type.value,
-                metadata={
-                    "model": self.model_name,
-                    "prompt_tokens": prompt_tokens,
-                    "output_tokens": output_tokens,
-                    "finish_reason": getattr(response.candidates[0], "finish_reason", None),
-                },
+                metadata=metadata,
             )
 
         except Exception as e:
@@ -176,7 +182,8 @@ Ensure the JSON is properly formatted with no syntax errors. Escape any quotes i
             if not response.candidates:
                 raise ProviderException("No response candidates generated")
 
-            content = response.text.strip()
+            raw_content = response.text.strip()
+            content = raw_content
 
             # Log the raw response for debugging
             logger.debug("Raw Gemini response", content=content)
@@ -196,6 +203,9 @@ Ensure the JSON is properly formatted with no syntax errors. Escape any quotes i
             # Set defaults
             result.setdefault("explanation", "")
             result.setdefault("confidence", 0.8)
+            
+            # Store raw response for debugging/display
+            result["_raw_response"] = raw_content
 
             return result
 

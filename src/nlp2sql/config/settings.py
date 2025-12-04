@@ -29,7 +29,7 @@ class Settings(BaseSettings):
 
     # General settings
     app_name: str = "nlp2sql"
-    version: str = "0.2.0rc2"
+    version: str = "0.2.0rc3"
     debug: bool = Field(default=False, validation_alias="NLP2SQL_DEBUG")
     log_level: LogLevel = Field(default=LogLevel.INFO, validation_alias="NLP2SQL_LOG_LEVEL")
 
@@ -66,7 +66,9 @@ class Settings(BaseSettings):
     retry_delay_seconds: float = Field(default=1.0, validation_alias="NLP2SQL_RETRY_DELAY")
 
     # Embedding settings
-    embedding_provider: str = Field(default="local", validation_alias="NLP2SQL_EMBEDDING_PROVIDER")
+    # Note: embedding_provider is None by default because sentence-transformers is optional.
+    # Set to "local" (requires nlp2sql[embeddings-local]) or "openai" to enable embeddings.
+    embedding_provider: Optional[str] = Field(default=None, validation_alias="NLP2SQL_EMBEDDING_PROVIDER")
     embedding_model: str = Field(default="all-MiniLM-L6-v2", validation_alias="NLP2SQL_EMBEDDING_MODEL")
     openai_embedding_model: str = Field(default="text-embedding-3-small", validation_alias="NLP2SQL_OPENAI_EMBEDDING_MODEL")
     embedding_cache_enabled: bool = Field(default=True, validation_alias="NLP2SQL_EMBEDDING_CACHE")

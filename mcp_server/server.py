@@ -112,14 +112,22 @@ async def nlp_to_sql_with_database_url(
         embedding_provider_type: Embedding provider type ('local' or 'openai', default: 'local')
 
     Returns:
-        JSON string with SQL query, confidence, explanation, and provider
+        JSON string with SQL query, confidence, explanation, provider, and metadata
 
     Example:
         {
             "sql": "SELECT COUNT(*) FROM users",
             "confidence": 0.95,
             "explanation": "Counts all users in the database",
-            "provider": "openai"
+            "provider": "openai",
+            "database_type": "postgres",
+            "metadata": {
+                "model": "gpt-4o-mini",
+                "finish_reason": "stop",
+                "prompt_tokens": 1150,
+                "completion_tokens": 93,
+                "raw_response": "{\"sql\": \"SELECT COUNT(*) FROM users\", \"explanation\": \"...\", \"confidence\": 0.95}"
+            }
         }
     """
     try:
@@ -142,6 +150,7 @@ async def nlp_to_sql_with_database_url(
             "explanation": result.get("explanation", ""),
             "provider": result.get("provider", ai_provider),
             "database_type": database_type.value,
+            "metadata": result.get("metadata", {}),
         }
 
         return json.dumps(response, indent=2)
@@ -302,7 +311,7 @@ async def nlp_to_sql(
         embedding_provider_type: Embedding provider type ('local' or 'openai', default: 'local')
 
     Returns:
-        JSON string with SQL query, confidence, explanation, and provider
+        JSON string with SQL query, confidence, explanation, provider, and metadata
 
     Example:
         {
@@ -310,7 +319,15 @@ async def nlp_to_sql(
             "confidence": 0.92,
             "explanation": "Counts active users",
             "provider": "openai",
-            "database_alias": "demo"
+            "database_alias": "demo",
+            "database_type": "postgres",
+            "metadata": {
+                "model": "gpt-4o-mini",
+                "finish_reason": "stop",
+                "prompt_tokens": 1150,
+                "completion_tokens": 93,
+                "raw_response": "{\"sql\": \"SELECT COUNT(*) FROM users WHERE active = true\", \"explanation\": \"...\", \"confidence\": 0.92}"
+            }
         }
     """
     try:
@@ -336,6 +353,7 @@ async def nlp_to_sql(
             "provider": result.get("provider", ai_provider),
             "database_alias": database_alias,
             "database_type": database_type.value,
+            "metadata": result.get("metadata", {}),
         }
 
         return json.dumps(response, indent=2)
