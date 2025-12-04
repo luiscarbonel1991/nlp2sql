@@ -38,27 +38,22 @@ class SchemaAnalyzer(SchemaStrategyPort):
         Initialize schema analyzer.
 
         Args:
-            embedding_provider: Optional embedding provider. If None, attempts to create local adapter.
-            embedding_model: Model name for local adapter (only used if embedding_provider is None).
+            embedding_provider: Optional embedding provider. If None, semantic similarity
+                will be disabled but text-based matching will still work.
+            embedding_model: Unused, kept for API compatibility.
 
-        Raises:
-            ImportError: If no embedding provider and sentence-transformers is not installed
+        Note:
+            The analyzer works without an embedding provider, but semantic similarity
+            scoring will be disabled. For best results, provide an embedding provider.
         """
-        if embedding_provider is None:
-            # Attempt to create local adapter for backward compatibility
-            try:
-                from ..adapters.local_embedding_adapter import LocalEmbeddingAdapter
+        self.embedding_provider = embedding_provider
 
-                self.embedding_provider = LocalEmbeddingAdapter(model_name=embedding_model)
-                logger.info("Using default local embedding adapter", model=embedding_model)
-            except ImportError as e:
-                raise ImportError(
-                    "No embedding provider configured and sentence-transformers is not installed. "
-                    "To use local embeddings, install with: pip install nlp2sql[embeddings-local] "
-                    "or provide an EmbeddingProviderPort instance."
-                ) from e
-        else:
-            self.embedding_provider = embedding_provider
+        if embedding_provider is None:
+            logger.info(
+                "SchemaAnalyzer initialized without embedding provider. "
+                "Semantic similarity scoring will be disabled. "
+                "Text-based matching (exact, partial, token) will still work."
+            )
 
         self.tfidf_vectorizer = TfidfVectorizer(ngram_range=(1, 3), stop_words="english", max_features=10000)
         self._schema_embeddings = {}
@@ -255,6 +250,9 @@ class SchemaAnalyzer(SchemaStrategyPort):
 
     async def create_embeddings(self, texts: List[str]) -> np.ndarray:
         """Create embeddings for schema elements."""
+        if self.embedding_provider is None:
+            # Return empty array if no provider
+            return np.array([])
         return await self.embedding_provider.encode(texts)
 
     async def find_similar_schemas(self, query_embedding: np.ndarray, top_k: int = 5) -> List[Tuple[str, float]]:
@@ -370,6 +368,10 @@ class SchemaAnalyzer(SchemaStrategyPort):
         self, query: str, element_name: str, schema_element: Dict[str, Any]
     ) -> float:
         """Calculate semantic similarity using embeddings."""
+        # Return 0 if no embedding provider
+        if self.embedding_provider is None:
+            return 0.0
+
         # Create descriptive text for element
         element_desc = f"{element_name}"
         if "description" in schema_element:
@@ -381,6 +383,10 @@ class SchemaAnalyzer(SchemaStrategyPort):
         # Get embeddings
         query_embedding = await self.create_embeddings([query])
         element_embedding = await self.create_embeddings([element_desc])
+
+        # Check if embeddings are valid
+        if query_embedding.size == 0 or element_embedding.size == 0:
+            return 0.0
 
         # Calculate similarity
         similarity = cosine_similarity(query_embedding, element_embedding)[0][0]

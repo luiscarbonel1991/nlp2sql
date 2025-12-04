@@ -95,4 +95,3 @@ class OpenAIEmbeddingAdapter(EmbeddingProviderPort):
     def provider_type(self) -> str:
         """Get the provider type identifier."""
         return "openai"
-

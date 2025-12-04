@@ -82,17 +82,23 @@ class AnthropicAdapter(AIProviderPort):
             result = self._parse_response(response)
 
             # Create QueryResponse
+            metadata = {
+                "model": self.model,
+                "input_tokens": response.usage.input_tokens,
+                "output_tokens": response.usage.output_tokens,
+            }
+            
+            # Include raw response if available
+            if "_raw_response" in result:
+                metadata["raw_response"] = result.pop("_raw_response")
+            
             return QueryResponse(
                 sql=result["sql"],
                 explanation=result.get("explanation", ""),
                 confidence=result.get("confidence", 0.8),
                 tokens_used=response.usage.input_tokens + response.usage.output_tokens,
                 provider=self.provider_type.value,
-                metadata={
-                    "model": self.model,
-                    "input_tokens": response.usage.input_tokens,
-                    "output_tokens": response.usage.output_tokens,
-                },
+                metadata=metadata,
             )
 
         except Exception as e:
@@ -160,7 +166,8 @@ Ensure the JSON is properly formatted with no syntax errors. Escape any quotes i
     def _parse_response(self, response) -> Dict[str, Any]:
         """Parse Anthropic response."""
         try:
-            content = response.content[0].text.strip()
+            raw_content = response.content[0].text.strip()
+            content = raw_content
 
             # Log the raw response for debugging
             logger.debug("Raw Anthropic response", content=content)
@@ -188,6 +195,9 @@ Ensure the JSON is properly formatted with no syntax errors. Escape any quotes i
             # Set defaults
             result.setdefault("explanation", "")
             result.setdefault("confidence", 0.8)
+            
+            # Store raw response for debugging/display
+            result["_raw_response"] = raw_content
 
             return result
 

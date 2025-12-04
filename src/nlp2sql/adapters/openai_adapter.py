@@ -67,12 +67,13 @@ class OpenAIAdapter(AIProviderPort):
 
             # Build prompt
             prompt = self._build_prompt(context)
+            system_prompt = self._get_system_prompt(context.database_type)
 
             # Make API call
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=[
-                    {"role": "system", "content": self._get_system_prompt(context.database_type)},
+                    {"role": "system", "content": system_prompt},
                     {"role": "user", "content": prompt},
                 ],
                 max_tokens=context.max_tokens,
@@ -84,23 +85,33 @@ class OpenAIAdapter(AIProviderPort):
             result = self._parse_response(response)
 
             # Create QueryResponse
+            metadata = {
+                "model": self.model,
+                "finish_reason": response.choices[0].finish_reason,
+                "prompt_tokens": response.usage.prompt_tokens,
+                "completion_tokens": response.usage.completion_tokens,
+            }
+            
+            # Include raw response if available
+            if "_raw_response" in result:
+                metadata["raw_response"] = result.pop("_raw_response")
+            
             return QueryResponse(
                 sql=result["sql"],
                 explanation=result.get("explanation", ""),
                 confidence=result.get("confidence", 0.8),
                 tokens_used=response.usage.total_tokens,
                 provider=self.provider_type.value,
-                metadata={
-                    "model": self.model,
-                    "finish_reason": response.choices[0].finish_reason,
-                    "prompt_tokens": response.usage.prompt_tokens,
-                    "completion_tokens": response.usage.completion_tokens,
-                },
+                metadata=metadata,
             )
 
         except Exception as e:
-            logger.error("OpenAI query generation failed", error=str(e))
-            raise ProviderException(f"OpenAI query generation failed: {e!s}")
+            logger.error(
+                "OpenAI query generation failed",
+                error=str(e),
+                error_type=type(e).__name__,
+            )
+            raise ProviderException(f"OpenAI query generation failed: {e!s}") from e
 
     async def validate_query(self, sql: str, schema_context: str) -> Dict[str, Any]:
         """Validate generated SQL query."""
@@ -208,7 +219,8 @@ Ensure the JSON is properly formatted with no syntax errors. Escape any quotes i
     def _parse_response(self, response) -> Dict[str, Any]:
         """Parse OpenAI response."""
         try:
-            content = response.choices[0].message.content.strip()
+            raw_content = response.choices[0].message.content.strip()
+            content = raw_content
 
             # Log the raw response for debugging
             logger.debug("Raw OpenAI response", content=content)
@@ -228,6 +240,9 @@ Ensure the JSON is properly formatted with no syntax errors. Escape any quotes i
             # Set defaults
             result.setdefault("explanation", "")
             result.setdefault("confidence", 0.8)
+            
+            # Store raw response for debugging/display
+            result["_raw_response"] = raw_content
 
             return result
 

@@ -66,7 +66,9 @@ class Settings(BaseSettings):
     retry_delay_seconds: float = Field(default=1.0, validation_alias="NLP2SQL_RETRY_DELAY")
 
     # Embedding settings
-    embedding_provider: str = Field(default="local", validation_alias="NLP2SQL_EMBEDDING_PROVIDER")
+    # Note: embedding_provider is None by default because sentence-transformers is optional.
+    # Set to "local" (requires nlp2sql[embeddings-local]) or "openai" to enable embeddings.
+    embedding_provider: Optional[str] = Field(default=None, validation_alias="NLP2SQL_EMBEDDING_PROVIDER")
     embedding_model: str = Field(default="all-MiniLM-L6-v2", validation_alias="NLP2SQL_EMBEDDING_MODEL")
     openai_embedding_model: str = Field(default="text-embedding-3-small", validation_alias="NLP2SQL_OPENAI_EMBEDDING_MODEL")
     embedding_cache_enabled: bool = Field(default=True, validation_alias="NLP2SQL_EMBEDDING_CACHE")

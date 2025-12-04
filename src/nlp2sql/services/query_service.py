@@ -160,8 +160,13 @@ class QueryGenerationService:
             return result
 
         except Exception as e:
-            logger.error("SQL generation failed", question=question[:50], error=str(e))
-            raise QueryGenerationException(f"SQL generation failed: {e!s}")
+            logger.error(
+                "SQL generation failed",
+                question=question[:50],
+                error=str(e),
+                error_type=type(e).__name__,
+            )
+            raise QueryGenerationException(f"SQL generation failed: {e!s}") from e
 
     async def validate_sql(self, sql: str, database_type: DatabaseType) -> Dict[str, Any]:
         """Validate SQL query."""

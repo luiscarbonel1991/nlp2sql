@@ -49,7 +49,7 @@ __all__ = [
 
 
 def create_embedding_provider(
-    provider: str = "local",
+    provider: Optional[str] = None,
     model: Optional[str] = None,
     api_key: Optional[str] = None,
 ) -> EmbeddingProviderPort:
@@ -57,7 +57,7 @@ def create_embedding_provider(
     Create an embedding provider instance.
 
     Args:
-        provider: Embedding provider type ('local', 'openai')
+        provider: Embedding provider type ('local', 'openai'). Required.
         model: Model name (for local provider, default from settings)
         api_key: API key (for OpenAI provider, default from settings)
 
@@ -65,9 +65,23 @@ def create_embedding_provider(
         EmbeddingProviderPort instance
 
     Raises:
-        ValueError: If provider is not supported
+        ValueError: If provider is None or not supported
         ImportError: If required dependencies are not installed
+
+    Example:
+        # Using local embeddings (requires sentence-transformers)
+        provider = create_embedding_provider(provider="local")
+
+        # Using OpenAI embeddings
+        provider = create_embedding_provider(provider="openai", api_key="sk-...")
     """
+    if provider is None:
+        raise ValueError(
+            "Embedding provider must be explicitly specified. "
+            "Available options: 'local' (requires pip install nlp2sql[embeddings-local]) "
+            "or 'openai' (requires OPENAI_API_KEY)"
+        )
+
     if provider == "local":
         from .adapters.local_embedding_adapter import LocalEmbeddingAdapter
 
@@ -108,11 +122,19 @@ def create_query_service(
         database_type: Type of database
         schema_filters: Optional filters to limit schema scope
         embedding_provider: Optional embedding provider instance
-        embedding_provider_type: Optional embedding provider type ('local', 'openai') to auto-create
+        embedding_provider_type: Optional embedding provider type ('local', 'openai') to auto-create.
+            If None (default), no embedding provider is created (embeddings are optional).
         schema_name: Database schema name (default: 'public')
 
     Returns:
         Configured QueryGenerationService instance
+
+    Note:
+        Embedding providers are optional. The service works without them but may have
+        reduced accuracy for table selection. To enable embeddings, either:
+        - Pass embedding_provider_type='local' (requires pip install nlp2sql[embeddings-local])
+        - Pass embedding_provider_type='openai' (uses OpenAI embeddings API)
+        - Pass a custom embedding_provider instance
     """
     from .adapters.openai_adapter import OpenAIAdapter
     from .adapters.postgres_repository import PostgreSQLRepository
@@ -143,13 +165,31 @@ def create_query_service(
         available_providers = ["openai", "anthropic", "gemini"]
         raise NotImplementedError(f"AI provider '{ai_provider}' not supported. Available: {available_providers}")
 
-    # Create embedding provider if not provided
+    # Create embedding provider
+    # If embedding_provider_type is explicitly set, create that provider (raises if deps missing)
+    # If embedding_provider_type is None, try to create local provider (graceful fallback if deps missing)
     if embedding_provider is None:
-        provider_type = embedding_provider_type or "local"
-        embedding_provider = create_embedding_provider(
-            provider=provider_type,
-            api_key=api_key if provider_type == "openai" else None,
-        )
+        if embedding_provider_type is not None:
+            # Explicit provider requested - raise error if dependencies missing
+            embedding_provider = create_embedding_provider(
+                provider=embedding_provider_type,
+                api_key=api_key if embedding_provider_type == "openai" else None,
+            )
+        else:
+            # No explicit provider - try local silently, fallback to None if deps missing
+            try:
+                from .adapters.local_embedding_adapter import LocalEmbeddingAdapter
+                embedding_provider = LocalEmbeddingAdapter()
+            except ImportError:
+                # sentence-transformers not installed - continue without embeddings
+                import structlog
+                _logger = structlog.get_logger()
+                _logger.info(
+                    "Local embedding provider not available (sentence-transformers not installed). "
+                    "Table matching will use text-based methods only. For better accuracy, install with: "
+                    "pip install nlp2sql[embeddings-local]"
+                )
+                embedding_provider = None
 
     # Create service
     service = QueryGenerationService(
@@ -237,20 +277,27 @@ async def generate_sql_from_db(
         database_type: Type of database (default: POSTGRES)
         schema_filters: Optional filters to limit schema scope
         embedding_provider: Optional embedding provider instance for schema search.
-            If None, defaults to local embeddings if available.
         embedding_provider_type: Optional embedding provider type ('local', 'openai') to auto-create.
-            Only used if embedding_provider is None.
+            If None (default), no embedding provider is used (embeddings are optional).
         **kwargs: Additional arguments passed to generate_sql()
 
     Returns:
         Dictionary with 'sql', 'confidence', 'explanation', etc.
 
     Example:
-        # Basic usage (uses default local embeddings if available)
+        # Basic usage (without embeddings - works but may be less accurate)
         result = await generate_sql_from_db(
             "postgresql://localhost/mydb",
             "Show me all active users",
             api_key="your-api-key"
+        )
+
+        # Using local embeddings (requires pip install nlp2sql[embeddings-local])
+        result = await generate_sql_from_db(
+            "postgresql://localhost/mydb",
+            "Show me all active users",
+            api_key="your-api-key",
+            embedding_provider_type="local"
         )
 
         # Using OpenAI embeddings
