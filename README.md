@@ -44,7 +44,7 @@ uv add nlp2sql
 pip install nlp2sql
 
 # Release candidate with latest features
-pip install nlp2sql==0.2.0rc3
+pip install nlp2sql==0.2.0rc4
 
 # With specific AI providers
 pip install nlp2sql[anthropic,gemini]  # Multiple providers
