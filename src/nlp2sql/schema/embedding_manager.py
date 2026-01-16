@@ -230,8 +230,11 @@ class SchemaEmbeddingManager:
             logger.debug("Skipping schema element indexing - no embedding provider")
             return
 
+        # Phase 1: Collect elements without storing mappings yet
+        # This prevents orphan mappings if embedding validation fails
         new_elements = []
         descriptions = []
+        element_keys = []  # Track keys for later mapping storage
 
         for element in elements:
             # Create unique key
@@ -253,68 +256,56 @@ class SchemaEmbeddingManager:
 
                 descriptions.append(description)
                 new_elements.append(element)
+                element_keys.append(element_key)  # Store key for later
 
-                # Store mapping
-                self.id_to_schema[self._next_id] = {
-                    "element": element,
-                    "database_type": database_type.value,
-                    "key": element_key,
-                    "description": description,
-                    "indexed_at": datetime.now().isoformat(),
-                }
-                self.schema_to_id[element_key] = self._next_id
-                self._next_id += 1
+        if not new_elements or not descriptions:
+            return
 
-        if new_elements and descriptions:
-            # Skip if no embedding provider configured
-            if self.embedding_provider is None:
-                logger.debug(
-                    "Skipping embedding generation - no provider configured",
-                    elements_count=len(new_elements),
-                )
-                return
+        # Phase 2: Generate embeddings and validate BEFORE storing any mappings
+        embeddings = await self.embedding_provider.encode(descriptions)
 
-            # Validate that we have valid descriptions before encoding
-            if len(descriptions) != len(new_elements):
-                logger.error(
-                    "Mismatch between descriptions and elements",
-                    descriptions_count=len(descriptions),
-                    elements_count=len(new_elements),
-                )
-                return
-
-            # Create embeddings using provider
-            embeddings = await self.embedding_provider.encode(descriptions)
-
-            # Validate embeddings before adding to index
-            if embeddings.size == 0:
-                logger.warning(
-                    "No embeddings generated, skipping index update",
-                    elements_count=len(new_elements),
-                    descriptions_count=len(descriptions),
-                )
-                return
-
-            if len(embeddings) != len(new_elements):
-                logger.error(
-                    "Mismatch between embeddings and elements",
-                    embeddings_count=len(embeddings),
-                    elements_count=len(new_elements),
-                )
-                return
-
-            # Add to FAISS index
-            self.index.add(np.array(embeddings, dtype=np.float32))
-
-            # Update TF-IDF index
-            self._update_tfidf_index(descriptions)
-
-            # Save index
-            await self._save_index()
-
-            logger.info(
-                "Added schema elements to index", new_elements=len(new_elements), total_elements=len(self.id_to_schema)
+        # Validate embeddings - if validation fails, no mappings were stored (no orphans)
+        if embeddings.size == 0:
+            logger.warning(
+                "No embeddings generated, skipping index update",
+                elements_count=len(new_elements),
+                descriptions_count=len(descriptions),
             )
+            return
+
+        if len(embeddings) != len(new_elements):
+            logger.error(
+                "Mismatch between embeddings and elements",
+                embeddings_count=len(embeddings),
+                elements_count=len(new_elements),
+            )
+            return
+
+        # Phase 3: Store mappings ONLY after embeddings are validated
+        # This ensures mappings and FAISS index stay in sync
+        for element, element_key, description in zip(new_elements, element_keys, descriptions):
+            self.id_to_schema[self._next_id] = {
+                "element": element,
+                "database_type": database_type.value,
+                "key": element_key,
+                "description": description,
+                "indexed_at": datetime.now().isoformat(),
+            }
+            self.schema_to_id[element_key] = self._next_id
+            self._next_id += 1
+
+        # Phase 4: Add to FAISS index (mappings already stored)
+        self.index.add(np.array(embeddings, dtype=np.float32))
+
+        # Update TF-IDF index
+        self._update_tfidf_index(descriptions)
+
+        # Save index
+        await self._save_index()
+
+        logger.info(
+            "Added schema elements to index", new_elements=len(new_elements), total_elements=len(self.id_to_schema)
+        )
 
     async def search_similar(
         self, query: str, top_k: int = 10, database_type: Optional[DatabaseType] = None, min_score: float = 0.3
