@@ -55,12 +55,15 @@ Add to your configuration file:
         "GOOGLE_API_KEY": "${GOOGLE_API_KEY}",
         "NLP2SQL_DEFAULT_DB_URL": "postgresql://user:pass@localhost:5432/mydb",
         "NLP2SQL_DEMO_DB_URL": "postgresql://user:pass@localhost:5432/demo",
-        "NLP2SQL_PROD_DB_URL": "postgresql://user:pass@prod-server:5432/production"
+        "NLP2SQL_PROD_DB_URL": "postgresql://user:pass@prod-server:5432/production",
+        "NLP2SQL_EMBEDDINGS_DIR": "/path/to/nlp2sql/embeddings"
       }
     }
   }
 }
 ```
+
+**Note:** `NLP2SQL_EMBEDDINGS_DIR` is required for Claude Desktop to avoid read-only filesystem errors. Set it to a writable directory where embedding indexes will be stored.
 
 ### Database Aliases
 

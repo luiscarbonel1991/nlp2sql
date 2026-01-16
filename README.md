@@ -44,7 +44,7 @@ uv add nlp2sql
 pip install nlp2sql
 
 # Release candidate with latest features
-pip install nlp2sql==0.2.0rc2
+pip install nlp2sql==0.2.0rc3
 
 # With specific AI providers
 pip install nlp2sql[anthropic,gemini]  # Multiple providers
@@ -312,6 +312,7 @@ export NLP2SQL_CACHE_ENABLED=true
 export NLP2SQL_LOG_LEVEL=INFO
 export NLP2SQL_EMBEDDING_PROVIDER=local  # 'local' or 'openai'
 export NLP2SQL_EMBEDDING_MODEL=all-MiniLM-L6-v2  # For local embeddings
+export NLP2SQL_EMBEDDINGS_DIR=/path/to/embeddings  # Custom embeddings storage directory
 ```
 
 ## Development
