@@ -95,7 +95,8 @@ class OpenAIEmbeddingAdapter(EmbeddingProviderPort):
             logger.debug(
                 "OpenAI embeddings generated and normalized",
                 model=self.model,
-                texts_count=len(texts),
+                texts_count=len(valid_texts),
+                filtered_count=len(texts) - len(valid_texts),
                 dimension=normalized_embeddings.shape[1],
             )
 
