@@ -30,6 +30,7 @@ class SchemaManager:
         embedding_manager: Optional[SchemaEmbeddingManager] = None,
         analyzer: Optional[SchemaAnalyzer] = None,
         schema_filters: Optional[Dict[str, Any]] = None,
+        schema_name: str = "public",
     ):
         """
         Initialize schema manager.
@@ -41,10 +42,12 @@ class SchemaManager:
             embedding_manager: Optional embedding manager (will use embedding_provider if provided)
             analyzer: Optional schema analyzer (will use embedding_provider if provided)
             schema_filters: Optional schema filters
+            schema_name: Database schema name (default: "public"). Used to isolate embeddings per schema.
         """
         self.repository = repository
         self.cache = cache
         self.embedding_provider = embedding_provider
+        self.schema_name = schema_name
 
         # Create or use provided embedding manager
         if embedding_manager is None:
@@ -52,6 +55,7 @@ class SchemaManager:
                 database_url=repository.database_url,
                 embedding_provider=embedding_provider,
                 cache=cache,
+                schema_name=schema_name,
             )
         else:
             self.embedding_manager = embedding_manager

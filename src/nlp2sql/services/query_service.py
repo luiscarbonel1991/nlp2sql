@@ -31,11 +31,13 @@ class QueryGenerationService:
         schema_filters: Optional[Dict[str, Any]] = None,
         embedding_provider: Optional[EmbeddingProviderPort] = None,
         example_store: Optional[ExampleStore] = None,
+        schema_name: str = "public",
     ):
         self.ai_provider = ai_provider
         self.schema_repository = schema_repository
         self.cache = cache
         self.query_optimizer = query_optimizer
+        self.schema_name = schema_name
 
         # Initialize schema manager with embedding provider
         self.schema_manager = SchemaManager(
@@ -43,6 +45,7 @@ class QueryGenerationService:
             cache=cache,
             embedding_provider=embedding_provider,
             schema_filters=schema_filters,
+            schema_name=schema_name,
         )
 
         # Initialize example store

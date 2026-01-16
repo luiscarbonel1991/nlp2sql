@@ -31,6 +31,7 @@ class SchemaEmbeddingManager:
         embedding_model: str = "all-MiniLM-L6-v2",
         cache: Optional[CachePort] = None,
         index_path: Optional[Path] = None,
+        schema_name: str = "public",
     ):
         """
         Initialize schema embedding manager.
@@ -41,6 +42,7 @@ class SchemaEmbeddingManager:
             embedding_model: Model name for local adapter (unused, kept for API compatibility).
             cache: Optional cache port for caching results
             index_path: Optional custom path for index storage
+            schema_name: Database schema name (default: "public"). Used to isolate embeddings per schema.
 
         Note:
             If embedding_provider is None, the manager will work but search_similar() will
@@ -48,6 +50,7 @@ class SchemaEmbeddingManager:
             (using text-based matching only in SchemaAnalyzer).
         """
         self.embedding_provider = embedding_provider
+        self.schema_name = schema_name
 
         if embedding_provider is None:
             logger.info(
@@ -57,8 +60,10 @@ class SchemaEmbeddingManager:
 
         self.cache = cache
 
-        # Create a unique directory for each database
-        db_hash = hashlib.md5(database_url.encode()).hexdigest()
+        # Create a unique directory for each database+schema combination
+        # This prevents embeddings from different schemas being mixed together
+        index_key = f"{database_url}:{schema_name}"
+        db_hash = hashlib.md5(index_key.encode()).hexdigest()
 
         # Use environment variable for embeddings directory, fallback to ./embeddings
         embeddings_dir = os.getenv("NLP2SQL_EMBEDDINGS_DIR", "./embeddings")

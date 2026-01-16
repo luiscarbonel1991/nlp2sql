@@ -197,6 +197,7 @@ def create_query_service(
         schema_repository=repository,
         schema_filters=schema_filters,
         embedding_provider=embedding_provider,
+        schema_name=schema_name,
     )
 
     return service
