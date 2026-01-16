@@ -21,6 +21,47 @@ from ..ports.embedding_provider import EmbeddingProviderPort
 logger = structlog.get_logger()
 
 
+def _get_embeddings_directory() -> Path:
+    """Get writable embeddings directory with fallback chain.
+
+    Tries directories in order:
+    1. NLP2SQL_EMBEDDINGS_DIR environment variable (explicit user config)
+    2. ./embeddings (development default, tests writability)
+    3. /tmp/nlp2sql_embeddings (containerized/sandboxed fallback)
+
+    This ensures the MCP server works in containerized environments like
+    Claude Desktop where the current directory may be read-only.
+
+    Returns:
+        Path to a writable embeddings directory
+    """
+    # Try explicit config first
+    explicit_dir = os.getenv("NLP2SQL_EMBEDDINGS_DIR")
+    if explicit_dir:
+        return Path(explicit_dir)
+
+    # Try ./embeddings (development default)
+    local_dir = Path("./embeddings")
+    try:
+        local_dir.mkdir(parents=True, exist_ok=True)
+        # Test if writable by creating and removing a test file
+        test_file = local_dir / ".write_test"
+        test_file.touch()
+        test_file.unlink()
+        return local_dir
+    except (OSError, PermissionError):
+        pass
+
+    # Fallback to /tmp for containerized environments
+    tmp_dir = Path("/tmp/nlp2sql_embeddings")
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    logger.info(
+        "Using /tmp fallback for embeddings directory (current directory not writable)",
+        path=str(tmp_dir),
+    )
+    return tmp_dir
+
+
 class SchemaEmbeddingManager:
     """Manages embeddings for schema elements with FAISS indexing."""
 
@@ -65,9 +106,9 @@ class SchemaEmbeddingManager:
         index_key = f"{database_url}:{schema_name}"
         db_hash = hashlib.md5(index_key.encode()).hexdigest()
 
-        # Use environment variable for embeddings directory, fallback to ./embeddings
-        embeddings_dir = os.getenv("NLP2SQL_EMBEDDINGS_DIR", "./embeddings")
-        self.index_path = (index_path or Path(embeddings_dir)) / db_hash
+        # Get embeddings directory with fallback chain for containerized environments
+        embeddings_dir = _get_embeddings_directory()
+        self.index_path = (index_path or embeddings_dir) / db_hash
 
         try:
             self.index_path.mkdir(parents=True, exist_ok=True)

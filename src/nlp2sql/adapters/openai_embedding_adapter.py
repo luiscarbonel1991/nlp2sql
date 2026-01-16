@@ -59,26 +59,27 @@ class OpenAIEmbeddingAdapter(EmbeddingProviderPort):
             dim = self.get_embedding_dimension()
             return np.array([]).reshape(0, dim)
 
-        # Filter out None, empty strings, and ensure all are strings
-        valid_texts = []
+        # Process texts but preserve array length for 1:1 mapping with caller's data
+        # NOTE: We do NOT filter here - filtering is done by the caller (embedding_manager)
+        # to ensure the returned embeddings array has the same length as the input.
+        # This maintains consistency with local_embedding_adapter behavior.
+        processed_texts = []
         for text in texts:
             if text is None:
-                logger.warning("None value found in texts list, skipping")
-                continue
-            if not isinstance(text, str):
-                text = str(text)
-            if text.strip():  # Only add non-empty strings
-                valid_texts.append(text)
+                # Replace None with a placeholder that produces a valid embedding
+                logger.warning("None value found in texts list, using placeholder")
+                processed_texts.append(" ")  # Single space - minimal valid input
+            elif not isinstance(text, str):
+                processed_texts.append(str(text))
+            elif not text.strip():
+                # Empty/whitespace string - use placeholder
+                logger.warning("Empty string found in texts list, using placeholder")
+                processed_texts.append(" ")  # Single space - minimal valid input
             else:
-                logger.warning("Empty string found in texts list, skipping")
-
-        if not valid_texts:
-            logger.warning("No valid texts after filtering, returning empty array")
-            dim = self.get_embedding_dimension()
-            return np.array([]).reshape(0, dim)
+                processed_texts.append(text)
 
         try:
-            response = await self.client.embeddings.create(model=self.model, input=valid_texts)
+            response = await self.client.embeddings.create(model=self.model, input=processed_texts)
 
             # Extract embeddings from response
             embeddings = [item.embedding for item in response.data]
@@ -95,8 +96,7 @@ class OpenAIEmbeddingAdapter(EmbeddingProviderPort):
             logger.debug(
                 "OpenAI embeddings generated and normalized",
                 model=self.model,
-                texts_count=len(valid_texts),
-                filtered_count=len(texts) - len(valid_texts),
+                texts_count=len(processed_texts),
                 dimension=normalized_embeddings.shape[1],
             )
 
