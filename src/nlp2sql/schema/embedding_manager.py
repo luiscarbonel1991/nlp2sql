@@ -225,6 +225,14 @@ class SchemaEmbeddingManager:
                 self._next_id += 1
 
         if new_elements and descriptions:
+            # Skip if no embedding provider configured
+            if self.embedding_provider is None:
+                logger.debug(
+                    "Skipping embedding generation - no provider configured",
+                    elements_count=len(new_elements),
+                )
+                return
+
             # Validate that we have valid descriptions before encoding
             if len(descriptions) != len(new_elements):
                 logger.error(

@@ -462,6 +462,13 @@ class RedshiftRepository(SchemaRepositoryPort):
                     "execution_time_ms": execution_time_ms,
                 }
             finally:
+                # Reset statement timeout before closing (match PostgreSQL behavior)
+                try:
+                    cursor = conn.cursor()
+                    cursor.execute("SET statement_timeout TO 0")
+                    cursor.close()
+                except Exception:
+                    pass  # Best effort reset
                 conn.close()
 
         try:
