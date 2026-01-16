@@ -59,8 +59,9 @@ def is_safe_query(sql: str) -> Tuple[bool, str]:
 
     # Check for multiple statements (SQL injection protection)
     # Remove string literals before checking for semicolons
-    sql_no_strings = re.sub(r"'[^']*'", "", sql)
-    sql_no_strings = re.sub(r'"[^"]*"', "", sql_no_strings)
+    # Handle SQL escaped quotes: 'O''Reilly' -> '' (single quotes escaped by doubling)
+    sql_no_strings = re.sub(r"'(?:[^']|'')*'", "", sql)
+    sql_no_strings = re.sub(r'"(?:[^"]|"")*"', "", sql_no_strings)
     if ";" in sql_no_strings.rstrip(";"):
         return False, "Multiple SQL statements are not allowed"
 
@@ -81,8 +82,9 @@ def apply_row_limit(sql: str, limit: int) -> str:
 
     # Remove string literals to avoid false positives
     # e.g., WHERE message LIKE '%LIMIT%' should not bypass the limit
-    sql_no_strings = re.sub(r"'[^']*'", "''", sql)
-    sql_no_strings = re.sub(r'"[^"]*"', '""', sql_no_strings)
+    # Handle SQL escaped quotes: 'O''Reilly' -> '' (single quotes escaped by doubling)
+    sql_no_strings = re.sub(r"'(?:[^']|'')*'", "''", sql)
+    sql_no_strings = re.sub(r'"(?:[^"]|"")*"', '""', sql_no_strings)
 
     # Check for LIMIT keyword outside of strings (word boundary match)
     if re.search(r"\bLIMIT\b", sql_no_strings, re.IGNORECASE):

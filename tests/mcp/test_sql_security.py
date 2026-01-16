@@ -223,3 +223,59 @@ class TestApplyRowLimit:
         sql2 = "SELECT * FROM users LiMiT 50"
         result2 = apply_row_limit(sql2, 100)
         assert result2 == sql2
+
+    def test_escaped_quotes_in_string_with_limit(self):
+        """SQL escaped quotes (doubled) should be handled correctly."""
+        # String with escaped quote containing LIMIT should still detect real LIMIT
+        sql = "SELECT * FROM users WHERE name = 'O''Reilly' LIMIT 50"
+        result = apply_row_limit(sql, 100)
+        assert result == sql  # Should not add another LIMIT
+
+    def test_escaped_quotes_without_limit(self):
+        """Escaped quotes should not prevent LIMIT from being added."""
+        sql = "SELECT * FROM users WHERE name = 'O''Reilly'"
+        result = apply_row_limit(sql, 100)
+        assert "LIMIT 100" in result
+
+    def test_multiple_escaped_quotes_in_string(self):
+        """Multiple escaped quotes in a string should be handled."""
+        sql = "SELECT * FROM logs WHERE msg = 'User said: ''Hello'' to me'"
+        result = apply_row_limit(sql, 100)
+        assert "LIMIT 100" in result
+
+    def test_escaped_quotes_with_limit_keyword_inside(self):
+        """LIMIT inside escaped string should not bypass actual LIMIT."""
+        sql = "SELECT * FROM msgs WHERE text = 'It''s about LIMIT'"
+        result = apply_row_limit(sql, 100)
+        assert "LIMIT 100" in result
+
+
+class TestIsSafeQueryEscapedQuotes:
+    """Test SQL safety validation with escaped quotes."""
+
+    def test_escaped_quotes_with_semicolon_inside(self):
+        """Semicolon inside escaped string should be allowed."""
+        sql = "SELECT * FROM users WHERE name = 'O''Reilly; test'"
+        is_safe, error = is_safe_query(sql)
+        assert is_safe is True
+
+    def test_escaped_quotes_safe_query(self):
+        """Basic query with escaped quotes should be safe."""
+        sql = "SELECT * FROM users WHERE name = 'It''s a test'"
+        is_safe, error = is_safe_query(sql)
+        assert is_safe is True
+
+    def test_real_injection_not_hidden_by_escaped_quotes(self):
+        """Real SQL injection should still be detected after escaped quotes."""
+        # Multiple SELECT statements (no dangerous keywords, tests semicolon detection)
+        sql = "SELECT * FROM users WHERE name = 'test'; SELECT * FROM admins"
+        is_safe, error = is_safe_query(sql)
+        assert is_safe is False
+        assert "multiple" in error.lower()
+
+    def test_dangerous_keyword_after_escaped_quotes(self):
+        """Dangerous keywords after escaped quotes should be detected."""
+        sql = "SELECT * FROM users WHERE name = 'test'; DELETE FROM users"
+        is_safe, error = is_safe_query(sql)
+        assert is_safe is False
+        assert "prohibited" in error.lower()
