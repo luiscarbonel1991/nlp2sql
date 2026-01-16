@@ -187,3 +187,39 @@ class TestApplyRowLimit:
         """
         result = apply_row_limit(sql, 50)
         assert "LIMIT 50" in result
+
+    def test_limit_in_string_literal_does_not_bypass(self):
+        """LIMIT inside string literal should not bypass the limit."""
+        # This is a security test - 'LIMIT' in a string should NOT prevent adding LIMIT
+        sql = "SELECT * FROM messages WHERE text LIKE '%LIMIT%'"
+        result = apply_row_limit(sql, 100)
+        assert "LIMIT 100" in result
+
+    def test_limit_in_single_quoted_string_does_not_bypass(self):
+        """LIMIT inside single-quoted string should not bypass."""
+        sql = "SELECT * FROM logs WHERE message = 'LIMIT exceeded'"
+        result = apply_row_limit(sql, 100)
+        assert "LIMIT 100" in result
+
+    def test_limit_in_double_quoted_identifier_does_not_bypass(self):
+        """LIMIT inside double-quoted identifier should not bypass."""
+        sql = 'SELECT * FROM "LIMIT_table" WHERE id > 0'
+        result = apply_row_limit(sql, 100)
+        assert "LIMIT 100" in result
+
+    def test_real_limit_clause_is_preserved(self):
+        """Real LIMIT clause outside strings should be preserved."""
+        sql = "SELECT * FROM messages WHERE text LIKE '%test%' LIMIT 25"
+        result = apply_row_limit(sql, 100)
+        assert result == sql
+        assert "LIMIT 100" not in result
+
+    def test_case_insensitive_limit_detection(self):
+        """LIMIT detection should be case-insensitive."""
+        sql = "SELECT * FROM users limit 50"
+        result = apply_row_limit(sql, 100)
+        assert result == sql
+
+        sql2 = "SELECT * FROM users LiMiT 50"
+        result2 = apply_row_limit(sql2, 100)
+        assert result2 == sql2

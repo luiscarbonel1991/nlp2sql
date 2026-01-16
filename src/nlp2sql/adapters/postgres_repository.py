@@ -78,10 +78,14 @@ def apply_row_limit(sql: str, limit: int) -> str:
         SQL with LIMIT clause applied
     """
     limit = min(limit, MAX_QUERY_ROWS)
-    sql_upper = sql.upper()
 
-    # If query already has LIMIT, don't add another
-    if "LIMIT" in sql_upper:
+    # Remove string literals to avoid false positives
+    # e.g., WHERE message LIKE '%LIMIT%' should not bypass the limit
+    sql_no_strings = re.sub(r"'[^']*'", "''", sql)
+    sql_no_strings = re.sub(r'"[^"]*"', '""', sql_no_strings)
+
+    # Check for LIMIT keyword outside of strings (word boundary match)
+    if re.search(r"\bLIMIT\b", sql_no_strings, re.IGNORECASE):
         return sql
 
     # Remove trailing semicolon and add LIMIT

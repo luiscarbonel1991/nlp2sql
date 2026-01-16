@@ -66,9 +66,14 @@ def is_safe_query(sql: str) -> Tuple[bool, str]:
 def apply_row_limit(sql: str, limit: int) -> str:
     """Ensure query has a row limit applied."""
     limit = min(limit, MAX_QUERY_ROWS)
-    sql_upper = sql.upper()
 
-    if "LIMIT" in sql_upper:
+    # Remove string literals to avoid false positives
+    # e.g., WHERE message LIKE '%LIMIT%' should not bypass the limit
+    sql_no_strings = re.sub(r"'[^']*'", "''", sql)
+    sql_no_strings = re.sub(r'"[^"]*"', '""', sql_no_strings)
+
+    # Check for LIMIT keyword outside of strings (word boundary match)
+    if re.search(r"\bLIMIT\b", sql_no_strings, re.IGNORECASE):
         return sql
 
     return f"{sql.rstrip(';')} LIMIT {limit}"
