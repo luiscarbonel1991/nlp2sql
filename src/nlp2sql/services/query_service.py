@@ -13,8 +13,8 @@ from ..ports.cache import CachePort
 from ..ports.embedding_provider import EmbeddingProviderPort
 from ..ports.query_optimizer import QueryOptimizerPort
 from ..ports.schema_repository import SchemaRepositoryPort
-from ..schema.manager import SchemaManager
 from ..schema.example_store import ExampleStore
+from ..schema.manager import SchemaManager
 
 logger = structlog.get_logger()
 
@@ -31,11 +31,13 @@ class QueryGenerationService:
         schema_filters: Optional[Dict[str, Any]] = None,
         embedding_provider: Optional[EmbeddingProviderPort] = None,
         example_store: Optional[ExampleStore] = None,
+        schema_name: str = "public",
     ):
         self.ai_provider = ai_provider
         self.schema_repository = schema_repository
         self.cache = cache
         self.query_optimizer = query_optimizer
+        self.schema_name = schema_name
 
         # Initialize schema manager with embedding provider
         self.schema_manager = SchemaManager(
@@ -43,8 +45,9 @@ class QueryGenerationService:
             cache=cache,
             embedding_provider=embedding_provider,
             schema_filters=schema_filters,
+            schema_name=schema_name,
         )
-        
+
         # Initialize example store
         self.example_store = example_store
 
@@ -293,7 +296,7 @@ class QueryGenerationService:
                 return [{"question": ex["question"], "sql": ex["sql"]} for ex in examples]
             except Exception as e:
                 logger.warning("Failed to retrieve examples from store, using fallback", error=str(e))
-        
+
         # Fallback to hardcoded examples if store is not available
         examples = [
             {"question": "Show me all customers", "sql": "SELECT * FROM customers"},

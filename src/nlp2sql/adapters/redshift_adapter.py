@@ -1,14 +1,16 @@
 """Amazon Redshift repository for schema management."""
 
 import asyncio
+import re
+import time
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import psycopg2
-from psycopg2.extras import RealDictCursor
 import structlog
+from psycopg2.extras import RealDictCursor
 
-from ..exceptions import SchemaException
+from ..exceptions import SchemaException, SecurityException
 from ..ports.schema_repository import (
     SchemaMetadata,
     SchemaRepositoryPort,
@@ -16,6 +18,67 @@ from ..ports.schema_repository import (
 )
 
 logger = structlog.get_logger()
+
+# SQL patterns that are not allowed for security
+DANGEROUS_SQL_PATTERNS = [
+    r"\bINSERT\b",
+    r"\bUPDATE\b",
+    r"\bDELETE\b",
+    r"\bDROP\b",
+    r"\bTRUNCATE\b",
+    r"\bALTER\b",
+    r"\bCREATE\b",
+    r"\bGRANT\b",
+    r"\bREVOKE\b",
+    r"\bEXEC\b",
+    r"\bEXECUTE\b",
+    r"\bCALL\b",
+    r"\bSET\b",
+    r"\bCOPY\b",
+    r"\bUNLOAD\b",  # Redshift-specific
+    r"\bVACUUM\b",  # Redshift-specific
+]
+
+MAX_QUERY_ROWS = 1000
+DEFAULT_QUERY_ROWS = 100
+
+
+def is_safe_query(sql: str) -> Tuple[bool, str]:
+    """Check if a SQL query is safe to execute (read-only)."""
+    sql_upper = sql.upper().strip()
+
+    allowed_prefixes = ("SELECT", "WITH", "EXPLAIN")
+    if not any(sql_upper.startswith(prefix) for prefix in allowed_prefixes):
+        return False, "Only SELECT, WITH, or EXPLAIN queries are allowed"
+
+    for pattern in DANGEROUS_SQL_PATTERNS:
+        if re.search(pattern, sql_upper, re.IGNORECASE):
+            return False, "Query contains prohibited operation"
+
+    # Handle SQL escaped quotes: 'O''Reilly' -> '' (single quotes escaped by doubling)
+    sql_no_strings = re.sub(r"'(?:[^']|'')*'", "", sql)
+    sql_no_strings = re.sub(r'"(?:[^"]|"")*"', "", sql_no_strings)
+    if ";" in sql_no_strings.rstrip(";"):
+        return False, "Multiple SQL statements are not allowed"
+
+    return True, ""
+
+
+def apply_row_limit(sql: str, limit: int) -> str:
+    """Ensure query has a row limit applied."""
+    limit = min(limit, MAX_QUERY_ROWS)
+
+    # Remove string literals to avoid false positives
+    # e.g., WHERE message LIKE '%LIMIT%' should not bypass the limit
+    # Handle SQL escaped quotes: 'O''Reilly' -> '' (single quotes escaped by doubling)
+    sql_no_strings = re.sub(r"'(?:[^']|'')*'", "''", sql)
+    sql_no_strings = re.sub(r'"(?:[^"]|"")*"', '""', sql_no_strings)
+
+    # Check for LIMIT keyword outside of strings (word boundary match)
+    if re.search(r"\bLIMIT\b", sql_no_strings, re.IGNORECASE):
+        return sql
+
+    return f"{sql.rstrip(';')} LIMIT {limit}"
 
 
 class RedshiftRepository(SchemaRepositoryPort):
@@ -142,9 +205,7 @@ class RedshiftRepository(SchemaRepositoryPort):
             logger.error("Failed to get tables", error=str(e))
             raise SchemaException(f"Failed to get tables: {e!s}")
 
-    async def get_table_info(
-        self, table_name: str, schema_name: Optional[str] = None
-    ) -> TableInfo:
+    async def get_table_info(self, table_name: str, schema_name: Optional[str] = None) -> TableInfo:
         """Get detailed information about a specific table."""
         if not self._initialized:
             await self.initialize()
@@ -162,14 +223,10 @@ class RedshiftRepository(SchemaRepositoryPort):
         """
 
         try:
-            row = await asyncio.to_thread(
-                self._execute_query_one, query, (table_name, schema)
-            )
+            row = await asyncio.to_thread(self._execute_query_one, query, (table_name, schema))
 
             if not row:
-                raise SchemaException(
-                    f"Table {table_name} not found in schema {schema}"
-                )
+                raise SchemaException(f"Table {table_name} not found in schema {schema}")
 
             return await self._build_table_info(row, schema)
 
@@ -197,9 +254,7 @@ class RedshiftRepository(SchemaRepositoryPort):
         """
 
         try:
-            rows = await asyncio.to_thread(
-                self._execute_query, query, (self.schema_name, f"%{pattern}%")
-            )
+            rows = await asyncio.to_thread(self._execute_query, query, (self.schema_name, f"%{pattern}%"))
 
             tables = []
             for row in rows:
@@ -236,9 +291,7 @@ class RedshiftRepository(SchemaRepositoryPort):
         """
 
         try:
-            row = await asyncio.to_thread(
-                self._execute_query_one, query, (self.schema_name,)
-            )
+            row = await asyncio.to_thread(self._execute_query_one, query, (self.schema_name,))
 
             return SchemaMetadata(
                 database_name=row["database_name"],
@@ -260,9 +313,7 @@ class RedshiftRepository(SchemaRepositoryPort):
 
         logger.info("Schema refresh requested (no-op for Redshift)")
 
-    async def get_table_sample_data(
-        self, table_name: str, limit: int = 5
-    ) -> List[Dict[str, Any]]:
+    async def get_table_sample_data(self, table_name: str, limit: int = 5) -> List[Dict[str, Any]]:
         """Get sample data from a table."""
         if not self._initialized:
             await self.initialize()
@@ -299,9 +350,7 @@ class RedshiftRepository(SchemaRepositoryPort):
             last_updated=datetime.now(),
         )
 
-    async def _get_table_columns(
-        self, table_name: str, schema: str
-    ) -> List[Dict[str, Any]]:
+    async def _get_table_columns(self, table_name: str, schema: str) -> List[Dict[str, Any]]:
         """Get column information for a table.
 
         Uses SVV_COLUMNS (Redshift system view) for better permission handling.
@@ -321,22 +370,22 @@ class RedshiftRepository(SchemaRepositoryPort):
         ORDER BY ordinal_position
         """
 
-        rows = await asyncio.to_thread(
-            self._execute_query, query, (table_name, schema)
-        )
+        rows = await asyncio.to_thread(self._execute_query, query, (table_name, schema))
 
         columns = []
         for row in rows:
-            columns.append({
-                "name": row["column_name"],
-                "type": row["data_type"],
-                "nullable": row["is_nullable"] == "YES",
-                "default": row["column_default"],
-                "max_length": row["character_maximum_length"],
-                "precision": row["numeric_precision"],
-                "scale": row["numeric_scale"],
-                "description": "",
-            })
+            columns.append(
+                {
+                    "name": row["column_name"],
+                    "type": row["data_type"],
+                    "nullable": row["is_nullable"] == "YES",
+                    "default": row["column_default"],
+                    "max_length": row["character_maximum_length"],
+                    "precision": row["numeric_precision"],
+                    "scale": row["numeric_scale"],
+                    "description": "",
+                }
+            )
 
         return columns
 
@@ -352,8 +401,89 @@ class RedshiftRepository(SchemaRepositoryPort):
         ORDER BY kcu.ordinal_position
         """
 
-        rows = await asyncio.to_thread(
-            self._execute_query, query, (table_name, schema)
-        )
+        rows = await asyncio.to_thread(self._execute_query, query, (table_name, schema))
 
         return [row["column_name"] for row in rows]
+
+    async def execute_query(
+        self,
+        sql: str,
+        limit: int = DEFAULT_QUERY_ROWS,
+        timeout_seconds: int = 30,
+    ) -> Dict[str, Any]:
+        """Execute a read-only SQL query and return results.
+
+        Args:
+            sql: The SQL query to execute (must be SELECT/WITH/EXPLAIN)
+            limit: Maximum number of rows to return (max: 1000)
+            timeout_seconds: Query timeout in seconds (default: 30)
+
+        Returns:
+            Dictionary with results, columns, row_count, and execution_time_ms
+
+        Raises:
+            SecurityException: If query contains prohibited operations
+            SchemaException: If query execution fails
+        """
+        if not self._initialized:
+            await self.initialize()
+
+        # Validate query is safe
+        is_safe, error_message = is_safe_query(sql)
+        if not is_safe:
+            logger.warning("Unsafe query rejected", sql=sql[:100], reason=error_message)
+            raise SecurityException(f"Query rejected: {error_message}")
+
+        # Apply row limit
+        limited_sql = apply_row_limit(sql, limit)
+
+        def _run_query() -> Dict[str, Any]:
+            start_time = time.time()
+            conn = self._get_connection()
+            try:
+                # Set statement timeout (in milliseconds for Redshift)
+                cursor = conn.cursor()
+                cursor.execute(f"SET statement_timeout TO {timeout_seconds * 1000}")
+                cursor.close()
+
+                # Execute the actual query
+                cursor = conn.cursor(cursor_factory=RealDictCursor)
+                cursor.execute(limited_sql)
+                rows = cursor.fetchall()
+                columns = [desc[0] for desc in cursor.description] if cursor.description else []
+                cursor.close()
+
+                execution_time_ms = round((time.time() - start_time) * 1000, 2)
+
+                return {
+                    "results": [dict(row) for row in rows],
+                    "columns": columns,
+                    "row_count": len(rows),
+                    "execution_time_ms": execution_time_ms,
+                }
+            finally:
+                # Reset statement timeout before closing (match PostgreSQL behavior)
+                try:
+                    cursor = conn.cursor()
+                    cursor.execute("SET statement_timeout TO 0")
+                    cursor.close()
+                except Exception:
+                    pass  # Best effort reset
+                conn.close()
+
+        try:
+            result = await asyncio.to_thread(_run_query)
+
+            logger.info(
+                "Query executed successfully",
+                row_count=result["row_count"],
+                execution_time_ms=result["execution_time_ms"],
+            )
+
+            return result
+
+        except SecurityException:
+            raise
+        except Exception as e:
+            logger.error("Query execution failed", error=str(e), sql=sql[:100])
+            raise SchemaException(f"Query execution failed: {e!s}")

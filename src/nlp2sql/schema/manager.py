@@ -2,7 +2,6 @@
 
 import pickle
 from datetime import datetime, timedelta
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import structlog
@@ -31,6 +30,7 @@ class SchemaManager:
         embedding_manager: Optional[SchemaEmbeddingManager] = None,
         analyzer: Optional[SchemaAnalyzer] = None,
         schema_filters: Optional[Dict[str, Any]] = None,
+        schema_name: str = "public",
     ):
         """
         Initialize schema manager.
@@ -42,10 +42,12 @@ class SchemaManager:
             embedding_manager: Optional embedding manager (will use embedding_provider if provided)
             analyzer: Optional schema analyzer (will use embedding_provider if provided)
             schema_filters: Optional schema filters
+            schema_name: Database schema name (default: "public"). Used to isolate embeddings per schema.
         """
         self.repository = repository
         self.cache = cache
         self.embedding_provider = embedding_provider
+        self.schema_name = schema_name
 
         # Create or use provided embedding manager
         if embedding_manager is None:
@@ -53,6 +55,7 @@ class SchemaManager:
                 database_url=repository.database_url,
                 embedding_provider=embedding_provider,
                 cache=cache,
+                schema_name=schema_name,
             )
         else:
             self.embedding_manager = embedding_manager
@@ -80,7 +83,7 @@ class SchemaManager:
         self._last_refresh = None
         self._schema_cache = {}
         self._table_relevance_cache = {}
-        
+
         # Load refresh state early if index exists
         self._load_refresh_state_early()
 
@@ -278,6 +281,21 @@ class SchemaManager:
 
         logger.info("Schema refreshed")
 
+    async def _get_cached_tables(self) -> List[TableInfo]:
+        """Get tables from internal cache or fetch from repository.
+
+        This avoids expensive database queries on every call to _find_relevant_tables.
+        Tables are cached in memory for the lifetime of the SchemaManager instance.
+        Call refresh_schema() to clear the cache and fetch fresh data.
+        """
+        cache_key = "_all_tables"
+        if cache_key not in self._schema_cache:
+            tables = await self.repository.get_tables()
+            tables = self._apply_schema_filters(tables)
+            self._schema_cache[cache_key] = tables
+            logger.debug("Tables cached", count=len(tables))
+        return self._schema_cache[cache_key]
+
     async def _find_relevant_tables(
         self, query: str, database_type: DatabaseType, max_tables: int = 10
     ) -> List[Tuple[str, float]]:
@@ -311,25 +329,25 @@ class SchemaManager:
         query_tokens = set(self.analyzer._tokenize(query.lower()))
         # Normalize tokens for better singular/plural matching
         normalized_query_tokens = {self.analyzer._normalize_word(t) for t in query_tokens}
-        all_tables = await self.repository.get_tables()
+
+        # Use cached tables if available (avoids expensive DB query)
+        all_tables = await self._get_cached_tables()
 
         for table in all_tables:
             table_name_tokens = set(self.analyzer._tokenize(table.name.lower()))
             normalized_table_tokens = {self.analyzer._normalize_word(t) for t in table_name_tokens}
             # Check both exact token match and normalized token match
-            has_token_match = bool(query_tokens & table_name_tokens) or bool(normalized_query_tokens & normalized_table_tokens)
+            has_token_match = bool(query_tokens & table_name_tokens) or bool(
+                normalized_query_tokens & normalized_table_tokens
+            )
 
             # Analyze if: has token match OR (not in results AND we need more)
-            should_analyze = has_token_match or (
-                table.name not in table_scores and len(table_scores) < max_tables * 2
-            )
+            should_analyze = has_token_match or (table.name not in table_scores and len(table_scores) < max_tables * 2)
 
             if should_analyze:
                 table_dict = self._table_info_to_dict(table)
                 # Use semantic=False for speed when we already have a token match
-                score = await self.analyzer.score_relevance(
-                    query, table_dict, use_semantic=not has_token_match
-                )
+                score = await self.analyzer.score_relevance(query, table_dict, use_semantic=not has_token_match)
                 if score > 0.1:  # Minimum threshold
                     # Use max to keep higher score if already exists
                     table_scores[table.name] = max(table_scores.get(table.name, 0), score)

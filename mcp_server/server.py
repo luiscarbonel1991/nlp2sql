@@ -1,47 +1,98 @@
 #!/usr/bin/env python3
-"""MCP Server for nlp2sql - Natural Language to SQL conversion."""
+"""MCP Server for nlp2sql - Natural Language to SQL conversion.
 
-import os
-import sys
+This server exposes 5 simple, idiomatic tools for interacting with databases:
+1. ask_database - Ask questions in natural language, get SQL and optional results
+2. explore_schema - Discover tables and columns in your database
+3. run_sql - Execute SQL queries directly (read-only)
+4. list_databases - List available database connections
+5. explain_sql - Explain what a SQL query does
+"""
 
-# CRITICAL: Set working directory and environment variables BEFORE any nlp2sql imports
-# This ensures the embedding manager uses the correct directories and paths
-os.chdir("/tmp")  # Change to /tmp to avoid read-only filesystem issues
-
-os.environ.setdefault("TMPDIR", "/tmp/nlp2sql_tmp")
-os.environ.setdefault("NLP2SQL_CACHE_DIR", "/tmp/nlp2sql_cache")
-os.environ.setdefault("NLP2SQL_EMBEDDINGS_DIR", "/tmp/nlp2sql_embeddings")
-
-# Create temp directories if they don't exist
-for dir_name in ["TMPDIR", "NLP2SQL_CACHE_DIR", "NLP2SQL_EMBEDDINGS_DIR"]:
-    dir_path = os.environ.get(dir_name, f"/tmp/{dir_name.lower()}")
-    os.makedirs(dir_path, exist_ok=True)
-
-# Now safe to import other modules
 import json
+import logging
+import os
+import signal
+import sys
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
+# Handle SIGPIPE gracefully (prevents BrokenPipeError on closed connections)
+# This is common when MCP client closes connection while server is still writing
+if hasattr(signal, "SIGPIPE"):
+    signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+
+# ===== CRITICAL: Configure structlog to stderr BEFORE any nlp2sql imports =====
+# MCP protocol uses stdout exclusively for JSON-RPC communication.
+# nlp2sql modules use structlog internally, so we MUST configure it globally here first.
+import structlog
+
+structlog.configure(
+    processors=[
+        structlog.contextvars.merge_contextvars,
+        structlog.processors.add_log_level,
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.processors.StackInfoRenderer(),
+        structlog.processors.format_exc_info,
+        structlog.processors.JSONRenderer(),
+    ],
+    wrapper_class=structlog.make_filtering_bound_logger(logging.INFO),
+    context_class=dict,
+    logger_factory=structlog.PrintLoggerFactory(file=sys.stderr),
+    cache_logger_on_first_use=False,
+)
+
+# Also configure standard logging to stderr
+logging.basicConfig(
+    format="%(message)s",
+    stream=sys.stderr,
+    level=logging.WARNING,
+)
+
+# Suppress verbose third-party loggers
+for _lib in ["urllib3", "httpx", "httpcore", "asyncio", "openai", "anthropic", "faiss", "faiss.loader"]:
+    logging.getLogger(_lib).setLevel(logging.WARNING)
+
+logger = structlog.get_logger(__name__)
+
+# ===== NOW safe to import external modules =====
 from mcp.server.fastmcp import FastMCP
 
-# Import nlp2sql after environment setup
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Add parent directory to path for nlp2sql imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from nlp2sql import (
     DatabaseType,
+    PostgreSQLRepository,
+    RedshiftRepository,
     create_and_initialize_service,
-    generate_sql_from_db,
 )
 from nlp2sql.cli import detect_database_type
+from nlp2sql.exceptions import SecurityException
 
 # Create FastMCP server
 mcp = FastMCP("nlp2sql")
 
-# Cache for initialized services
-service_cache: Dict[str, Any] = {}
+# Cache for initialized services and repositories
+# Key format: "service:{database_url}" or "repo:{database_url}:{schema}"
+_service_cache: dict[str, Any] = {}
+_repository_cache: dict[str, Any] = {}
+
+# Cache metadata for debugging and potential TTL
+_cache_metadata: dict[str, dict] = {}
+
+# Database alias configuration
+DATABASE_ALIASES = {
+    "default": "NLP2SQL_DEFAULT_DB_URL",
+    "demo": "NLP2SQL_DEMO_DB_URL",
+    "local": "NLP2SQL_LOCAL_DB_URL",
+    "test": "NLP2SQL_TEST_DB_URL",
+    "production": "NLP2SQL_PROD_DB_URL",
+    "prod": "NLP2SQL_PROD_DB_URL",
+}
 
 
-def get_api_key(provider: str) -> Optional[str]:
+def _get_api_key(provider: str) -> Optional[str]:
     """Get API key from environment variables."""
     env_mapping = {
         "openai": "OPENAI_API_KEY",
@@ -51,679 +102,508 @@ def get_api_key(provider: str) -> Optional[str]:
     return os.getenv(env_mapping.get(provider, ""))
 
 
-def _create_cache_key(
-    database_url: str,
-    ai_provider: str,
-    schema_name: Optional[str] = None,
-    schema_filters: Optional[Dict[str, Any]] = None,
-    embedding_provider_type: Optional[str] = None,
-) -> str:
-    """Create a cache key including all relevant parameters."""
-    parts = [database_url, ai_provider]
-    if schema_name:
-        parts.append(f"schema:{schema_name}")
-    if schema_filters:
-        parts.append(f"filters:{json.dumps(schema_filters, sort_keys=True)}")
-    if embedding_provider_type:
-        parts.append(f"embedding:{embedding_provider_type}")
-    return ":".join(parts)
-
-
-def get_safe_database_url(alias: str = "demo") -> str:
-    """Get database URL from environment variables using aliases for security.
+def _resolve_database(database: str) -> str:
+    """Resolve database alias or validate URL.
 
     Args:
-        alias: Database alias (demo, local, test)
+        database: Database alias (demo, local, etc.) or connection URL
 
     Returns:
-        Database URL or raises error if not found
+        Database connection URL
+
+    Raises:
+        ValueError: If alias is not configured or URL is invalid
     """
-    env_mapping = {
-        "demo": "NLP2SQL_DEMO_DB_URL",
-        "local": "NLP2SQL_LOCAL_DB_URL",
-        "test": "NLP2SQL_TEST_DB_URL",
-    }
+    # Check if it's a known alias
+    if database in DATABASE_ALIASES:
+        url = os.getenv(DATABASE_ALIASES[database])
+        if not url:
+            configured = [k for k, v in DATABASE_ALIASES.items() if os.getenv(v)]
+            raise ValueError(
+                f"Database alias '{database}' not configured. "
+                f"Set {DATABASE_ALIASES[database]} environment variable. "
+                f"Configured aliases: {configured or 'none'}"
+            )
+        return url
 
-    db_url = os.getenv(env_mapping.get(alias, ""))
-    if not db_url:
-        available = list(env_mapping.keys())
-        raise ValueError(f"Database alias '{alias}' not configured. Available aliases: {available}")
+    # Allow direct URLs (PostgreSQL, Redshift)
+    if database.startswith(("postgresql://", "postgres://", "redshift://")):
+        return database
 
-    return db_url
+    raise ValueError(
+        f"Invalid database: '{database}'. "
+        f"Use a configured alias ({list(DATABASE_ALIASES.keys())}) "
+        f"or a connection URL (postgresql://...)"
+    )
+
+
+async def _get_repository(database_url: str, schema_name: str = "public") -> Any:
+    """Get or create a cached repository for the database."""
+    cache_key = f"{database_url}:{schema_name}"
+
+    if cache_key not in _repository_cache:
+        database_type = detect_database_type(database_url)
+
+        if database_type == DatabaseType.REDSHIFT:
+            repository = RedshiftRepository(database_url, schema_name)
+        else:
+            repository = PostgreSQLRepository(database_url, schema_name)
+
+        await repository.initialize()
+        _repository_cache[cache_key] = repository
+
+    return _repository_cache[cache_key]
+
+
+def _format_error(error: Exception, context: str = "") -> str:
+    """Format error as JSON response."""
+    return json.dumps(
+        {
+            "error": str(error),
+            "error_type": type(error).__name__,
+            "context": context,
+        },
+        indent=2,
+    )
+
+
+def _get_available_provider() -> tuple[str, str]:
+    """Get the first available AI provider with a configured API key.
+
+    Returns:
+        Tuple of (provider_name, api_key)
+
+    Raises:
+        ValueError: If no provider is configured
+    """
+    providers = [
+        ("openai", "OPENAI_API_KEY"),
+        ("anthropic", "ANTHROPIC_API_KEY"),
+        ("gemini", "GOOGLE_API_KEY"),
+    ]
+
+    for provider, env_var in providers:
+        api_key = os.getenv(env_var)
+        if api_key:
+            return provider, api_key
+
+    raise ValueError("No AI provider configured. Set one of: OPENAI_API_KEY, ANTHROPIC_API_KEY, or GOOGLE_API_KEY")
+
+
+async def _get_cached_service(
+    database_url: str,
+    database_type: DatabaseType,
+    provider: Optional[str] = None,
+    schema_name: str = "public",
+) -> Any:
+    """Get or create a cached query generation service.
+
+    The service includes the embedding model and schema index, which are
+    expensive to initialize (~30-40s). Caching ensures subsequent calls
+    are fast (~3-5s).
+
+    Args:
+        database_url: Database connection URL
+        database_type: Type of database (postgres, redshift)
+        provider: AI provider to use (openai, anthropic, gemini). If None, auto-detect.
+        schema_name: Database schema name (default: 'public')
+
+    Returns:
+        Initialized QueryGenerationService
+
+    Edge cases handled:
+        - Missing API key: Falls back to other providers or raises clear error
+        - Service initialization failure: Not cached, will retry
+        - Different databases: Separate cache entries
+        - Different providers: Separate cache entries
+        - Different schemas: Separate cache entries
+    """
+    # Determine provider and API key
+    if provider:
+        api_key = _get_api_key(provider)
+        if not api_key:
+            raise ValueError(f"API key not configured for provider '{provider}'")
+    else:
+        provider, api_key = _get_available_provider()
+
+    cache_key = f"service:{database_url}:{provider}:{schema_name}"
+
+    if cache_key in _service_cache:
+        logger.debug("Using cached service", provider=provider, schema=schema_name)
+        return _service_cache[cache_key]
+
+    logger.info(
+        "Initializing new service (first call, may take ~30-40s)...",
+        provider=provider,
+        schema=schema_name,
+    )
+    start_time = time.time()
+
+    try:
+        service = await create_and_initialize_service(
+            database_url=database_url,
+            ai_provider=provider,
+            api_key=api_key,
+            database_type=database_type,
+            schema_name=schema_name,
+        )
+
+        # Only cache on successful initialization
+        _service_cache[cache_key] = service
+        _cache_metadata[cache_key] = {
+            "created_at": time.time(),
+            "database_type": database_type.value,
+            "provider": provider,
+            "schema_name": schema_name,
+        }
+
+        elapsed = round(time.time() - start_time, 2)
+        logger.info("Service cached successfully", elapsed_seconds=elapsed, provider=provider, schema=schema_name)
+
+        return service
+
+    except Exception as e:
+        # Don't cache failed services - allow retry
+        logger.error("Service initialization failed", error=str(e), provider=provider, schema=schema_name)
+        raise
+
+
+# =============================================================================
+# Tool 1: ask_database - The primary tool
+# =============================================================================
 
 
 @mcp.tool()
-async def nlp_to_sql_with_database_url(
-    database_url: str,
+async def ask_database(
     question: str,
-    ai_provider: str = "openai",
-    api_key: Optional[str] = None,
-    schema_filters: Optional[Dict[str, Any]] = None,
-    embedding_provider_type: str = "local",
+    database: str = "default",
+    schema: str = "public",
+    execute: bool = False,
+    limit: int = 100,
 ) -> str:
-    """Convert natural language query to SQL.
+    """Ask a question about your data in natural language.
+
+    This is the main tool for converting natural language questions to SQL.
+    Optionally execute the query and return actual results.
 
     Args:
-        database_url: Database connection URL (e.g., postgresql://user:pass@host/db)
-        question: Natural language question to convert to SQL
-        ai_provider: AI provider to use (openai, anthropic, gemini)
-        api_key: API key for the AI provider (optional, uses env vars if not provided)
-        schema_filters: Optional filters to limit schema scope
-        embedding_provider_type: Embedding provider type ('local' or 'openai', default: 'local')
+        question: Your question in plain English (e.g., "How many orders last month?")
+        database: Database alias (default, demo, local, test, prod) or connection URL
+        schema: Database schema to query (default: "public"). Use this for non-public schemas.
+        execute: If True, executes the SQL and returns actual data results
+        limit: Maximum rows to return when executing (default: 100, max: 1000)
 
     Returns:
-        JSON string with SQL query, confidence, explanation, provider, and metadata
+        JSON with SQL query, explanation, confidence, and optionally results
 
-    Example:
-        {
-            "sql": "SELECT COUNT(*) FROM users",
-            "confidence": 0.95,
-            "explanation": "Counts all users in the database",
-            "provider": "openai",
-            "database_type": "postgres",
-            "metadata": {
-                "model": "gpt-4o-mini",
-                "finish_reason": "stop",
-                "prompt_tokens": 1150,
-                "completion_tokens": 93,
-                "raw_response": "{\"sql\": \"SELECT COUNT(*) FROM users\", \"explanation\": \"...\", \"confidence\": 0.95}"
-            }
-        }
+    Examples:
+        - ask_database("Show me top 10 customers by revenue")
+        - ask_database("Count orders by status", execute=True)
+        - ask_database("How many chats?", schema="alpha_ui", execute=True)
+        - ask_database("Average order value", database="prod", schema="sales", execute=True)
     """
     try:
-        # Detect database type automatically
+        # Resolve database
+        database_url = _resolve_database(database)
         database_type = detect_database_type(database_url)
 
-        result = await generate_sql_from_db(
-            database_url=database_url,
+        # Get cached service (fast after first call)
+        service = await _get_cached_service(database_url, database_type, schema_name=schema)
+
+        # Generate SQL from question using cached service
+        result = await service.generate_sql(
             question=question,
-            ai_provider=ai_provider,
-            api_key=api_key or get_api_key(ai_provider),
             database_type=database_type,
-            schema_filters=schema_filters,
-            embedding_provider_type=embedding_provider_type,
         )
 
         response = {
             "sql": result["sql"],
-            "confidence": result.get("confidence", 0.0),
             "explanation": result.get("explanation", ""),
-            "provider": result.get("provider", ai_provider),
-            "database_type": database_type.value,
-            "metadata": result.get("metadata", {}),
+            "confidence": result.get("confidence", 0.0),
+            "schema": schema,
         }
 
-        return json.dumps(response, indent=2)
+        # Execute query if requested
+        if execute:
+            try:
+                repository = await _get_repository(database_url, schema)
+                query_result = await repository.execute_query(
+                    sql=result["sql"],
+                    limit=min(limit, 1000),
+                )
+                response["results"] = query_result["results"]
+                response["row_count"] = query_result["row_count"]
+                response["execution_time_ms"] = query_result["execution_time_ms"]
+            except SecurityException as e:
+                response["execution_error"] = str(e)
+                response["results"] = None
+            except Exception as e:
+                response["execution_error"] = f"Failed to execute: {e}"
+                response["results"] = None
+
+        return json.dumps(response, indent=2, default=str)
+
     except Exception as e:
-        return json.dumps({"error": f"Error generating SQL: {e!s}", "error_type": type(e).__name__}, indent=2)
+        return _format_error(e, f"Question: {question}")
+
+
+# =============================================================================
+# Tool 2: explore_schema - Discover database structure
+# =============================================================================
 
 
 @mcp.tool()
-async def analyze_database_schema(
-    database_url: str,
-    ai_provider: str = "openai",
-    api_key: Optional[str] = None,
-    embedding_provider_type: str = "local",
-    schema_filters: Optional[Dict[str, Any]] = None,
+async def explore_schema(
+    database: str = "default",
+    schema: str = "public",
+    table: Optional[str] = None,
+    search: Optional[str] = None,
 ) -> str:
-    """Analyze database schema and return statistics.
+    """Explore the database schema to understand available tables and columns.
+
+    Use this tool to discover what data is available before asking questions.
 
     Args:
-        database_url: Database connection URL
-        ai_provider: AI provider to use
-        api_key: API key for the AI provider
-        embedding_provider_type: Embedding provider type ('local' or 'openai', default: 'local')
-        schema_filters: Optional filters to limit schema scope
+        database: Database alias or connection URL
+        schema: Database schema to explore (default: "public")
+        table: Get detailed info about a specific table (columns, types, keys)
+        search: Search for tables matching a pattern (e.g., "user", "order")
 
     Returns:
-        JSON string with schema statistics
+        JSON with schema information - tables list or detailed table info
 
-    Example:
-        {
-            "total_tables": 25,
-            "total_columns": 150,
-            "total_relationships": 30,
-            "schemas": ["public"],
-            "provider": "openai"
-        }
+    Examples:
+        - explore_schema()  # List all tables in public schema
+        - explore_schema(schema="alpha_ui")  # List tables in alpha_ui schema
+        - explore_schema(table="orders")  # See columns in orders table
+        - explore_schema(schema="sales", search="customer")  # Find customer tables in sales schema
     """
     try:
-        # Detect database type automatically
-        database_type = detect_database_type(database_url)
+        database_url = _resolve_database(database)
+        repository = await _get_repository(database_url, schema)
 
-        # Get or create cached service with complete cache key
-        cache_key = _create_cache_key(
-            database_url=database_url,
-            ai_provider=ai_provider,
-            schema_filters=schema_filters,
-            embedding_provider_type=embedding_provider_type,
-        )
-        if cache_key not in service_cache:
-            service = await create_and_initialize_service(
-                database_url=database_url,
-                ai_provider=ai_provider,
-                api_key=api_key or get_api_key(ai_provider),
-                database_type=database_type,
-                schema_filters=schema_filters,
-                embedding_provider_type=embedding_provider_type,
+        # Get specific table info
+        if table:
+            table_info = await repository.get_table_info(table)
+            return json.dumps(
+                {
+                    "table": table_info.name,
+                    "schema": table_info.schema,
+                    "description": table_info.description or "",
+                    "columns": [
+                        {
+                            "name": col["name"],
+                            "type": col["type"],
+                            "nullable": col.get("nullable", True),
+                            "description": col.get("description", ""),
+                        }
+                        for col in table_info.columns
+                    ],
+                    "primary_keys": table_info.primary_keys,
+                    "foreign_keys": [
+                        {
+                            "column": fk["column"],
+                            "references": f"{fk['ref_table']}.{fk['ref_column']}",
+                        }
+                        for fk in table_info.foreign_keys
+                    ],
+                    "row_count": table_info.row_count,
+                },
+                indent=2,
+                default=str,
             )
-            service_cache[cache_key] = service
+
+        # Search tables by pattern
+        if search:
+            tables = await repository.search_tables(search)
         else:
-            service = service_cache[cache_key]
+            tables = await repository.get_tables()
 
-        # Get schema statistics from repository
-        repo = service.schema_repository
-        tables = await repo.get_tables()
+        return json.dumps(
+            {
+                "database": database,
+                "schema": schema,
+                "total_tables": len(tables),
+                "tables": [
+                    {
+                        "name": t.name,
+                        "columns": len(t.columns),
+                        "description": t.description or "",
+                    }
+                    for t in tables
+                ],
+            },
+            indent=2,
+            default=str,
+        )
 
-        total_tables = len(tables)
-        total_columns = sum(len(table.columns) for table in tables)
-        total_relationships = sum(len(table.foreign_keys) for table in tables if table.foreign_keys)
-
-        schema_info = {
-            "total_tables": total_tables,
-            "total_columns": total_columns,
-            "total_relationships": total_relationships,
-            "provider": ai_provider,
-            "database_type": database_type.value,
-        }
-
-        return json.dumps(schema_info, indent=2)
     except Exception as e:
-        return json.dumps({"error": f"Error analyzing schema: {e!s}", "error_type": type(e).__name__}, indent=2)
+        return _format_error(e, f"Database: {database}, Schema: {schema}")
+
+
+# =============================================================================
+# Tool 3: run_sql - Execute SQL directly
+# =============================================================================
 
 
 @mcp.tool()
-async def explain_sql_query(
-    database_url: str,
+async def run_sql(
     sql: str,
-    ai_provider: str = "openai",
-    api_key: Optional[str] = None,
-    embedding_provider_type: str = "local",
-    schema_filters: Optional[Dict[str, Any]] = None,
+    database: str = "default",
+    schema: str = "public",
+    limit: int = 100,
 ) -> str:
-    """Explain what a SQL query does in natural language.
+    """Execute a SQL query and return results.
+
+    Use this tool when you have a specific SQL query to run.
+    Only SELECT queries are allowed for safety.
 
     Args:
-        database_url: Database connection URL
-        sql: SQL query to explain
-        ai_provider: AI provider to use
-        api_key: API key for the AI provider
-        embedding_provider_type: Embedding provider type ('local' or 'openai', default: 'local')
-        schema_filters: Optional filters to limit schema scope
+        sql: The SQL query to execute (SELECT only)
+        database: Database alias or connection URL
+        schema: Database schema context (default: "public")
+        limit: Maximum rows to return (default: 100, max: 1000)
 
     Returns:
-        JSON string with query explanation
+        JSON with query results, columns, and execution time
 
-    Example:
-        {
-            "explanation": "This query counts all active users...",
-            "sql": "SELECT COUNT(*) FROM users WHERE active = true",
-            "provider": "openai"
-        }
+    Examples:
+        - run_sql("SELECT * FROM users WHERE active = true LIMIT 10")
+        - run_sql("SELECT COUNT(*) FROM alpha_ui.chat", schema="alpha_ui")
+        - run_sql("SELECT name, email FROM customers", database="prod")
     """
     try:
-        # Detect database type automatically
+        database_url = _resolve_database(database)
+        repository = await _get_repository(database_url, schema)
+
+        result = await repository.execute_query(
+            sql=sql,
+            limit=min(limit, 1000),
+        )
+
+        return json.dumps(
+            {
+                "results": result["results"],
+                "columns": result["columns"],
+                "row_count": result["row_count"],
+                "execution_time_ms": result["execution_time_ms"],
+            },
+            indent=2,
+            default=str,
+        )
+
+    except SecurityException as e:
+        return json.dumps(
+            {
+                "error": str(e),
+                "error_type": "SecurityException",
+                "hint": "Only SELECT, WITH, and EXPLAIN queries are allowed. "
+                "INSERT, UPDATE, DELETE, DROP and other write operations are blocked.",
+            },
+            indent=2,
+        )
+    except Exception as e:
+        return _format_error(e, f"SQL: {sql[:100]}...")
+
+
+# =============================================================================
+# Tool 4: list_databases - Show available connections
+# =============================================================================
+
+
+@mcp.tool()
+async def list_databases() -> str:
+    """List all configured database connections.
+
+    Returns:
+        JSON with available database aliases and their configuration status
+
+    Example:
+        list_databases()
+    """
+    databases = []
+
+    for alias, env_var in DATABASE_ALIASES.items():
+        url = os.getenv(env_var)
+        if url:
+            # Detect database type without exposing the URL
+            try:
+                db_type = detect_database_type(url)
+                status = "configured"
+                database_type = db_type.value
+            except Exception:
+                status = "configured"
+                database_type = "unknown"
+        else:
+            status = "not_configured"
+            database_type = None
+
+        databases.append(
+            {
+                "alias": alias,
+                "status": status,
+                "type": database_type,
+                "env_var": env_var,
+            }
+        )
+
+    # Determine default
+    default_alias = None
+    for alias in ["default", "demo", "local"]:
+        if os.getenv(DATABASE_ALIASES.get(alias, "")):
+            default_alias = alias
+            break
+
+    return json.dumps(
+        {
+            "databases": databases,
+            "default": default_alias,
+            "hint": "Use database alias in other tools, e.g., ask_database(..., database='demo')",
+        },
+        indent=2,
+    )
+
+
+# =============================================================================
+# Tool 5: explain_sql - Explain what a query does
+# =============================================================================
+
+
+@mcp.tool()
+async def explain_sql(
+    sql: str,
+    database: str = "default",
+    schema: str = "public",
+) -> str:
+    """Explain what a SQL query does in plain English.
+
+    Use this tool to understand complex queries or verify generated SQL.
+
+    Args:
+        sql: The SQL query to explain
+        database: Database context for accurate explanations
+        schema: Database schema context (default: "public")
+
+    Returns:
+        JSON with plain English explanation of the query
+
+    Example:
+        explain_sql("SELECT u.name, COUNT(o.id) FROM users u LEFT JOIN orders o ON u.id = o.user_id GROUP BY u.name")
+    """
+    try:
+        database_url = _resolve_database(database)
         database_type = detect_database_type(database_url)
 
-        # Get or create cached service with complete cache key
-        cache_key = _create_cache_key(
-            database_url=database_url,
-            ai_provider=ai_provider,
-            schema_filters=schema_filters,
-            embedding_provider_type=embedding_provider_type,
-        )
-        if cache_key not in service_cache:
-            service = await create_and_initialize_service(
-                database_url=database_url,
-                ai_provider=ai_provider,
-                api_key=api_key or get_api_key(ai_provider),
-                database_type=database_type,
-                schema_filters=schema_filters,
-                embedding_provider_type=embedding_provider_type,
-            )
-            service_cache[cache_key] = service
-        else:
-            service = service_cache[cache_key]
+        # Get cached service (fast after first call)
+        service = await _get_cached_service(database_url, database_type, schema_name=schema)
 
-        # Explain the query
+        # Get explanation
         explanation = await service.explain_query(sql, database_type)
 
-        return json.dumps(explanation, indent=2)
+        return json.dumps(explanation, indent=2, default=str)
+
     except Exception as e:
-        return json.dumps({"error": f"Error explaining query: {e!s}", "error_type": type(e).__name__}, indent=2)
-
-
-@mcp.tool()
-async def nlp_to_sql(
-    database_alias: str,
-    question: str,
-    ai_provider: str = "openai",
-    schema_filters: Optional[Dict[str, Any]] = None,
-    embedding_provider_type: str = "local",
-) -> str:
-    """Convert natural language query to SQL using secure database aliases.
-
-    Args:
-        database_alias: Secure database alias (demo, local, test)
-        question: Natural language question to convert to SQL
-        ai_provider: AI provider to use (openai, anthropic, gemini)
-        schema_filters: Optional filters to limit schema scope
-        embedding_provider_type: Embedding provider type ('local' or 'openai', default: 'local')
-
-    Returns:
-        JSON string with SQL query, confidence, explanation, provider, and metadata
-
-    Example:
-        {
-            "sql": "SELECT COUNT(*) FROM users WHERE active = true",
-            "confidence": 0.92,
-            "explanation": "Counts active users",
-            "provider": "openai",
-            "database_alias": "demo",
-            "database_type": "postgres",
-            "metadata": {
-                "model": "gpt-4o-mini",
-                "finish_reason": "stop",
-                "prompt_tokens": 1150,
-                "completion_tokens": 93,
-                "raw_response": "{\"sql\": \"SELECT COUNT(*) FROM users WHERE active = true\", \"explanation\": \"...\", \"confidence\": 0.92}"
-            }
-        }
-    """
-    try:
-        database_url = get_safe_database_url(database_alias)
-
-        # Detect database type automatically
-        database_type = detect_database_type(database_url)
-
-        result = await generate_sql_from_db(
-            database_url=database_url,
-            question=question,
-            ai_provider=ai_provider,
-            api_key=get_api_key(ai_provider),
-            database_type=database_type,
-            schema_filters=schema_filters,
-            embedding_provider_type=embedding_provider_type,
-        )
-
-        response = {
-            "sql": result["sql"],
-            "confidence": result.get("confidence", 0.0),
-            "explanation": result.get("explanation", ""),
-            "provider": result.get("provider", ai_provider),
-            "database_alias": database_alias,
-            "database_type": database_type.value,
-            "metadata": result.get("metadata", {}),
-        }
-
-        return json.dumps(response, indent=2)
-    except Exception as e:
-        return json.dumps({"error": f"Error generating SQL: {e!s}", "error_type": type(e).__name__}, indent=2)
-
-
-@mcp.tool()
-async def list_database_aliases() -> str:
-    """List configured database aliases.
-
-    Returns:
-        JSON string with available database aliases
-    """
-    try:
-        env_mapping = {
-            "demo": "NLP2SQL_DEMO_DB_URL",
-            "local": "NLP2SQL_LOCAL_DB_URL",
-            "test": "NLP2SQL_TEST_DB_URL",
-        }
-
-        configured_aliases = []
-        for alias, env_var in env_mapping.items():
-            if os.getenv(env_var):
-                configured_aliases.append(alias)
-
-        response = {
-            "configured_aliases": configured_aliases,
-            "all_possible_aliases": list(env_mapping.keys()),
-        }
-
-        return json.dumps(response, indent=2)
-    except Exception as e:
-        return json.dumps({"error": f"Error listing databases: {e!s}"}, indent=2)
-
-
-@mcp.tool()
-async def analyze_schema(
-    database_alias: str,
-    ai_provider: str = "openai",
-    schema_name: str = "public",
-    schema_filters: Optional[Dict[str, Any]] = None,
-    embedding_provider_type: str = "local",
-) -> str:
-    """Analyze database schema using secure database aliases.
-
-    Args:
-        database_alias: Secure database alias (demo, local, test)
-        ai_provider: AI provider to use
-        schema_name: Database schema name to analyze (default: public)
-        schema_filters: Optional filters to limit schema scope
-        embedding_provider_type: Embedding provider type ('local' or 'openai', default: 'local')
-
-    Returns:
-        JSON string with schema statistics
-
-    Example:
-        {
-            "total_tables": 25,
-            "total_columns": 150,
-            "total_relationships": 30,
-            "table_names": ["users", "orders", "products"],
-            "schemas": ["public"],
-            "provider": "openai",
-            "database_alias": "demo",
-            "schema_name": "public"
-        }
-    """
-    try:
-        database_url = get_safe_database_url(database_alias)
-
-        # Detect database type automatically
-        database_type = detect_database_type(database_url)
-
-        # Get or create cached service with complete cache key
-        cache_key = _create_cache_key(
-            database_url=database_url,
-            ai_provider=ai_provider,
-            schema_name=schema_name,
-            schema_filters=schema_filters,
-            embedding_provider_type=embedding_provider_type,
-        )
-        if cache_key not in service_cache:
-            # For PostgreSQL, create repository with specific schema
-            if database_type == DatabaseType.POSTGRES:
-                from nlp2sql.adapters.postgres_repository import PostgreSQLRepository
-                from nlp2sql import create_query_service
-
-                repository = PostgreSQLRepository(database_url, schema_name=schema_name)
-                await repository.initialize()
-
-                # Create service with custom repository
-                service = create_query_service(
-                    database_url=database_url,
-                    ai_provider=ai_provider,
-                    api_key=get_api_key(ai_provider),
-                    database_type=database_type,
-                    schema_filters=schema_filters,
-                    embedding_provider_type=embedding_provider_type,
-                )
-                # Replace repository with schema-specific one
-                service.schema_repository = repository
-                await service.initialize(database_type)
-            else:
-                # For other database types, use standard helper
-                service = await create_and_initialize_service(
-                    database_url=database_url,
-                    ai_provider=ai_provider,
-                    api_key=get_api_key(ai_provider),
-                    database_type=database_type,
-                    schema_filters=schema_filters,
-                    embedding_provider_type=embedding_provider_type,
-                )
-            service_cache[cache_key] = service
-        else:
-            service = service_cache[cache_key]
-
-        # Get basic table information from repository
-        repo = service.schema_repository
-        tables = await repo.get_tables()
-
-        # Extract table names and statistics
-        table_names = [table.name for table in tables]
-        total_tables = len(tables)
-        total_columns = sum(len(table.columns) for table in tables)
-        total_relationships = sum(len(table.foreign_keys) for table in tables if table.foreign_keys)
-
-        schema_info = {
-            "total_tables": total_tables,
-            "total_columns": total_columns,
-            "total_relationships": total_relationships,
-            "table_names": table_names,
-            "schemas": [schema_name],
-            "provider": ai_provider,
-            "database_alias": database_alias,
-            "schema_name": schema_name,
-            "database_type": database_type.value,
-        }
-
-        return json.dumps(schema_info, indent=2)
-    except Exception as e:
-        return json.dumps({"error": f"Error analyzing schema: {e!s}", "error_type": type(e).__name__}, indent=2)
-
-
-@mcp.tool()
-async def benchmark_ai_providers(
-    database_alias: str,
-    questions: Optional[List[str]] = None,
-    providers: Optional[List[str]] = None,
-    iterations: int = 1,
-    schema_filters: Optional[Dict[str, Any]] = None,
-    embedding_provider_type: str = "local",
-) -> str:
-    """Benchmark different AI providers performance.
-
-    Args:
-        database_alias: Secure database alias (demo, local, test)
-        questions: List of questions to test (optional, uses defaults if not provided)
-        providers: List of providers to test (optional, tests all configured if not provided)
-        iterations: Number of iterations per question (default: 1)
-        schema_filters: Optional filters to limit schema scope
-        embedding_provider_type: Embedding provider type ('local' or 'openai', default: 'local')
-
-    Returns:
-        JSON string with benchmark results
-
-    Example:
-        {
-            "database_alias": "demo",
-            "total_questions": 5,
-            "iterations_per_question": 1,
-            "providers_tested": 2,
-            "best_performer": "openai",
-            "results": {...}
-        }
-    """
-    try:
-        database_url = get_safe_database_url(database_alias)
-
-        # Default test questions
-        default_questions = [
-            "Count total users",
-            "Show active customers",
-            "Find recent orders",
-            "Calculate monthly revenue",
-            "List top products",
-        ]
-
-        test_questions = questions or default_questions
-
-        # Determine providers to test
-        if providers:
-            test_providers = providers
-        else:
-            # Test all configured providers
-            test_providers = []
-            for p in ["openai", "anthropic", "gemini"]:
-                if get_api_key(p):
-                    test_providers.append(p)
-
-        if not test_providers:
-            return json.dumps({"error": "No providers configured"}, indent=2)
-
-        results = {}
-
-        for provider in test_providers:
-            provider_results = {
-                "total_time": 0,
-                "total_tokens": 0,
-                "successful_queries": 0,
-                "failed_queries": 0,
-                "avg_confidence": 0,
-                "confidences": [],
-                "errors": [],
-            }
-
-            api_key = get_api_key(provider)
-            if not api_key:
-                provider_results["errors"].append(f"API key not configured for {provider}")
-                results[provider] = provider_results
-                continue
-
-            try:
-                # Detect database type automatically
-                database_type = detect_database_type(database_url)
-
-                service = await create_and_initialize_service(
-                    database_url=database_url,
-                    ai_provider=provider,
-                    api_key=api_key,
-                    database_type=database_type,
-                    schema_filters=schema_filters,
-                    embedding_provider_type=embedding_provider_type,
-                )
-
-                for question in test_questions:
-                    for iteration in range(iterations):
-                        try:
-                            start_time = time.time()
-                            result = await service.generate_sql(question=question, database_type=database_type)
-                            end_time = time.time()
-
-                            provider_results["total_time"] += end_time - start_time
-                            provider_results["total_tokens"] += result.get("tokens_used", 0)
-                            provider_results["successful_queries"] += 1
-                            provider_results["confidences"].append(result.get("confidence", 0))
-
-                        except Exception as e:
-                            provider_results["failed_queries"] += 1
-                            provider_results["errors"].append(f"'{question}': {e!s}")
-
-                # Calculate averages
-                if provider_results["confidences"]:
-                    provider_results["avg_confidence"] = sum(provider_results["confidences"]) / len(
-                        provider_results["confidences"]
-                    )
-
-                results[provider] = provider_results
-
-            except Exception as e:
-                provider_results["errors"].append(f"Service initialization failed: {e!s}")
-                results[provider] = provider_results
-
-        # Add summary statistics
-        summary = {
-            "database_alias": database_alias,
-            "total_questions": len(test_questions),
-            "iterations_per_question": iterations,
-            "providers_tested": len(test_providers),
-            "results": results,
-        }
-
-        # Find best performer
-        if results:
-            best_provider = None
-            best_score = -1
-            for provider, stats in results.items():
-                if stats["successful_queries"] > 0:
-                    # Score based on success rate and confidence
-                    total_queries = stats["successful_queries"] + stats["failed_queries"]
-                    success_rate = stats["successful_queries"] / total_queries
-                    score = success_rate * stats["avg_confidence"]
-                    if score > best_score:
-                        best_score = score
-                        best_provider = provider
-
-            if best_provider:
-                summary["best_performer"] = best_provider
-
-        return json.dumps(summary, indent=2)
-    except Exception as e:
-        return json.dumps({"error": f"Error running benchmark: {e!s}", "error_type": type(e).__name__}, indent=2)
-
-
-@mcp.tool()
-async def generate_example_queries(
-    database_url: str,
-    topic: Optional[str] = None,
-    ai_provider: str = "openai",
-    api_key: Optional[str] = None,
-    embedding_provider_type: str = "local",
-    schema_filters: Optional[Dict[str, Any]] = None,
-) -> str:
-    """Get example queries for a database.
-
-    Args:
-        database_url: Database connection URL
-        topic: Topic or area to get examples for (optional)
-        ai_provider: AI provider to use
-        api_key: API key for the AI provider
-        embedding_provider_type: Embedding provider type ('local' or 'openai', default: 'local')
-        schema_filters: Optional filters to limit schema scope
-
-    Returns:
-        JSON string with example queries
-
-    Example:
-        {
-            "examples": [
-                {
-                    "question": "Show me all records from the main table",
-                    "sql": "SELECT * FROM users",
-                    "explanation": "Retrieves all user records"
-                }
-            ]
-        }
-    """
-    try:
-        # Generate example queries based on schema
-        examples = []
-
-        # Common query patterns
-        base_examples = [
-            "Show me all records from the main table",
-            "Count the total number of records",
-            "Find the most recent entries",
-        ]
-
-        # If topic is provided, customize examples
-        if topic:
-            base_examples = [f"{ex} related to {topic}" for ex in base_examples]
-
-        # Detect database type automatically
-        database_type = detect_database_type(database_url)
-
-        # Generate SQL for each example
-        for example in base_examples:
-            try:
-                result = await generate_sql_from_db(
-                    database_url=database_url,
-                    question=example,
-                    ai_provider=ai_provider,
-                    api_key=api_key or get_api_key(ai_provider),
-                    database_type=database_type,
-                    schema_filters=schema_filters,
-                    embedding_provider_type=embedding_provider_type,
-                )
-                examples.append(
-                    {
-                        "question": example,
-                        "sql": result["sql"],
-                        "explanation": result.get("explanation", ""),
-                    }
-                )
-            except Exception:
-                continue
-
-        return json.dumps({"examples": examples}, indent=2)
-    except Exception as e:
-        return json.dumps({"error": f"Error generating examples: {e!s}", "error_type": type(e).__name__}, indent=2)
+        return _format_error(e, f"SQL: {sql[:100]}...")
 
 
 if __name__ == "__main__":

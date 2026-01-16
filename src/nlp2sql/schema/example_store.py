@@ -4,7 +4,7 @@ import hashlib
 import pickle
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import faiss
 import numpy as np
@@ -35,6 +35,7 @@ class ExampleStore:
 
         # Use environment variable or default path
         import os
+
         examples_dir = os.getenv("NLP2SQL_EXAMPLES_DIR", "./examples_index")
         self.index_path = index_path or Path(examples_dir)
 

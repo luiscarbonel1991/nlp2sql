@@ -72,3 +72,30 @@ class SchemaRepositoryPort(ABC):
     async def get_table_sample_data(self, table_name: str, limit: int = 5) -> List[Dict[str, Any]]:
         """Get sample data from a table."""
         pass
+
+    @abstractmethod
+    async def execute_query(
+        self,
+        sql: str,
+        limit: int = 100,
+        timeout_seconds: int = 30,
+    ) -> Dict[str, Any]:
+        """Execute a read-only SQL query and return results.
+
+        Args:
+            sql: The SQL query to execute (must be SELECT/WITH/EXPLAIN)
+            limit: Maximum number of rows to return (max: 1000)
+            timeout_seconds: Query timeout in seconds (default: 30)
+
+        Returns:
+            Dictionary with:
+                - results: List of row dictionaries
+                - columns: List of column names
+                - row_count: Number of rows returned
+                - execution_time_ms: Query execution time
+
+        Raises:
+            SecurityException: If query contains prohibited operations
+            SchemaException: If query execution fails
+        """
+        pass

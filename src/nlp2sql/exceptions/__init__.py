@@ -60,3 +60,9 @@ class ConfigurationException(NLP2SQLException):
     """Exception related to configuration."""
 
     pass
+
+
+class SecurityException(NLP2SQLException):
+    """Exception for security-related violations (e.g., unsafe SQL queries)."""
+
+    pass

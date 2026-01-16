@@ -45,6 +45,7 @@ __all__ = [
     "CacheException",
     "ValidationException",
     "ConfigurationException",
+    "SecurityException",
 ]
 
 
@@ -88,18 +89,15 @@ def create_embedding_provider(
         model_name = model or settings.embedding_model
         return LocalEmbeddingAdapter(model_name=model_name)
 
-    elif provider == "openai":
+    if provider == "openai":
         from .adapters.openai_embedding_adapter import OpenAIEmbeddingAdapter
 
         api_key = api_key or settings.openai_api_key
         model_name = model or settings.openai_embedding_model
         return OpenAIEmbeddingAdapter(api_key=api_key, model=model_name)
 
-    else:
-        available_providers = ["local", "openai"]
-        raise ValueError(
-            f"Unknown embedding provider: {provider}. Available providers: {available_providers}"
-        )
+    available_providers = ["local", "openai"]
+    raise ValueError(f"Unknown embedding provider: {provider}. Available providers: {available_providers}")
 
 
 def create_query_service(
@@ -179,10 +177,12 @@ def create_query_service(
             # No explicit provider - try local silently, fallback to None if deps missing
             try:
                 from .adapters.local_embedding_adapter import LocalEmbeddingAdapter
+
                 embedding_provider = LocalEmbeddingAdapter()
             except ImportError:
                 # sentence-transformers not installed - continue without embeddings
                 import structlog
+
                 _logger = structlog.get_logger()
                 _logger.info(
                     "Local embedding provider not available (sentence-transformers not installed). "
@@ -197,6 +197,7 @@ def create_query_service(
         schema_repository=repository,
         schema_filters=schema_filters,
         embedding_provider=embedding_provider,
+        schema_name=schema_name,
     )
 
     return service
@@ -261,6 +262,7 @@ async def generate_sql_from_db(
     schema_filters: Dict[str, Any] = None,
     embedding_provider: Optional[EmbeddingProviderPort] = None,
     embedding_provider_type: Optional[str] = None,
+    schema_name: str = "public",
     **kwargs,
 ) -> Dict[str, Any]:
     """
@@ -279,6 +281,7 @@ async def generate_sql_from_db(
         embedding_provider: Optional embedding provider instance for schema search.
         embedding_provider_type: Optional embedding provider type ('local', 'openai') to auto-create.
             If None (default), no embedding provider is used (embeddings are optional).
+        schema_name: Database schema name (default: 'public')
         **kwargs: Additional arguments passed to generate_sql()
 
     Returns:
@@ -316,5 +319,6 @@ async def generate_sql_from_db(
         schema_filters,
         embedding_provider,
         embedding_provider_type,
+        schema_name,
     )
     return await service.generate_sql(question=question, database_type=database_type, **kwargs)

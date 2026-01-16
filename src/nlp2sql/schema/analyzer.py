@@ -137,7 +137,7 @@ class SchemaAnalyzer(SchemaStrategyPort):
             # Check normalized forms for singular/plural matching
             normalized_element = self._normalize_word(element_name_lower)
             normalized_query = self._normalize_word(query_lower)
-            
+
             # Check if normalized element name is in normalized query
             if normalized_element in normalized_query and len(normalized_element) >= 3:
                 scores.append(1.0)
@@ -150,15 +150,15 @@ class SchemaAnalyzer(SchemaStrategyPort):
         # 2. Partial match (fast) - with normalization for singular/plural
         query_tokens = self._tokenize(query_lower)
         element_tokens = self._tokenize(element_name_lower)
-        
+
         # Normalize tokens for better matching (handles singular/plural)
         normalized_query_tokens = {self._normalize_word(t) for t in query_tokens}
         normalized_element_tokens = {self._normalize_word(t) for t in element_tokens}
-        
+
         # Check both exact token match and normalized token match
         common_tokens = set(query_tokens) & set(element_tokens)
         common_normalized_tokens = normalized_query_tokens & normalized_element_tokens
-        
+
         if common_tokens or common_normalized_tokens:
             # Use the better match (exact tokens are preferred, but normalized also counts)
             match_count = max(len(common_tokens), len(common_normalized_tokens))
@@ -327,27 +327,27 @@ class SchemaAnalyzer(SchemaStrategyPort):
     def _normalize_word(self, word: str) -> str:
         """
         Normalize word by removing common plural endings to match singular/plural forms.
-        
+
         Examples:
             "organizations" -> "organization"
             "companies" -> "compani" -> "company" (handled by common patterns)
             "categories" -> "categori" -> "category"
         """
         word_lower = word.lower().strip()
-        
+
         # Common plural patterns (order matters - check longer patterns first)
         plural_patterns = [
-            ("ies", "y"),      # categories -> category
-            ("es", ""),        # boxes -> box, organizations -> organization
-            ("s", ""),         # organizations -> organization, users -> user
+            ("ies", "y"),  # categories -> category
+            ("es", ""),  # boxes -> box, organizations -> organization
+            ("s", ""),  # organizations -> organization, users -> user
         ]
-        
+
         for plural_end, singular_end in plural_patterns:
             if word_lower.endswith(plural_end) and len(word_lower) > len(plural_end) + 2:
                 # Only remove plural if word is long enough (avoid removing 's' from 'is', 'as', etc.)
-                normalized = word_lower[:-len(plural_end)] + singular_end
+                normalized = word_lower[: -len(plural_end)] + singular_end
                 return normalized
-        
+
         return word_lower
 
     def _tokenize(self, text: str) -> List[str]:

@@ -53,8 +53,33 @@ class OpenAIEmbeddingAdapter(EmbeddingProviderPort):
         Raises:
             ProviderException: If API call fails
         """
+        # Validate input
+        if not texts:
+            logger.warning("Empty texts list provided to encode, returning empty array")
+            dim = self.get_embedding_dimension()
+            return np.array([]).reshape(0, dim)
+
+        # Process texts but preserve array length for 1:1 mapping with caller's data
+        # NOTE: We do NOT filter here - filtering is done by the caller (embedding_manager)
+        # to ensure the returned embeddings array has the same length as the input.
+        # This maintains consistency with local_embedding_adapter behavior.
+        processed_texts = []
+        for text in texts:
+            if text is None:
+                # Replace None with a placeholder that produces a valid embedding
+                logger.warning("None value found in texts list, using placeholder")
+                processed_texts.append(" ")  # Single space - minimal valid input
+            elif not isinstance(text, str):
+                processed_texts.append(str(text))
+            elif not text.strip():
+                # Empty/whitespace string - use placeholder
+                logger.warning("Empty string found in texts list, using placeholder")
+                processed_texts.append(" ")  # Single space - minimal valid input
+            else:
+                processed_texts.append(text)
+
         try:
-            response = await self.client.embeddings.create(model=self.model, input=texts)
+            response = await self.client.embeddings.create(model=self.model, input=processed_texts)
 
             # Extract embeddings from response
             embeddings = [item.embedding for item in response.data]
@@ -71,7 +96,7 @@ class OpenAIEmbeddingAdapter(EmbeddingProviderPort):
             logger.debug(
                 "OpenAI embeddings generated and normalized",
                 model=self.model,
-                texts_count=len(texts),
+                texts_count=len(processed_texts),
                 dimension=normalized_embeddings.shape[1],
             )
 

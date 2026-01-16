@@ -21,6 +21,47 @@ from ..ports.embedding_provider import EmbeddingProviderPort
 logger = structlog.get_logger()
 
 
+def _get_embeddings_directory() -> Path:
+    """Get writable embeddings directory with fallback chain.
+
+    Tries directories in order:
+    1. NLP2SQL_EMBEDDINGS_DIR environment variable (explicit user config)
+    2. ./embeddings (development default, tests writability)
+    3. /tmp/nlp2sql_embeddings (containerized/sandboxed fallback)
+
+    This ensures the MCP server works in containerized environments like
+    Claude Desktop where the current directory may be read-only.
+
+    Returns:
+        Path to a writable embeddings directory
+    """
+    # Try explicit config first
+    explicit_dir = os.getenv("NLP2SQL_EMBEDDINGS_DIR")
+    if explicit_dir:
+        return Path(explicit_dir)
+
+    # Try ./embeddings (development default)
+    local_dir = Path("./embeddings")
+    try:
+        local_dir.mkdir(parents=True, exist_ok=True)
+        # Test if writable by creating and removing a test file
+        test_file = local_dir / ".write_test"
+        test_file.touch()
+        test_file.unlink()
+        return local_dir
+    except (OSError, PermissionError):
+        pass
+
+    # Fallback to /tmp for containerized environments
+    tmp_dir = Path("/tmp/nlp2sql_embeddings")
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    logger.info(
+        "Using /tmp fallback for embeddings directory (current directory not writable)",
+        path=str(tmp_dir),
+    )
+    return tmp_dir
+
+
 class SchemaEmbeddingManager:
     """Manages embeddings for schema elements with FAISS indexing."""
 
@@ -31,6 +72,7 @@ class SchemaEmbeddingManager:
         embedding_model: str = "all-MiniLM-L6-v2",
         cache: Optional[CachePort] = None,
         index_path: Optional[Path] = None,
+        schema_name: str = "public",
     ):
         """
         Initialize schema embedding manager.
@@ -41,6 +83,7 @@ class SchemaEmbeddingManager:
             embedding_model: Model name for local adapter (unused, kept for API compatibility).
             cache: Optional cache port for caching results
             index_path: Optional custom path for index storage
+            schema_name: Database schema name (default: "public"). Used to isolate embeddings per schema.
 
         Note:
             If embedding_provider is None, the manager will work but search_similar() will
@@ -48,6 +91,7 @@ class SchemaEmbeddingManager:
             (using text-based matching only in SchemaAnalyzer).
         """
         self.embedding_provider = embedding_provider
+        self.schema_name = schema_name
 
         if embedding_provider is None:
             logger.info(
@@ -57,12 +101,14 @@ class SchemaEmbeddingManager:
 
         self.cache = cache
 
-        # Create a unique directory for each database
-        db_hash = hashlib.md5(database_url.encode()).hexdigest()
+        # Create a unique directory for each database+schema combination
+        # This prevents embeddings from different schemas being mixed together
+        index_key = f"{database_url}:{schema_name}"
+        db_hash = hashlib.md5(index_key.encode()).hexdigest()
 
-        # Use environment variable for embeddings directory, fallback to ./embeddings
-        embeddings_dir = os.getenv("NLP2SQL_EMBEDDINGS_DIR", "./embeddings")
-        self.index_path = (index_path or Path(embeddings_dir)) / db_hash
+        # Get embeddings directory with fallback chain for containerized environments
+        embeddings_dir = _get_embeddings_directory()
+        self.index_path = (index_path or embeddings_dir) / db_hash
 
         try:
             self.index_path.mkdir(parents=True, exist_ok=True)
@@ -95,7 +141,7 @@ class SchemaEmbeddingManager:
                 with open(metadata_file, "rb") as f:
                     metadata = pickle.load(f)
                     provider_dim = self.embedding_provider.get_embedding_dimension()
-                    
+
                     # Use provider dimension, not stored dimension
                     # This ensures we detect mismatches correctly
                     self.embedding_dim = provider_dim
@@ -121,7 +167,7 @@ class SchemaEmbeddingManager:
                 self.id_to_schema = metadata["id_to_schema"]
                 self.schema_to_id = metadata["schema_to_id"]
                 self._next_id = metadata["next_id"]
-                
+
                 # Load TF-IDF data if available
                 if "tfidf_vectorizer" in metadata:
                     self.tfidf_vectorizer = metadata["tfidf_vectorizer"]
@@ -184,8 +230,11 @@ class SchemaEmbeddingManager:
             logger.debug("Skipping schema element indexing - no embedding provider")
             return
 
+        # Phase 1: Collect elements without storing mappings yet
+        # This prevents orphan mappings if embedding validation fails
         new_elements = []
         descriptions = []
+        element_keys = []  # Track keys for later mapping storage
 
         for element in elements:
             # Create unique key
@@ -194,36 +243,69 @@ class SchemaEmbeddingManager:
             if element_key not in self.schema_to_id:
                 # Create description for embedding
                 description = self._create_element_description(element)
+
+                # Skip elements with empty or invalid descriptions
+                is_invalid = not description or not isinstance(description, str) or not description.strip()
+                if is_invalid:
+                    logger.warning(
+                        "Skipping element with invalid description",
+                        element_key=element_key,
+                        description=description,
+                    )
+                    continue
+
                 descriptions.append(description)
                 new_elements.append(element)
+                element_keys.append(element_key)  # Store key for later
 
-                # Store mapping
-                self.id_to_schema[self._next_id] = {
-                    "element": element,
-                    "database_type": database_type.value,
-                    "key": element_key,
-                    "description": description,
-                    "indexed_at": datetime.now().isoformat(),
-                }
-                self.schema_to_id[element_key] = self._next_id
-                self._next_id += 1
+        if not new_elements or not descriptions:
+            return
 
-        if new_elements:
-            # Create embeddings using provider
-            embeddings = await self.embedding_provider.encode(descriptions)
+        # Phase 2: Generate embeddings and validate BEFORE storing any mappings
+        embeddings = await self.embedding_provider.encode(descriptions)
 
-            # Add to FAISS index
-            self.index.add(np.array(embeddings, dtype=np.float32))
-
-            # Update TF-IDF index
-            self._update_tfidf_index(descriptions)
-
-            # Save index
-            await self._save_index()
-
-            logger.info(
-                "Added schema elements to index", new_elements=len(new_elements), total_elements=len(self.id_to_schema)
+        # Validate embeddings - if validation fails, no mappings were stored (no orphans)
+        if embeddings.size == 0:
+            logger.warning(
+                "No embeddings generated, skipping index update",
+                elements_count=len(new_elements),
+                descriptions_count=len(descriptions),
             )
+            return
+
+        if len(embeddings) != len(new_elements):
+            logger.error(
+                "Mismatch between embeddings and elements",
+                embeddings_count=len(embeddings),
+                elements_count=len(new_elements),
+            )
+            return
+
+        # Phase 3: Store mappings ONLY after embeddings are validated
+        # This ensures mappings and FAISS index stay in sync
+        for element, element_key, description in zip(new_elements, element_keys, descriptions):
+            self.id_to_schema[self._next_id] = {
+                "element": element,
+                "database_type": database_type.value,
+                "key": element_key,
+                "description": description,
+                "indexed_at": datetime.now().isoformat(),
+            }
+            self.schema_to_id[element_key] = self._next_id
+            self._next_id += 1
+
+        # Phase 4: Add to FAISS index (mappings already stored)
+        self.index.add(np.array(embeddings, dtype=np.float32))
+
+        # Update TF-IDF index
+        self._update_tfidf_index(descriptions)
+
+        # Save index
+        await self._save_index()
+
+        logger.info(
+            "Added schema elements to index", new_elements=len(new_elements), total_elements=len(self.id_to_schema)
+        )
 
     async def search_similar(
         self, query: str, top_k: int = 10, database_type: Optional[DatabaseType] = None, min_score: float = 0.3
@@ -267,11 +349,11 @@ class SchemaEmbeddingManager:
                 query_vec = self.tfidf_vectorizer.transform([query])
                 # Calculate cosine similarity between query and all docs
                 sparse_scores = cosine_similarity(query_vec, self.tfidf_matrix).flatten()
-                
+
                 # Get top sparse results
                 # We look at all docs because sparse search is fast
                 sparse_indices = sparse_scores.argsort()[::-1][:k]
-                
+
                 for idx in sparse_indices:
                     score = float(sparse_scores[idx])
                     if score > 0:
@@ -291,20 +373,20 @@ class SchemaEmbeddingManager:
         # are properly ranked even when dense embeddings favor other tables
         alpha = 0.5
         final_results = []
-        
+
         for idx, data in candidates.items():
             schema_info = self.id_to_schema[idx]
-            
+
             # Filter by database type if specified
             if database_type and schema_info["database_type"] != database_type.value:
                 continue
 
             # Calculate hybrid score
             hybrid_score = (data["dense_score"] * alpha) + (data["sparse_score"] * (1 - alpha))
-            
+
             if hybrid_score < min_score:
                 continue
-                
+
             final_results.append((schema_info["element"], hybrid_score))
 
         # Sort by hybrid score
@@ -463,7 +545,7 @@ class SchemaEmbeddingManager:
         """Update TF-IDF index with new texts."""
         # Append new texts
         self.tfidf_texts.extend(new_texts)
-        
+
         # Re-fit vectorizer on all texts
         # Note: For very large schemas, this might be slow and need optimization
         # (e.g., incremental fitting or batching), but for <100k elements it's fine.
@@ -471,8 +553,8 @@ class SchemaEmbeddingManager:
             self.tfidf_vectorizer = TfidfVectorizer(
                 analyzer="word",
                 ngram_range=(1, 2),  # Use unigrams and bigrams
-                min_df=1,            # Include terms that appear even once
-                stop_words="english"
+                min_df=1,  # Include terms that appear even once
+                stop_words="english",
             )
             self.tfidf_matrix = self.tfidf_vectorizer.fit_transform(self.tfidf_texts)
 
@@ -482,7 +564,7 @@ class SchemaEmbeddingManager:
         self.id_to_schema = {}
         self.schema_to_id = {}
         self._next_id = 0
-        
+
         # Clear TF-IDF
         self.tfidf_vectorizer = None
         self.tfidf_matrix = None
