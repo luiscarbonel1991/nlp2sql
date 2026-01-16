@@ -387,6 +387,50 @@ uv run mypy src/
 | **Enterprise CLI** | Professional | Basic/None |
 | **Docker Setup** | Production-ready | Manual |
 
+## MCP Server (AI Assistant Integration)
+
+nlp2sql includes a [Model Context Protocol](https://modelcontextprotocol.io/) server for integration with AI assistants like Claude.
+
+### Quick Setup
+
+Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "nlp2sql": {
+      "command": "python",
+      "args": ["/path/to/nlp2sql/mcp_server/server.py"],
+      "env": {
+        "OPENAI_API_KEY": "${OPENAI_API_KEY}",
+        "NLP2SQL_DEFAULT_DB_URL": "postgresql://user:pass@localhost:5432/mydb"
+      }
+    }
+  }
+}
+```
+
+### Available Tools
+
+| Tool | Description |
+|------|-------------|
+| `ask_database` | Ask questions in natural language, get SQL with optional execution |
+| `explore_schema` | Discover tables and columns |
+| `run_sql` | Execute SQL queries (read-only, secure) |
+| `list_databases` | List configured database connections |
+| `explain_sql` | Explain SQL queries in plain English |
+
+### Example Usage
+
+```
+# In Claude chat:
+"How many customers do we have?" → ask_database with execute=True
+"Show me the orders table structure" → explore_schema(table="orders")
+"Run this query: SELECT COUNT(*) FROM users" → run_sql
+```
+
+See [MCP Server Documentation](mcp_server/README.md) for complete setup and usage guide.
+
 ## Migration from Other Frameworks
 
 Coming from other NLP-to-SQL frameworks? nlp2sql provides:

@@ -95,7 +95,7 @@ class SchemaEmbeddingManager:
                 with open(metadata_file, "rb") as f:
                     metadata = pickle.load(f)
                     provider_dim = self.embedding_provider.get_embedding_dimension()
-                    
+
                     # Use provider dimension, not stored dimension
                     # This ensures we detect mismatches correctly
                     self.embedding_dim = provider_dim
@@ -121,7 +121,7 @@ class SchemaEmbeddingManager:
                 self.id_to_schema = metadata["id_to_schema"]
                 self.schema_to_id = metadata["schema_to_id"]
                 self._next_id = metadata["next_id"]
-                
+
                 # Load TF-IDF data if available
                 if "tfidf_vectorizer" in metadata:
                     self.tfidf_vectorizer = metadata["tfidf_vectorizer"]
@@ -194,6 +194,17 @@ class SchemaEmbeddingManager:
             if element_key not in self.schema_to_id:
                 # Create description for embedding
                 description = self._create_element_description(element)
+
+                # Skip elements with empty or invalid descriptions
+                is_invalid = not description or not isinstance(description, str) or not description.strip()
+                if is_invalid:
+                    logger.warning(
+                        "Skipping element with invalid description",
+                        element_key=element_key,
+                        description=description,
+                    )
+                    continue
+
                 descriptions.append(description)
                 new_elements.append(element)
 
@@ -208,9 +219,35 @@ class SchemaEmbeddingManager:
                 self.schema_to_id[element_key] = self._next_id
                 self._next_id += 1
 
-        if new_elements:
+        if new_elements and descriptions:
+            # Validate that we have valid descriptions before encoding
+            if len(descriptions) != len(new_elements):
+                logger.error(
+                    "Mismatch between descriptions and elements",
+                    descriptions_count=len(descriptions),
+                    elements_count=len(new_elements),
+                )
+                return
+
             # Create embeddings using provider
             embeddings = await self.embedding_provider.encode(descriptions)
+
+            # Validate embeddings before adding to index
+            if embeddings.size == 0:
+                logger.warning(
+                    "No embeddings generated, skipping index update",
+                    elements_count=len(new_elements),
+                    descriptions_count=len(descriptions),
+                )
+                return
+
+            if len(embeddings) != len(new_elements):
+                logger.error(
+                    "Mismatch between embeddings and elements",
+                    embeddings_count=len(embeddings),
+                    elements_count=len(new_elements),
+                )
+                return
 
             # Add to FAISS index
             self.index.add(np.array(embeddings, dtype=np.float32))
@@ -267,11 +304,11 @@ class SchemaEmbeddingManager:
                 query_vec = self.tfidf_vectorizer.transform([query])
                 # Calculate cosine similarity between query and all docs
                 sparse_scores = cosine_similarity(query_vec, self.tfidf_matrix).flatten()
-                
+
                 # Get top sparse results
                 # We look at all docs because sparse search is fast
                 sparse_indices = sparse_scores.argsort()[::-1][:k]
-                
+
                 for idx in sparse_indices:
                     score = float(sparse_scores[idx])
                     if score > 0:
@@ -291,20 +328,20 @@ class SchemaEmbeddingManager:
         # are properly ranked even when dense embeddings favor other tables
         alpha = 0.5
         final_results = []
-        
+
         for idx, data in candidates.items():
             schema_info = self.id_to_schema[idx]
-            
+
             # Filter by database type if specified
             if database_type and schema_info["database_type"] != database_type.value:
                 continue
 
             # Calculate hybrid score
             hybrid_score = (data["dense_score"] * alpha) + (data["sparse_score"] * (1 - alpha))
-            
+
             if hybrid_score < min_score:
                 continue
-                
+
             final_results.append((schema_info["element"], hybrid_score))
 
         # Sort by hybrid score
@@ -463,7 +500,7 @@ class SchemaEmbeddingManager:
         """Update TF-IDF index with new texts."""
         # Append new texts
         self.tfidf_texts.extend(new_texts)
-        
+
         # Re-fit vectorizer on all texts
         # Note: For very large schemas, this might be slow and need optimization
         # (e.g., incremental fitting or batching), but for <100k elements it's fine.
@@ -471,8 +508,8 @@ class SchemaEmbeddingManager:
             self.tfidf_vectorizer = TfidfVectorizer(
                 analyzer="word",
                 ngram_range=(1, 2),  # Use unigrams and bigrams
-                min_df=1,            # Include terms that appear even once
-                stop_words="english"
+                min_df=1,  # Include terms that appear even once
+                stop_words="english",
             )
             self.tfidf_matrix = self.tfidf_vectorizer.fit_transform(self.tfidf_texts)
 
@@ -482,7 +519,7 @@ class SchemaEmbeddingManager:
         self.id_to_schema = {}
         self.schema_to_id = {}
         self._next_id = 0
-        
+
         # Clear TF-IDF
         self.tfidf_vectorizer = None
         self.tfidf_matrix = None

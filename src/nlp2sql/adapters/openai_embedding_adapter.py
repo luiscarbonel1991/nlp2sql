@@ -53,8 +53,32 @@ class OpenAIEmbeddingAdapter(EmbeddingProviderPort):
         Raises:
             ProviderException: If API call fails
         """
+        # Validate input
+        if not texts:
+            logger.warning("Empty texts list provided to encode, returning empty array")
+            dim = self.get_embedding_dimension()
+            return np.array([]).reshape(0, dim)
+
+        # Filter out None, empty strings, and ensure all are strings
+        valid_texts = []
+        for text in texts:
+            if text is None:
+                logger.warning("None value found in texts list, skipping")
+                continue
+            if not isinstance(text, str):
+                text = str(text)
+            if text.strip():  # Only add non-empty strings
+                valid_texts.append(text)
+            else:
+                logger.warning("Empty string found in texts list, skipping")
+
+        if not valid_texts:
+            logger.warning("No valid texts after filtering, returning empty array")
+            dim = self.get_embedding_dimension()
+            return np.array([]).reshape(0, dim)
+
         try:
-            response = await self.client.embeddings.create(model=self.model, input=texts)
+            response = await self.client.embeddings.create(model=self.model, input=valid_texts)
 
             # Extract embeddings from response
             embeddings = [item.embedding for item in response.data]

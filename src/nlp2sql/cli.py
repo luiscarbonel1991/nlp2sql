@@ -3,7 +3,6 @@
 import asyncio
 import json
 import os
-import shutil
 import sys
 import time
 from pathlib import Path
@@ -60,15 +59,14 @@ def detect_database_type(database_url: str) -> DatabaseType:
     """Detect database type from connection URL."""
     if database_url.startswith("postgresql://"):
         return DatabaseType.POSTGRES
-    elif database_url.startswith("redshift://"):
+    if database_url.startswith("redshift://"):
         return DatabaseType.REDSHIFT
-    elif database_url.startswith("mysql://"):
+    if database_url.startswith("mysql://"):
         return DatabaseType.MYSQL
-    elif database_url.startswith("sqlite://"):
+    if database_url.startswith("sqlite://"):
         return DatabaseType.SQLITE
-    else:
-        # Default to PostgreSQL for compatibility
-        return DatabaseType.POSTGRES
+    # Default to PostgreSQL for compatibility
+    return DatabaseType.POSTGRES
 
 
 def validate_database_url(ctx, param, value):
@@ -118,10 +116,10 @@ def config(ctx):
 
     click.echo("[CONFIG] Current Configuration")
     click.echo("=" * 25)
-    click.echo(f"Verbose mode: {'Enabled' if verbose else 'Disabled'}")
+    click.echo(f"Verbose mode: {'✅' if verbose else '❌'}")
     click.echo(f"Config file: {config_path}")
 
-    click.echo("\nAPI Keys Status:")
+    click.echo("\n🔑 API Keys Status:")
     api_keys = {
         "OpenAI": os.getenv("OPENAI_API_KEY"),
         "Anthropic": os.getenv("ANTHROPIC_API_KEY"),
@@ -215,19 +213,20 @@ def inspect(
         try:
             # Detect database type and create appropriate repository
             database_type = detect_database_type(database_url)
-            
+
             if verbose:
                 click.echo(f"[DATABASE] Detected database type: {database_type.value}")
-            
+
             if database_type == DatabaseType.POSTGRES:
                 repo = PostgreSQLRepository(database_url, schema)
             elif database_type == DatabaseType.REDSHIFT:
                 from .adapters.redshift_adapter import RedshiftRepository
+
                 repo = RedshiftRepository(database_url, schema)
             else:
                 click.echo(f"[ERROR] Database type {database_type.value} not supported for inspection yet", err=True)
                 sys.exit(1)
-                
+
             await repo.initialize()
 
             # Get schema information
@@ -324,7 +323,7 @@ def query(
             if verbose:
                 click.echo(f"[CONFIG] Using provider: {provider}")
                 click.echo(f"[CONFIG] Embedding provider: {embedding_provider}")
-                click.echo(f"Temperature: {temperature}")
+                click.echo(f"🌡️  Temperature: {temperature}")
                 click.echo(f"📏 Max tokens: {max_tokens}")
 
             # Parse schema filters if provided
@@ -353,7 +352,7 @@ def query(
 
             # Detect database type from URL
             database_type = detect_database_type(database_url)
-            
+
             if verbose:
                 click.echo(f"[DATABASE] Detected database type: {database_type.value}")
 
@@ -385,74 +384,22 @@ def query(
                 include_explanation=explain,
             )
 
-            # Get actual embedding provider used
-            actual_embedding_provider = "none"
-            if service.schema_manager.embedding_provider:
-                actual_embedding_provider = service.schema_manager.embedding_provider.provider_type
-            elif embedding_provider != "none":
-                actual_embedding_provider = "auto-detected (none available)"
-            
             # Output results
-            click.echo(f"Question: {question}")
-            click.echo(f"SQL: {result['sql']}")
-            click.echo()
-            
-            # Analysis section
-            click.echo("Analysis:")
-            click.echo(f"  Provider: {provider.title()}")
-            click.echo(f"  Embedding Provider: {actual_embedding_provider}")
-            click.echo(f"  Confidence: {result['confidence']:.2f}")
-            click.echo(f"  Tokens Used: {result['tokens_used']}")
-            
-            if "generation_time_ms" in result:
-                click.echo(f"  Generation Time: {result['generation_time_ms']:.0f}ms")
-            
-            if "schema_context_length" in result:
-                click.echo(f"  Schema Context Length: {result['schema_context_length']} chars")
-            
-            if "examples_used" in result:
-                click.echo(f"  Examples Used: {result['examples_used']}")
-            
-            if "metadata" in result and result["metadata"]:
-                metadata = result["metadata"]
-                if "model" in metadata:
-                    click.echo(f"  Model: {metadata['model']}")
-                if "finish_reason" in metadata:
-                    click.echo(f"  Finish Reason: {metadata['finish_reason']}")
-                # Handle different token naming conventions
-                if "prompt_tokens" in metadata:
-                    click.echo(f"  Prompt Tokens: {metadata['prompt_tokens']}")
-                elif "input_tokens" in metadata:
-                    click.echo(f"  Input Tokens: {metadata['input_tokens']}")
-                if "completion_tokens" in metadata:
-                    click.echo(f"  Completion Tokens: {metadata['completion_tokens']}")
-                elif "output_tokens" in metadata:
-                    click.echo(f"  Output Tokens: {metadata['output_tokens']}")
-            
-            # Show raw response in verbose mode
-            if verbose and "metadata" in result and result["metadata"]:
-                metadata = result["metadata"]
-                click.echo()
-                click.echo("Raw Response Details:")
-                if "raw_response" in metadata:
-                    click.echo(f"  Raw Response: {metadata['raw_response']}")
-                if "finish_reason" in metadata:
-                    click.echo(f"  Finish Reason: {metadata['finish_reason']}")
-            
-            click.echo()
+            click.echo(f"❓ Question: {question}")
+            click.echo(f"AI: Provider: {provider.title()}")
+            click.echo(f"Note: SQL: {result['sql']}")
+            click.echo(f"[STATS] Confidence: {result['confidence']}")
+            click.echo(f"[PERF] Tokens used: {result['tokens_used']}")
 
-            if explain and "explanation" in result and result["explanation"]:
-                click.echo(f"Explanation: {result['explanation']}")
-                click.echo()
+            if explain and "explanation" in result:
+                click.echo(f"Hint: Explanation: {result['explanation']}")
 
             if "validation" in result:
                 validation = result["validation"]
                 if validation["is_valid"]:
-                    click.echo("SQL Validation: Passed")
+                    click.echo("[OK] SQL validation: Passed")
                 else:
-                    click.echo(f"SQL Validation: Failed")
-                    if validation.get("issues"):
-                        click.echo(f"  Issues: {validation['issues']}")
+                    click.echo(f"[WARNING] SQL validation issues: {validation.get('issues', [])}")
 
         except ProviderException as e:
             click.echo(f"[ERROR] Provider Error: {e!s}", err=True)
@@ -460,37 +407,22 @@ def query(
                 click.echo(f"   Provider: {e.provider}", err=True)
             if hasattr(e, "status_code"):
                 click.echo(f"   Status Code: {e.status_code}", err=True)
-            if verbose:
-                import traceback
-                click.echo("\nFull traceback:", err=True)
-                click.echo(traceback.format_exc(), err=True)
-            elif hasattr(e, "details"):
+            if verbose and hasattr(e, "details"):
                 click.echo(f"   Details: {e.details}", err=True)
             sys.exit(1)
 
         except NLP2SQLException as e:
             click.echo(f"[ERROR] Application Error: {e!s}", err=True)
-            
-            if verbose:
-                import traceback
-                click.echo("\nFull traceback:", err=True)
-                click.echo(traceback.format_exc(), err=True)
-            elif hasattr(e, "details"):
+            if verbose and hasattr(e, "details"):
                 click.echo(f"   Details: {e.details}", err=True)
-            
-            if not verbose and e.__cause__:
-                click.echo(f"   Hint: {e.__cause__!s}", err=True)
-                click.echo("   Use --verbose for full traceback", err=True)
-            
             sys.exit(1)
 
         except Exception as e:
             click.echo(f"[ERROR] An unexpected error occurred: {e!s}", err=True)
-            
-            import traceback
-            click.echo("\nTraceback:", err=True)
-            click.echo(traceback.format_exc(), err=True)
-            
+            if verbose:
+                import traceback
+
+                click.echo(traceback.format_exc(), err=True)
             sys.exit(1)
 
     asyncio.run(_query())
@@ -512,7 +444,7 @@ def setup(ctx):
         "Google": os.getenv("GOOGLE_API_KEY"),
     }
 
-    click.echo("\nAPI Keys Status:")
+    click.echo("\n🔑 API Keys Status:")
     available_providers = []
 
     for provider, key in api_keys.items():
@@ -547,7 +479,7 @@ def setup(ctx):
 
 async def _test_providers(providers: list, verbose: bool = False):
     """Test API providers."""
-    click.echo("\nTesting API providers...")
+    click.echo("\n🧪 Testing API providers...")
 
     for provider in providers:
         if verbose:
@@ -620,7 +552,7 @@ def validate(ctx):
         "gemini": os.getenv("GOOGLE_API_KEY"),
     }
 
-    click.echo("\nTesting API Keys...")
+    click.echo("\n🔑 Testing API Keys...")
     working_providers = []
 
     for provider, key in api_keys.items():
@@ -752,7 +684,7 @@ def providers_test(provider):
             click.echo("[ERROR] No providers configured or specified")
             return
 
-        click.echo("Testing AI Providers")
+        click.echo("🧪 Testing AI Providers")
         click.echo("=" * 25)
 
         for p in providers_to_test:
@@ -850,17 +782,17 @@ def benchmark(
             click.echo("[ERROR] No providers configured", err=True)
             return
 
-        click.echo("nlp2sql Provider Benchmark")
+        click.echo("🏁 nlp2sql Provider Benchmark")
         click.echo("=" * 35)
-        click.echo(f"Testing {len(test_providers)} providers")
-        click.echo(f"Questions: {len(test_questions)}")
+        click.echo(f"[STATS] Testing {len(test_providers)} providers")
+        click.echo(f"❓ {len(test_questions)} questions")
         click.echo(f"🔄 {iterations} iterations each")
         click.echo()
 
         results = {}
 
         for provider in test_providers:
-            click.echo(f"Testing {provider.title()}...")
+            click.echo(f"🧪 Testing {provider.title()}...")
             provider_results = {
                 "total_time": 0,
                 "total_tokens": 0,
@@ -931,8 +863,8 @@ def benchmark(
 
                 click.echo(f"\nAI: {provider.title()}:")
                 click.echo(f"   [OK] Success rate: {success_rate:.1f}%")
-                click.echo(f"   Avg response time: {avg_time:.2f}s")
-                click.echo(f"   Avg confidence: {stats['avg_confidence']:.2f}")
+                click.echo(f"   ⏱️  Avg response time: {avg_time:.2f}s")
+                click.echo(f"   🎯 Avg confidence: {stats['avg_confidence']:.2f}")
                 click.echo(f"   [PERF] Total tokens: {stats['total_tokens']:,}")
 
             # Find the best performer
@@ -974,40 +906,24 @@ def cache_clear(clear_all: bool, embeddings: bool, queries: bool):
         embeddings = queries = True
 
     if embeddings:
-        click.echo("Clearing embeddings cache...")
-        
-        # Clear the entire embeddings directory and all subdirectories
-        if embeddings_dir.exists():
-            # Remove all subdirectories (each DB hash directory)
-            for item in embeddings_dir.iterdir():
-                if item.is_dir():
-                    try:
-                        shutil.rmtree(item)
-                        cleared.append(str(item))
-                    except Exception as e:
-                        click.echo(f"   [WARNING] Failed to remove {item}: {e}", err=True)
-                elif item.is_file():
-                    try:
-                        item.unlink()
-                        cleared.append(str(item))
-                    except Exception as e:
-                        click.echo(f"   [WARNING] Failed to remove {item}: {e}", err=True)
-        
-        # Also check for legacy files in current directory
-        for path in ["schema_embeddings.pkl", "schema_index.faiss"]:
-            legacy_path = Path(path)
-            if legacy_path.exists():
-                try:
-                    legacy_path.unlink()
-                    cleared.append(path)
-                except Exception as e:
-                    click.echo(f"   [WARNING] Failed to remove {path}: {e}", err=True)
+        click.echo("🗑️  Clearing embeddings cache...")
+        for path in cache_paths["embeddings"]:
+            if Path(path).exists():
+                if Path(path).is_dir():
+                    import shutil
+
+                    shutil.rmtree(path)
+                else:
+                    Path(path).unlink()
+                cleared.append(path)
 
     if queries:
-        click.echo("Clearing query cache...")
+        click.echo("🗑️  Clearing query cache...")
         for path in cache_paths["queries"]:
             if Path(path).exists():
                 if Path(path).is_dir():
+                    import shutil
+
                     shutil.rmtree(path)
                 else:
                     Path(path).unlink()
@@ -1016,7 +932,7 @@ def cache_clear(clear_all: bool, embeddings: bool, queries: bool):
     if cleared:
         click.echo(f"[OK] Cleared: {', '.join(cleared)}")
     else:
-        click.echo("No cache files found to clear")
+        click.echo("ℹ️  No cache files found to clear")
 
 
 @cache.command("info")
@@ -1030,19 +946,19 @@ def cache_info():
     if embeddings_path.exists():
         size = sum(f.stat().st_size for f in embeddings_path.rglob("*") if f.is_file())
         files = len([f for f in embeddings_path.rglob("*") if f.is_file()])
-        click.echo("Embeddings cache:")
-        click.echo(f"   Location: {embeddings_path.absolute()}")
-        click.echo(f"   Size: {size / 1024 / 1024:.2f} MB")
-        click.echo(f"   Files: {files}")
+        click.echo("🧠 Embeddings cache:")
+        click.echo(f"   📁 Location: {embeddings_path.absolute()}")
+        click.echo(f"   [STATS] Size: {size / 1024 / 1024:.2f} MB")
+        click.echo(f"   📄 Files: {files}")
     else:
-        click.echo("Embeddings cache: Not found")
+        click.echo("🧠 Embeddings cache: Not found")
 
     # Check FAISS index
     faiss_path = Path("schema_index.faiss")
     if faiss_path.exists():
         size = faiss_path.stat().st_size
         click.echo("Info: FAISS index:")
-        click.echo(f"   Location: {faiss_path.absolute()}")
+        click.echo(f"   📁 Location: {faiss_path.absolute()}")
         click.echo(f"   [STATS] Size: {size / 1024 / 1024:.2f} MB")
     else:
         click.echo("Info: FAISS index: Not found")
@@ -1051,11 +967,11 @@ def cache_info():
     query_cache_path = Path("query_cache.db")
     if query_cache_path.exists():
         size = query_cache_path.stat().st_size
-        click.echo("Query cache:")
-        click.echo(f"   Location: {query_cache_path.absolute()}")
+        click.echo("💾 Query cache:")
+        click.echo(f"   📁 Location: {query_cache_path.absolute()}")
         click.echo(f"   [STATS] Size: {size / 1024:.2f} KB")
     else:
-        click.echo("Query cache: Not found")
+        click.echo("💾 Query cache: Not found")
 
 
 def main():

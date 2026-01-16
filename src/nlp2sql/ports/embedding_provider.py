@@ -42,4 +42,3 @@ class EmbeddingProviderPort(ABC):
             String identifier (e.g., "local", "openai", "cohere")
         """
         pass
-

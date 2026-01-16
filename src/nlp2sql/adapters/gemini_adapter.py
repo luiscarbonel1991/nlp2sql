@@ -93,11 +93,11 @@ class GeminiAdapter(AIProviderPort):
                 "output_tokens": output_tokens,
                 "finish_reason": getattr(response.candidates[0], "finish_reason", None),
             }
-            
+
             # Include raw response if available
             if "_raw_response" in result:
                 metadata["raw_response"] = result.pop("_raw_response")
-            
+
             return QueryResponse(
                 sql=result["sql"],
                 explanation=result.get("explanation", ""),
@@ -203,7 +203,7 @@ Ensure the JSON is properly formatted with no syntax errors. Escape any quotes i
             # Set defaults
             result.setdefault("explanation", "")
             result.setdefault("confidence", 0.8)
-            
+
             # Store raw response for debugging/display
             result["_raw_response"] = raw_content
 

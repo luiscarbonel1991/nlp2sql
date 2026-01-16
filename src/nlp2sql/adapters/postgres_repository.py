@@ -1,16 +1,91 @@
 """PostgreSQL repository for schema management."""
 
+import re
+import time
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import structlog
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from ..exceptions import SchemaException
+from ..exceptions import SchemaException, SecurityException
 from ..ports.schema_repository import SchemaMetadata, SchemaRepositoryPort, TableInfo
 
 logger = structlog.get_logger()
+
+# SQL patterns that are not allowed for security
+DANGEROUS_SQL_PATTERNS = [
+    r"\bINSERT\b",
+    r"\bUPDATE\b",
+    r"\bDELETE\b",
+    r"\bDROP\b",
+    r"\bTRUNCATE\b",
+    r"\bALTER\b",
+    r"\bCREATE\b",
+    r"\bGRANT\b",
+    r"\bREVOKE\b",
+    r"\bEXEC\b",
+    r"\bEXECUTE\b",
+    r"\bCALL\b",
+    r"\bSET\b",
+    r"\bCOPY\b",
+]
+
+MAX_QUERY_ROWS = 1000
+DEFAULT_QUERY_ROWS = 100
+
+
+def is_safe_query(sql: str) -> Tuple[bool, str]:
+    """Check if a SQL query is safe to execute (read-only).
+
+    Args:
+        sql: The SQL query to validate
+
+    Returns:
+        Tuple of (is_safe, error_message)
+    """
+    sql_upper = sql.upper().strip()
+
+    # Must start with SELECT, WITH, or EXPLAIN
+    allowed_prefixes = ("SELECT", "WITH", "EXPLAIN")
+    if not any(sql_upper.startswith(prefix) for prefix in allowed_prefixes):
+        return False, "Only SELECT, WITH, or EXPLAIN queries are allowed"
+
+    # Check for dangerous patterns
+    for pattern in DANGEROUS_SQL_PATTERNS:
+        if re.search(pattern, sql_upper, re.IGNORECASE):
+            return False, "Query contains prohibited operation"
+
+    # Check for multiple statements (SQL injection protection)
+    # Remove string literals before checking for semicolons
+    sql_no_strings = re.sub(r"'[^']*'", "", sql)
+    sql_no_strings = re.sub(r'"[^"]*"', "", sql_no_strings)
+    if ";" in sql_no_strings.rstrip(";"):
+        return False, "Multiple SQL statements are not allowed"
+
+    return True, ""
+
+
+def apply_row_limit(sql: str, limit: int) -> str:
+    """Ensure query has a row limit applied.
+
+    Args:
+        sql: The SQL query
+        limit: Maximum rows to return
+
+    Returns:
+        SQL with LIMIT clause applied
+    """
+    limit = min(limit, MAX_QUERY_ROWS)
+    sql_upper = sql.upper()
+
+    # If query already has LIMIT, don't add another
+    if "LIMIT" in sql_upper:
+        return sql
+
+    # Remove trailing semicolon and add LIMIT
+    return f"{sql.rstrip(';')} LIMIT {limit}"
 
 
 class PostgreSQLRepository(SchemaRepositoryPort):
@@ -395,7 +470,7 @@ class PostgreSQLRepository(SchemaRepositoryPort):
     async def _get_indexes(self, table_name: str, schema: str) -> List[Dict[str, Any]]:
         """Get indexes for a table."""
         query = """
-        SELECT 
+        SELECT
             i.relname as index_name,
             array_agg(a.attname ORDER BY c.ordinality) as columns,
             ix.indisunique as is_unique,
@@ -420,3 +495,75 @@ class PostgreSQLRepository(SchemaRepositoryPort):
                 indexes.append({"name": row[0], "columns": row[1], "unique": row[2], "primary": row[3]})
 
             return indexes
+
+    async def execute_query(
+        self,
+        sql: str,
+        limit: int = DEFAULT_QUERY_ROWS,
+        timeout_seconds: int = 30,
+    ) -> Dict[str, Any]:
+        """Execute a read-only SQL query and return results.
+
+        Args:
+            sql: The SQL query to execute (must be SELECT/WITH/EXPLAIN)
+            limit: Maximum number of rows to return (max: 1000)
+            timeout_seconds: Query timeout in seconds (default: 30)
+
+        Returns:
+            Dictionary with results, columns, row_count, and execution_time_ms
+
+        Raises:
+            SecurityException: If query contains prohibited operations
+            SchemaException: If query execution fails
+        """
+        if not self._initialized:
+            await self.initialize()
+
+        # Validate query is safe
+        is_safe, error_message = is_safe_query(sql)
+        if not is_safe:
+            logger.warning("Unsafe query rejected", sql=sql[:100], reason=error_message)
+            raise SecurityException(f"Query rejected: {error_message}")
+
+        # Apply row limit
+        limited_sql = apply_row_limit(sql, limit)
+
+        try:
+            start_time = time.time()
+
+            async with self.async_engine.begin() as conn:
+                # Set statement timeout for safety
+                timeout_ms = timeout_seconds * 1000
+                await conn.execute(text(f"SET statement_timeout = {timeout_ms}"))
+
+                # Execute the query
+                result = await conn.execute(text(limited_sql))
+                rows = result.fetchall()
+                columns = list(result.keys())
+
+                # Reset statement timeout
+                await conn.execute(text("SET statement_timeout = 0"))
+
+            execution_time_ms = round((time.time() - start_time) * 1000, 2)
+
+            # Convert rows to list of dictionaries
+            results = [dict(zip(columns, row)) for row in rows]
+
+            logger.info(
+                "Query executed successfully",
+                row_count=len(results),
+                execution_time_ms=execution_time_ms,
+            )
+
+            return {
+                "results": results,
+                "columns": columns,
+                "row_count": len(results),
+                "execution_time_ms": execution_time_ms,
+            }
+
+        except SecurityException:
+            raise
+        except Exception as e:
+            logger.error("Query execution failed", error=str(e), sql=sql[:100])
+            raise SchemaException(f"Query execution failed: {e!s}")

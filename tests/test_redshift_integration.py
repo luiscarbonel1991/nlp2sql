@@ -1,14 +1,12 @@
 """Integration tests for Redshift adapter with LocalStack."""
 
-import pytest
-import asyncio
 import os
-from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
+from nlp2sql import create_query_service
 from nlp2sql.adapters.redshift_adapter import RedshiftRepository
 from nlp2sql.core.entities import DatabaseType
-from nlp2sql.exceptions import SchemaException
-from nlp2sql import create_query_service
 
 
 class TestRedshiftAdapter:
@@ -24,8 +22,7 @@ class TestRedshiftAdapter:
     def test_redshift_repository_with_custom_schema(self):
         """Test RedshiftRepository with custom schema."""
         repo = RedshiftRepository(
-            "redshift://user:pass@cluster.region.redshift.amazonaws.com:5439/testdb",
-            schema_name="analytics"
+            "redshift://user:pass@cluster.region.redshift.amazonaws.com:5439/testdb", schema_name="analytics"
         )
         assert repo.schema_name == "analytics"
 
@@ -51,10 +48,7 @@ class TestRedshiftAdapter:
 
 
 @pytest.mark.integration
-@pytest.mark.skipif(
-    os.getenv("SKIP_LOCALSTACK_TESTS") == "true",
-    reason="LocalStack tests disabled"
-)
+@pytest.mark.skipif(os.getenv("SKIP_LOCALSTACK_TESTS") == "true", reason="LocalStack tests disabled")
 class TestRedshiftLocalStackIntegration:
     """Integration tests with LocalStack Redshift."""
 
@@ -94,8 +88,8 @@ class TestRedshiftLocalStackIntegration:
             schema_info = await redshift_repo.get_tables()
 
             # Should find our test tables
-            table_names = [table['table_name'] for table in schema_info]
-            expected_tables = ['users', 'products', 'orders']
+            table_names = [table["table_name"] for table in schema_info]
+            expected_tables = ["users", "products", "orders"]
 
             for table in expected_tables:
                 assert table in table_names, f"Table {table} not found in schema"
@@ -112,19 +106,19 @@ class TestRedshiftLocalStackIntegration:
             await sales_repo.initialize()
 
             sales_schema = await sales_repo.get_tables()
-            sales_tables = [table['table_name'] for table in sales_schema]
+            sales_tables = [table["table_name"] for table in sales_schema]
 
-            assert 'customers' in sales_tables
-            assert 'transactions' in sales_tables
+            assert "customers" in sales_tables
+            assert "transactions" in sales_tables
 
             # Test analytics schema
             analytics_repo = RedshiftRepository(self.REDSHIFT_URL, schema_name="analytics")
             await analytics_repo.initialize()
 
             analytics_schema = await analytics_repo.get_tables()
-            analytics_tables = [table['table_name'] for table in analytics_schema]
+            analytics_tables = [table["table_name"] for table in analytics_schema]
 
-            assert 'sales_summary' in analytics_tables
+            assert "sales_summary" in analytics_tables
 
         except Exception as e:
             pytest.skip(f"LocalStack Redshift not available: {e}")
@@ -155,10 +149,10 @@ class TestRedshiftLocalStackIntegration:
 
             # Verify we get table statistics
             for table in schema_info:
-                assert 'table_name' in table
-                assert 'schema_name' in table
+                assert "table_name" in table
+                assert "schema_name" in table
                 # Should have row count info from svv_table_info
-                assert 'row_count' in table or 'estimated_rows' in table
+                assert "row_count" in table or "estimated_rows" in table
 
         except Exception as e:
             pytest.skip(f"LocalStack Redshift not available: {e}")
@@ -170,10 +164,10 @@ class TestRedshiftLocalStackIntegration:
             # Test that we can create a service with LocalStack Redshift
             service = create_query_service(
                 database_url=self.REDSHIFT_URL,
-                ai_provider='anthropic',
-                api_key='test-key-invalid',  # This will fail on AI provider, but DB should work
+                ai_provider="anthropic",
+                api_key="test-key-invalid",  # This will fail on AI provider, but DB should work
                 database_type=DatabaseType.REDSHIFT,
-                schema_filters={'include_schemas': ['sales', 'public']}
+                schema_filters={"include_schemas": ["sales", "public"]},
             )
 
             # Verify the repository is correct type
@@ -184,13 +178,13 @@ class TestRedshiftLocalStackIntegration:
                 await service.initialize(DatabaseType.REDSHIFT)
             except Exception as e:
                 # Expected to fail on AI provider with invalid key
-                if 'RedshiftRepository' in str(e) or 'database' in str(e).lower():
+                if "RedshiftRepository" in str(e) or "database" in str(e).lower():
                     raise  # Re-raise database-related errors
                 # AI provider errors are expected and ok
                 pass
 
         except Exception as e:
-            if 'connection' in str(e).lower() or 'localstack' in str(e).lower():
+            if "connection" in str(e).lower() or "localstack" in str(e).lower():
                 pytest.skip(f"LocalStack Redshift not available: {e}")
             else:
                 raise
