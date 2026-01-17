@@ -300,11 +300,23 @@ class SchemaManager:
         self, query: str, database_type: DatabaseType, max_tables: int = 10
     ) -> List[Tuple[str, float]]:
         """Find relevant tables using multiple strategies."""
-        # Check cache
+        # Check in-memory cache first (faster than external cache)
+        mem_cache_key = f"{query}:{database_type.value}:{max_tables}"
+        if mem_cache_key in self._table_relevance_cache:
+            logger.debug("Table relevance cache hit", query=query[:50])
+            return self._table_relevance_cache[mem_cache_key]
+
+        # Clear analyzer's query embedding cache at the start of each new query
+        # This prevents unbounded memory growth while enabling per-query caching
+        self.analyzer.clear_query_embedding_cache()
+
+        # Check external cache (Redis, etc.)
         cache_key = f"relevant_tables:{query}:{database_type.value}:{max_tables}"
         if self.cache_enabled and self.cache:
             cached_tables = await self.cache.get(cache_key)
             if cached_tables:
+                # Also store in memory cache for faster repeated access
+                self._table_relevance_cache[mem_cache_key] = cached_tables
                 return cached_tables
 
         # Strategy 1: Embedding similarity
@@ -369,7 +381,10 @@ class SchemaManager:
             if score >= 0.2 and len(relevant_tables) < max_tables:
                 relevant_tables.append((table_name, score))
 
-        # Cache results
+        # Store in memory cache (always enabled, for repeated queries in same session)
+        self._table_relevance_cache[mem_cache_key] = relevant_tables
+
+        # Also cache in external cache if available
         if self.cache_enabled and self.cache:
             await self.cache.set(cache_key, relevant_tables)
 
