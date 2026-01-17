@@ -47,6 +47,9 @@ class SchemaAnalyzer(SchemaStrategyPort):
             scoring will be disabled. For best results, provide an embedding provider.
         """
         self.embedding_provider = embedding_provider
+        # Cache for query embeddings to avoid redundant API calls during relevance scoring
+        # Key: query string, Value: embedding array
+        self._query_embedding_cache: Dict[str, np.ndarray] = {}
 
         if embedding_provider is None:
             logger.info(
@@ -255,6 +258,14 @@ class SchemaAnalyzer(SchemaStrategyPort):
             return np.array([])
         return await self.embedding_provider.encode(texts)
 
+    def clear_query_embedding_cache(self) -> None:
+        """Clear the query embedding cache.
+
+        Call this between requests to prevent unbounded memory growth
+        while still benefiting from per-request caching.
+        """
+        self._query_embedding_cache.clear()
+
     async def find_similar_schemas(self, query_embedding: np.ndarray, top_k: int = 5) -> List[Tuple[str, float]]:
         """Find similar schema elements using embeddings."""
         if not self._schema_embeddings:
@@ -380,8 +391,12 @@ class SchemaAnalyzer(SchemaStrategyPort):
             col_names = [c.get("name", "") for c in schema_element["columns"][:5]]
             element_desc += f" with columns {', '.join(col_names)}"
 
-        # Get embeddings
-        query_embedding = await self.create_embeddings([query])
+        # Get query embedding from cache or generate it (avoids N+1 API calls)
+        if query not in self._query_embedding_cache:
+            self._query_embedding_cache[query] = await self.create_embeddings([query])
+        query_embedding = self._query_embedding_cache[query]
+
+        # Get element embedding
         element_embedding = await self.create_embeddings([element_desc])
 
         # Check if embeddings are valid
