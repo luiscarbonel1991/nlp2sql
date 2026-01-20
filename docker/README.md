@@ -2,7 +2,7 @@
 
 This directory contains Docker configurations for testing nlp2sql with PostgreSQL databases.
 
-## 🐳 Available Databases
+## Available Databases
 
 ### 1. Simple Test Database (Port 5432)
 - **Connection**: `postgresql://testuser:testpass@localhost:5432/testdb`
@@ -23,7 +23,7 @@ This directory contains Docker configurations for testing nlp2sql with PostgreSQ
 - **Tables**: Test tables optimized for data warehouse patterns
 - **Use case**: Testing Redshift-specific functionality and compatibility
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Default Setup (No Configuration Needed)
 ```bash
@@ -67,7 +67,7 @@ docker-compose down
 docker-compose down -v
 ```
 
-## 🔧 Customization Options
+## Customization Options
 
 All settings have sensible defaults and can be customized via environment variables:
 
@@ -109,7 +109,7 @@ export POSTGRES_VERSION=15
 docker-compose up -d
 ```
 
-## 📊 Test with nlp2sql CLI
+## Test with nlp2sql CLI
 
 ### Simple Database Examples
 ```bash
@@ -162,7 +162,7 @@ uv run nlp2sql benchmark \
 
 For comprehensive Redshift testing examples and setup, see the [Redshift documentation](../docs/Redshift.md).
 
-## 🗂️ Database Schemas
+## Database Schemas
 
 ### Simple Database (testdb)
 ```
@@ -208,7 +208,7 @@ enterprise/
 
 
 
-## 💡 Example Questions to Test
+## Example Questions to Test
 
 ### Simple Database
 - "How many active users do we have?"
@@ -226,7 +226,7 @@ enterprise/
 
 
 
-## 🔧 Database Connection Details
+## Database Connection Details
 
 ### Default Configuration
 | Database | Host | Port | User | Password | Database | Connection URL |
@@ -251,7 +251,7 @@ Use the helper script to get current connection URLs based on your configuration
 
 This will show you the exact URLs to use with your current environment variables.
 
-## 📝 Notes
+## Notes
 
 - Both databases use PostgreSQL 16
 - Data is persisted in Docker volumes

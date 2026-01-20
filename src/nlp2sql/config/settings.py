@@ -29,7 +29,7 @@ class Settings(BaseSettings):
 
     # General settings
     app_name: str = "nlp2sql"
-    version: str = "0.2.0rc4"
+    version: str = "0.2.0rc5"
     debug: bool = Field(default=False, validation_alias="NLP2SQL_DEBUG")
     log_level: LogLevel = Field(default=LogLevel.INFO, validation_alias="NLP2SQL_LOG_LEVEL")
 

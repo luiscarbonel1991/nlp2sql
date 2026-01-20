@@ -27,12 +27,12 @@ async def main():
             break
 
     if not selected_provider:
-        print("❌ No AI provider API key found. Set one of:")
+        print("[ERROR] No AI provider API key found. Set one of:")
         for provider in providers:
             print(f"   export {provider['env_var']}=your-key")
         return
 
-    print(f"🤖 Using {selected_provider['name'].title()} provider")
+    print(f"[INFO] Using {selected_provider['name'].title()} provider")
 
     try:
         # Create service
@@ -55,7 +55,7 @@ async def main():
             "Which users have placed the most orders?",
         ]
 
-        print("🚀 nlp2sql Demo - Converting Natural Language to SQL")
+        print("nlp2sql Demo - Converting Natural Language to SQL")
         print("=" * 60)
 
         for i, question in enumerate(questions, 1):
@@ -69,30 +69,30 @@ async def main():
                 )
 
                 # Display results
-                print(f"✅ SQL Generated (Confidence: {result['confidence']:.2f})")
-                print("🔍 SQL Query:")
+                print(f"[OK] SQL Generated (Confidence: {result['confidence']:.2f})")
+                print("SQL Query:")
                 print(f"   {result['sql']}")
 
                 if result["explanation"]:
-                    print("💡 Explanation:")
+                    print("Explanation:")
                     print(f"   {result['explanation']}")
 
-                print("📊 Stats:")
+                print("Stats:")
                 print(f"   - Provider: {result['provider']}")
                 print(f"   - Tokens used: {result['tokens_used']}")
                 print(f"   - Generation time: {result['generation_time_ms']:.1f}ms")
                 print(f"   - Valid: {result['validation'].get('is_valid', False)}")
 
                 if result["validation"].get("warnings"):
-                    print("⚠️  Warnings:")
+                    print("Warnings:")
                     for warning in result["validation"]["warnings"]:
                         print(f"   - {warning}")
 
             except Exception as e:
-                print(f"❌ Error: {e!s}")
+                print(f"[ERROR] {e!s}")
 
         # Demonstrate query suggestions
-        print("\n\n🔮 Query Suggestions Demo")
+        print("\n\nQuery Suggestions Demo")
         print("=" * 60)
 
         partial_queries = ["show me users", "count orders", "find products"]
@@ -107,10 +107,14 @@ async def main():
                 print(f"  {i}. {suggestion['text']} (relevance: {suggestion['relevance']:.2f})")
 
         # Demonstrate query explanation
-        print("\n\n📚 Query Explanation Demo")
+        print("\n\nQuery Explanation Demo")
         print("=" * 60)
 
-        example_sql = "SELECT u.username, COUNT(o.order_id) as order_count FROM users u LEFT JOIN orders o ON u.user_id = o.user_id GROUP BY u.user_id, u.username HAVING COUNT(o.order_id) > 2"
+        example_sql = (
+            "SELECT u.username, COUNT(o.order_id) as order_count FROM users u "
+            "LEFT JOIN orders o ON u.user_id = o.user_id "
+            "GROUP BY u.user_id, u.username HAVING COUNT(o.order_id) > 2"
+        )
 
         explanation = await service.explain_query(sql=example_sql, database_type=DatabaseType.POSTGRES)
 
@@ -118,7 +122,7 @@ async def main():
         print(f"Explanation: {explanation['explanation']}")
 
         # Service statistics
-        print("\n\n📈 Service Statistics")
+        print("\n\nService Statistics")
         print("=" * 60)
 
         stats = await service.get_service_stats()
@@ -128,7 +132,7 @@ async def main():
         print(f"Optimizer enabled: {stats['optimizer_enabled']}")
 
     except Exception as e:
-        print(f"❌ Setup error: {e!s}")
+        print(f"[ERROR] Setup error: {e!s}")
         print("Make sure your database is running and accessible")
 
 

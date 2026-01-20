@@ -13,7 +13,7 @@ from .ports.embedding_provider import EmbeddingProviderPort
 from .ports.schema_repository import SchemaRepositoryPort
 from .services.query_service import QueryGenerationService
 
-__version__ = "0.2.0rc4"
+__version__ = "0.2.0rc5"
 __author__ = "Luis Carbonel"
 __email__ = "devhighlevel@gmail.com"
 

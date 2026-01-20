@@ -4,7 +4,7 @@
 def show_usage_patterns():
     """Show different usage patterns for nlp2sql."""
 
-    print("📚 nlp2sql - Real World Usage Examples")
+    print("nlp2sql - Real World Usage Examples")
     print("=" * 60)
 
     # Example 1: Basic setup with automatic provider detection
@@ -69,9 +69,15 @@ def show_usage_patterns():
     expected_sqls = [
         "SELECT * FROM customers WHERE city = 'Madrid'",
         "SELECT COUNT(*) FROM orders WHERE order_date >= date_trunc('month', CURRENT_DATE - interval '1 month')",
-        "SELECT p.name, SUM(oi.quantity) as total_sold FROM products p JOIN order_items oi ON p.id = oi.product_id GROUP BY p.id, p.name ORDER BY total_sold DESC LIMIT 5",
+        (
+            "SELECT p.name, SUM(oi.quantity) as total_sold FROM products p "
+            "JOIN order_items oi ON p.id = oi.product_id GROUP BY p.id, p.name ORDER BY total_sold DESC LIMIT 5"
+        ),
         "SELECT c.* FROM customers c LEFT JOIN orders o ON c.id = o.customer_id WHERE o.id IS NULL",
-        "SELECT city, SUM(total_amount) as total_sales FROM customers c JOIN orders o ON c.id = o.customer_id GROUP BY city",
+        (
+            "SELECT city, SUM(total_amount) as total_sales FROM customers c "
+            "JOIN orders o ON c.id = o.customer_id GROUP BY city"
+        ),
     ]
 
     for i, sql in enumerate(expected_sqls, 1):
@@ -132,38 +138,38 @@ def show_usage_patterns():
     print("```")
 
     print("\n8. Key Benefits:")
-    print("   ✅ Handles large schemas (1000+ tables)")
-    print("   ✅ Multiple AI providers - no vendor lock-in")
-    print("   ✅ Intelligent caching - fast responses")
-    print("   ✅ Automatic query optimization")
-    print("   ✅ SQL syntax validation")
-    print("   ✅ Relevance scoring for tables")
-    print("   ✅ Schema compression for tokens")
-    print("   ✅ Semantic search with embeddings")
-    print("   ✅ Async support for better performance")
-    print("   ✅ Clean, extensible architecture")
+    print("   [x] Handles large schemas (1000+ tables)")
+    print("   [x] Multiple AI providers - no vendor lock-in")
+    print("   [x] Intelligent caching - fast responses")
+    print("   [x] Automatic query optimization")
+    print("   [x] SQL syntax validation")
+    print("   [x] Relevance scoring for tables")
+    print("   [x] Schema compression for tokens")
+    print("   [x] Semantic search with embeddings")
+    print("   [x] Async support for better performance")
+    print("   [x] Clean, extensible architecture")
 
-    print("\n🎯 Perfect Use Cases:")
+    print("\nPerfect Use Cases:")
     print("   1. Companies with complex database schemas")
     print("   2. Teams needing to democratize data access")
     print("   3. Applications requiring dynamic queries")
     print("   4. BI and analytics systems")
     print("   5. Dashboards with natural language queries")
 
-    print("\n📊 Comparison with Existing Solutions:")
+    print("\nComparison with Existing Solutions:")
     print("   vs Simple Text-to-SQL:")
-    print("   ✅ Large schema handling")
-    print("   ✅ Multiple providers")
-    print("   ✅ Caching and optimization")
-    print("   ✅ Automatic validation")
+    print("   [x] Large schema handling")
+    print("   [x] Multiple providers")
+    print("   [x] Caching and optimization")
+    print("   [x] Automatic validation")
     print()
     print("   vs Enterprise solutions:")
-    print("   ✅ Open source and customizable")
-    print("   ✅ Modern architecture")
-    print("   ✅ Easy integration")
-    print("   ✅ No vendor lock-in")
+    print("   [x] Open source and customizable")
+    print("   [x] Modern architecture")
+    print("   [x] Easy integration")
+    print("   [x] No vendor lock-in")
 
-    print("\n🚀 Ready for production use!")
+    print("\nReady for production use!")
 
 
 if __name__ == "__main__":

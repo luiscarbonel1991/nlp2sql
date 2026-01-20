@@ -13,15 +13,15 @@ import os
 
 async def test_openai_api_key(api_key: str = None):
     """Test OpenAI API key validity with detailed feedback."""
-    print("🔑 Testing OpenAI API Key")
+    print("Testing OpenAI API Key")
     print("=" * 40)
 
     # Try to get API key from parameter or environment
     test_key = api_key or os.getenv("OPENAI_API_KEY")
 
     if not test_key:
-        print("❌ No OpenAI API key provided")
-        print("💡 Solutions:")
+        print("[ERROR] No OpenAI API key provided")
+        print("Solutions:")
         print("   1. Set environment variable: export OPENAI_API_KEY=your-key")
         print("   2. Pass key directly: test_openai_api_key('your-key')")
         print("   3. Get key from: https://platform.openai.com/api-keys")
@@ -29,43 +29,43 @@ async def test_openai_api_key(api_key: str = None):
 
     # Mask the key for security
     masked_key = f"{test_key[:8]}...{test_key[-4:]}" if len(test_key) > 12 else "***"
-    print(f"🔍 Testing key: {masked_key}")
+    print(f"Testing key: {masked_key}")
 
     try:
         # Test with a simple database-less example
         from nlp2sql.adapters.openai_adapter import OpenAIAdapter
 
-        adapter = OpenAIAdapter(api_key=test_key)
+        _adapter = OpenAIAdapter(api_key=test_key)  # noqa: F841
 
-        print("✅ API key format is valid")
-        print("✅ OpenAI adapter initialized successfully")
-        print("🎉 API key is working!")
+        print("[OK] API key format is valid")
+        print("[OK] OpenAI adapter initialized successfully")
+        print("[OK] API key is working!")
         return True
 
     except ImportError as e:
-        print(f"❌ Import error: {e!s}")
-        print("💡 Try: pip install openai>=1.0.0")
+        print(f"[ERROR] Import error: {e!s}")
+        print("Try: pip install openai>=1.0.0")
         return False
     except Exception as e:
         error_msg = str(e).lower()
-        print(f"❌ API key test failed: {e!s}")
+        print(f"[ERROR] API key test failed: {e!s}")
 
         if "invalid" in error_msg or "401" in error_msg:
-            print("💡 Solutions:")
+            print("Solutions:")
             print("   1. Check if your API key is correct")
             print("   2. Verify your OpenAI account has credits")
             print("   3. Generate a new API key")
         elif "quota" in error_msg or "limit" in error_msg:
-            print("💡 Rate limit reached - try again in a few minutes")
+            print("Rate limit reached - try again in a few minutes")
         elif "network" in error_msg or "connection" in error_msg:
-            print("💡 Network issue - check your internet connection")
+            print("Network issue - check your internet connection")
 
         return False
 
 
 async def test_simple_sql_generation():
     """Test simple SQL generation with automatic provider detection."""
-    print("\n🧪 Testing Simple SQL Generation")
+    print("\nTesting Simple SQL Generation")
     print("=" * 40)
 
     # Detect available AI provider
@@ -83,42 +83,42 @@ async def test_simple_sql_generation():
             break
 
     if not selected_provider:
-        print("⚠️  Skipping SQL test - no API key available")
-        print("💡 Set at least one API key:")
+        print("[SKIP] Skipping SQL test - no API key available")
+        print("Set at least one API key:")
         for provider in providers:
             print(f"   export {provider['env_var']}=your-key")
         return False
 
-    print(f"🤖 Using {selected_provider['name'].title()} provider")
-    print("🔧 Creating test service with mock schema...")
+    print(f"[INFO] Using {selected_provider['name'].title()} provider")
+    print("Creating test service with mock schema...")
 
     try:
         # Use Docker test database for realistic testing
         database_url = "postgresql://testuser:testpass@localhost:5432/testdb"
 
-        print("📝 Testing question: 'How many users are in the system?'")
+        print("Testing question: 'How many users are in the system?'")
 
         # This will test the API key and basic functionality
         from nlp2sql import create_query_service
 
-        service = create_query_service(
+        _service = create_query_service(
             database_url=database_url, ai_provider=selected_provider["name"], api_key=selected_provider["key"]
-        )
+        )  # noqa: F841
 
-        print("✅ Service created successfully")
-        print("✅ API key validated")
-        print("🎉 Ready for SQL generation!")
+        print("[OK] Service created successfully")
+        print("[OK] API key validated")
+        print("[OK] Ready for SQL generation!")
 
         return True
 
     except Exception as e:
-        print(f"❌ SQL generation test failed: {e!s}")
+        print(f"[ERROR] SQL generation test failed: {e!s}")
         return False
 
 
 async def test_environment_setup():
     """Test and validate environment setup."""
-    print("\n🌍 Testing Environment Setup")
+    print("\nTesting Environment Setup")
     print("=" * 40)
 
     # Check for API keys
@@ -128,32 +128,32 @@ async def test_environment_setup():
         "Google": os.getenv("GOOGLE_API_KEY"),
     }
 
-    print("🔍 Checking environment variables:")
+    print("Checking environment variables:")
 
     available_providers = []
     for provider, key in api_keys.items():
         if key:
             masked_key = f"{key[:8]}...{key[-4:]}" if len(key) > 12 else "***"
-            print(f"   ✅ {provider}: {masked_key}")
+            print(f"   [OK] {provider}: {masked_key}")
             available_providers.append(provider.lower())
         else:
-            print(f"   ❌ {provider}: Not set")
+            print(f"   [--] {provider}: Not set")
 
     if not available_providers:
-        print("\n⚠️  No API keys found in environment")
-        print("💡 Set at least one API key:")
+        print("\n[WARN] No API keys found in environment")
+        print("Set at least one API key:")
         print("   export OPENAI_API_KEY=your-openai-key")
         print("   export ANTHROPIC_API_KEY=your-anthropic-key")
         print("   export GOOGLE_API_KEY=your-google-key")
         return False
 
-    print(f"\n✅ Available providers: {', '.join(available_providers)}")
+    print(f"\n[OK] Available providers: {', '.join(available_providers)}")
     return True
 
 
 async def test_multiple_providers():
     """Test API keys for multiple providers."""
-    print("\n🤖 Testing Multiple AI Providers")
+    print("\nTesting Multiple AI Providers")
     print("=" * 40)
 
     providers_config = [
@@ -175,59 +175,59 @@ async def test_multiple_providers():
     working_providers = []
 
     for config in providers_config:
-        print(f"\n🔍 Testing {config['name']}...")
+        print(f"\nTesting {config['name']}...")
 
         if not config["api_key"]:
-            print(f"   ⚠️  Skipped - No API key (set {config['env_var']})")
+            print(f"   [SKIP] No API key (set {config['env_var']})")
             continue
 
         try:
             # Create a basic service to test the provider
             from nlp2sql import create_query_service
 
-            service = create_query_service(
+            _service = create_query_service(
                 database_url="postgresql://test:test@localhost/test",
                 ai_provider=config["provider"],
                 api_key=config["api_key"],
-            )
+            )  # noqa: F841
 
-            print(f"   ✅ {config['name']} adapter initialized successfully")
+            print(f"   [OK] {config['name']} adapter initialized successfully")
             working_providers.append(config["name"])
 
         except ImportError as e:
-            print(f"   ❌ Import error: {e!s}")
-            print(f"   💡 Install with: pip install nlp2sql[{config['provider']}]")
+            print(f"   [ERROR] Import error: {e!s}")
+            print(f"   Install with: pip install nlp2sql[{config['provider']}]")
         except Exception as e:
-            print(f"   ❌ Failed: {e!s}")
+            print(f"   [ERROR] Failed: {e!s}")
 
     if working_providers:
-        print(f"\n✅ Working providers: {', '.join(working_providers)}")
+        print(f"\n[OK] Working providers: {', '.join(working_providers)}")
         return True
-    print("\n❌ No working providers found")
+    print("\n[ERROR] No working providers found")
     return False
 
 
 async def show_setup_instructions():
     """Show comprehensive setup instructions."""
-    print("\n📋 Complete Setup Instructions")
+    print("\nComplete Setup Instructions")
     print("=" * 40)
 
-    print("1. 🔧 Install nlp2sql:")
+    print("1. Install nlp2sql:")
     print("   pip install nlp2sql")
     print("   # Or with all providers:")
     print("   pip install nlp2sql[all-providers]")
 
-    print("\n2. 🔑 Get API Keys:")
-    print("   • OpenAI: https://platform.openai.com/api-keys")
-    print("   • Anthropic: https://console.anthropic.com/")
-    print("   • Google: https://cloud.google.com/ai-platform")
+    print("\n2. Get API Keys:")
+    print("   - OpenAI: https://platform.openai.com/api-keys")
+    print("   - Anthropic: https://console.anthropic.com/")
+    print("   - Google: https://cloud.google.com/ai-platform")
 
-    print("\n3. 🌍 Set Environment Variables:")
+    print("\n3. Set Environment Variables:")
     print("   export OPENAI_API_KEY=your-openai-key")
     print("   export ANTHROPIC_API_KEY=your-anthropic-key")
     print("   export GOOGLE_API_KEY=your-google-key")
 
-    print("\n4. 🗄️ Database Setup (Optional for testing):")
+    print("\n4. Database Setup (Optional for testing):")
     print("   # PostgreSQL example:")
     print("   docker run -d -p 5432:5432 \\")
     print("     -e POSTGRES_USER=test \\")
@@ -235,13 +235,13 @@ async def show_setup_instructions():
     print("     -e POSTGRES_DB=test \\")
     print("     postgres:13")
 
-    print("\n5. ✅ Test Your Setup:")
+    print("\n5. Test Your Setup:")
     print("   python examples/test_api_setup.py")
 
 
 async def run_comprehensive_test():
     """Run all API setup tests."""
-    print("🚀 nlp2sql - API Setup & Validation")
+    print("nlp2sql - API Setup & Validation")
     print("=" * 50)
 
     tests = [
@@ -258,28 +258,28 @@ async def run_comprehensive_test():
             result = await test_func()
             results.append((test_name, result))
         except Exception as e:
-            print(f"❌ {test_name} failed with error: {e!s}")
+            print(f"[ERROR] {test_name} failed with error: {e!s}")
             results.append((test_name, False))
 
     # Show summary
-    print("\n📊 Test Results Summary")
+    print("\nTest Results Summary")
     print("=" * 30)
 
     passed = sum(1 for _, result in results if result)
     total = len(results)
 
     for test_name, result in results:
-        status = "✅ PASS" if result else "❌ FAIL"
+        status = "[PASS]" if result else "[FAIL]"
         print(f"   {status} {test_name}")
 
-    print(f"\n🎯 Overall: {passed}/{total} tests passed")
+    print(f"\nOverall: {passed}/{total} tests passed")
 
     if passed == total:
-        print("🎉 All tests passed! nlp2sql is ready to use!")
+        print("All tests passed! nlp2sql is ready to use!")
     elif passed > 0:
-        print("⚠️  Some tests passed. Check failed tests above.")
+        print("Some tests passed. Check failed tests above.")
     else:
-        print("❌ All tests failed. Please check setup instructions.")
+        print("All tests failed. Please check setup instructions.")
 
     # Show setup instructions if needed
     if passed < total:
@@ -287,7 +287,7 @@ async def run_comprehensive_test():
 
 
 if __name__ == "__main__":
-    print("🔧 nlp2sql API Setup & Validation Tool")
+    print("nlp2sql API Setup & Validation Tool")
     print("This script helps you validate your API keys and environment setup.")
     print()
 

@@ -1,0 +1,44 @@
+{
+  "mcpServers": {
+    "nlp2sql": {
+      "command": "/path/to/nlp2sql/.venv/bin/python3",
+      "args": [
+        "/path/to/nlp2sql/mcp_server/server.py"
+      ],
+      "env": {
+        "_comment_ai_providers": "AI Provider API Keys (at least one required)",
+        "OPENAI_API_KEY": "${OPENAI_API_KEY}",
+        "ANTHROPIC_API_KEY": "${ANTHROPIC_API_KEY}",
+        "GOOGLE_API_KEY": "${GOOGLE_API_KEY}",
+
+        "_comment_databases": "Database URLs for MCP server",
+        "NLP2SQL_DEFAULT_DB_URL": "${NLP2SQL_DEFAULT_DB_URL}",
+        "NLP2SQL_DEMO_DB_URL": "${NLP2SQL_DEMO_DB_URL}",
+        "NLP2SQL_LOCAL_DB_URL": "${NLP2SQL_LOCAL_DB_URL}",
+
+        "_comment_schema": "Schema Management",
+        "NLP2SQL_MAX_SCHEMA_TOKENS": "8000",
+        "NLP2SQL_SCHEMA_CACHE_ENABLED": "true",
+        "NLP2SQL_SCHEMA_REFRESH_HOURS": "24",
+
+        "_comment_embeddings": "Embedding Settings (optional)",
+        "NLP2SQL_EMBEDDING_PROVIDER": "local",
+        "NLP2SQL_EMBEDDING_MODEL": "all-MiniLM-L6-v2",
+        "NLP2SQL_EMBEDDING_CACHE": "true",
+
+        "_comment_query": "Query Generation",
+        "NLP2SQL_TEMPERATURE": "0.1",
+        "NLP2SQL_MAX_TOKENS": "2000",
+        "NLP2SQL_RETRY_ATTEMPTS": "3",
+
+        "_comment_cache": "Cache Settings",
+        "NLP2SQL_CACHE_ENABLED": "true",
+        "NLP2SQL_CACHE_TTL": "3600",
+
+        "_comment_general": "General",
+        "NLP2SQL_LOG_LEVEL": "INFO",
+        "NLP2SQL_DEBUG": "false"
+      }
+    }
+  }
+}

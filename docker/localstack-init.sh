@@ -25,17 +25,17 @@ aws --endpoint-url=http://localhost:4566 redshift create-cluster \
     --db-name testdb \
     --cluster-type single-node \
     --publicly-accessible \
-    --region us-east-1 2>&1 || echo "⚠️  Cluster creation may have failed or cluster already exists"
+    --region us-east-1 2>&1 || echo "[WARN]  Cluster creation may have failed or cluster already exists"
 
 echo "Waiting for Redshift cluster to be available..."
 aws --endpoint-url=http://localhost:4566 redshift wait cluster-available \
     --cluster-identifier nlp2sql-test-cluster \
-    --region us-east-1 2>&1 || echo "⚠️  Cluster wait may have failed or cluster already available"
+    --region us-east-1 2>&1 || echo "[WARN]  Cluster wait may have failed or cluster already available"
 
 echo ""
-echo "✅ Redshift cluster setup attempted!"
+echo "[OK] Redshift cluster setup attempted!"
 echo ""
-echo "⚠️  Note: Schema and table creation should be done from outside the container"
+echo "[WARN]  Note: Schema and table creation should be done from outside the container"
 echo "   using Python/asyncpg or psql from the host machine, as LocalStack container"
 echo "   doesn't have psql installed. See docker/test-redshift.sh for example."
 echo ""

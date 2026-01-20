@@ -2,7 +2,7 @@
 
 This directory contains organized examples demonstrating various nlp2sql capabilities.
 
-## 🚀 Getting Started
+## Getting Started
 
 Start here if you're new to nlp2sql:
 
@@ -19,37 +19,33 @@ python examples/getting_started/test_api_setup.py
 python examples/getting_started/basic_usage.py
 ```
 
-## 🔧 Advanced Features
+## Advanced Features
 
 Explore advanced capabilities:
 
 ### [`advanced/`](advanced/)
 - **`test_multiple_providers.py`** - Compare OpenAI, Anthropic, and Gemini
-- **`test_schema_filters.py`** - Handle large databases (1000+ tables)
 - **`test_simple_api.py`** - One-line API usage patterns
 
 ```bash
 # Test multiple AI providers
 python examples/advanced/test_multiple_providers.py
-
-# Test large schema handling
-python examples/advanced/test_schema_filters.py
 ```
 
-## 📊 Schema Management
+## Schema Management
 
 Learn schema handling strategies:
 
 ### [`schema_management/`](schema_management/)
 - **`test_auto_schema.py`** - Automatic schema loading from database
-- **`test_schema_only.py`** - Schema intelligence without AI provider
+- **`test_schema_filters_comprehensive.py`** - Complete schema filtering demo
 
 ```bash
 # Test automatic schema discovery
 python examples/schema_management/test_auto_schema.py
 ```
 
-## 🗄️ Database-Specific
+## Database-Specific
 
 Real-world database integrations:
 
@@ -61,14 +57,14 @@ Real-world database integrations:
 python examples/database_specific/test_odoo_integration.py
 ```
 
-## 📚 Documentation
+## Documentation
 
 Educational examples and guides:
 
 ### [`documentation/`](documentation/)
 - **`real_world_example.py`** - Complete real-world scenario
 
-## 🔑 Environment Setup
+## Environment Setup
 
 Before running examples, set up your environment:
 
@@ -84,7 +80,7 @@ export GOOGLE_API_KEY=your-google-key
 export DATABASE_URL=postgresql://user:pass@localhost:5432/db
 ```
 
-## 📋 Example Workflow
+## Example Workflow
 
 1. **Setup & Validation**
    ```bash
@@ -100,7 +96,6 @@ export DATABASE_URL=postgresql://user:pass@localhost:5432/db
 3. **Explore Advanced Features**
    ```bash
    python examples/advanced/test_multiple_providers.py
-   python examples/advanced/test_schema_filters.py
    ```
 
 4. **Database Integration**
@@ -108,7 +103,7 @@ export DATABASE_URL=postgresql://user:pass@localhost:5432/db
    python examples/database_specific/test_odoo_integration.py
    ```
 
-## 🛠️ Troubleshooting
+## Troubleshooting
 
 ### Common Issues
 
@@ -132,11 +127,11 @@ pip install nlp2sql[anthropic,gemini]
 pip install nlp2sql[all-providers]
 ```
 
-## 📈 Performance Tips
+## Performance Tips
 
 1. **Use Pre-Initialized Services** for multiple queries
 2. **Apply Schema Filters** for large databases
 3. **Cache Service Instances** in production
 4. **Choose the Right Provider** for your use case
 
-See [`USAGE.md`](../USAGE.md) for detailed usage patterns and best practices.
+See the [API Reference](../docs/API.md) for detailed usage patterns and [Configuration](../docs/CONFIGURATION.md) for environment setup.

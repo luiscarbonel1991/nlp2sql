@@ -172,6 +172,9 @@ query_cache.db
 *.idea/
 .venv_test/
 *.md
+!README.md
+!CONTRIBUTING.md
+!docs/*.md
 
 # macOS specific files
 .DS_Store

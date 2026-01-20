@@ -203,6 +203,6 @@ The CLI automatically detects Redshift from connection URLs:
 
 ## Next Steps
 
-- See [USAGE.md](../USAGE.md) for general usage patterns
-- Check [CLI_GUIDE.md](../CLI_GUIDE.md) for detailed CLI documentation
+- See [API Reference](API.md) for Python API and CLI documentation
+- Check [Configuration](CONFIGURATION.md) for environment variables and schema filters
 - Review [examples/](../examples/) for more code samples

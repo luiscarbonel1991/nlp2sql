@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Test Redshift LocalStack setup
-echo "🧪 Testing Redshift LocalStack Setup"
+echo "Testing Redshift LocalStack Setup"
 echo "===================================="
 
 cd "$(dirname "$0")"
@@ -13,10 +13,10 @@ check_service() {
 
     echo "Checking $service_name..."
     if eval "$check_command" > /dev/null 2>&1; then
-        echo "✅ $service_name is running"
+        echo "[OK] $service_name is running"
         return 0
     else
-        echo "❌ $service_name is not running"
+        echo "[ERROR] $service_name is not running"
         return 1
     fi
 }
@@ -31,15 +31,15 @@ wait_for_service() {
     echo "Waiting for $service_name to be ready..."
     while [ $attempt -le $max_attempts ]; do
         if eval "$check_command" > /dev/null 2>&1; then
-            echo "✅ $service_name is ready"
+            echo "[OK] $service_name is ready"
             return 0
         fi
-        echo "⏳ Attempt $attempt/$max_attempts - waiting for $service_name..."
+        echo "[...] Attempt $attempt/$max_attempts - waiting for $service_name..."
         sleep 10
         attempt=$((attempt + 1))
     done
 
-    echo "❌ $service_name failed to start after $max_attempts attempts"
+    echo "[ERROR] $service_name failed to start after $max_attempts attempts"
     return 1
 }
 
@@ -61,13 +61,13 @@ sleep 30
 
 # Test Redshift connection
 echo ""
-echo "🔗 Testing Redshift Connection"
+echo "-- Testing Redshift Connection"
 echo "=============================="
 
 # Test with psql (PostgreSQL-compatible)
 echo "Testing PostgreSQL-compatible connection..."
 if PGPASSWORD=testpass123 psql -h localhost -p 5439 -U testuser -d testdb -c "SELECT version();" > /dev/null 2>&1; then
-    echo "✅ PostgreSQL-compatible connection successful"
+    echo "[OK] PostgreSQL-compatible connection successful"
 
     # Test schema discovery
     echo "Testing schema discovery..."
@@ -95,7 +95,7 @@ if PGPASSWORD=testpass123 psql -h localhost -p 5439 -U testuser -d testdb -c "SE
         SELECT 'analytics.sales_summary', count(*) FROM analytics.sales_summary;
     "
 else
-    echo "❌ PostgreSQL-compatible connection failed"
+    echo "[ERROR] PostgreSQL-compatible connection failed"
     echo "Check LocalStack logs:"
     docker-compose logs localstack | tail -20
     exit 1
@@ -103,7 +103,7 @@ fi
 
 # Test with Python integration
 echo ""
-echo "🐍 Testing Python Integration"
+echo "-- Testing Python Integration"
 echo "============================="
 
 # Create a simple test script
@@ -124,16 +124,16 @@ async def test_redshift():
     postgres_url = "postgresql://testuser:testpass123@localhost:5439/testdb"
 
     for url, name in [(redshift_url, "Redshift URL"), (postgres_url, "PostgreSQL URL")]:
-        print(f"\n📡 Testing {name}: {url}")
+        print(f"\n-- Testing {name}: {url}")
 
         try:
             repo = RedshiftRepository(url)
             await repo.initialize()
-            print(f"✅ {name} connection successful")
+            print(f"[OK] {name} connection successful")
 
             # Test schema discovery
             schema_info = await repo.get_tables()
-            print(f"✅ Schema discovery successful - found {len(schema_info)} tables")
+            print(f"[OK] Schema discovery successful - found {len(schema_info)} tables")
 
             # Print table info
             for table in schema_info[:5]:  # Show first 5 tables
@@ -142,7 +142,7 @@ async def test_redshift():
             await repo.close()
 
         except Exception as e:
-            print(f"❌ {name} failed: {e}")
+            print(f"[ERROR] {name} failed: {e}")
             return False
 
     return True
@@ -155,22 +155,22 @@ EOF
 # Run Python test
 cd ..
 if python /tmp/test_redshift_localstack.py; then
-    echo "✅ Python integration test passed"
+    echo "[OK] Python integration test passed"
 else
-    echo "❌ Python integration test failed"
+    echo "[ERROR] Python integration test failed"
     exit 1
 fi
 
 echo ""
-echo "🎉 All Redshift LocalStack tests passed!"
+echo "[SUCCESS] All Redshift LocalStack tests passed!"
 echo ""
-echo "📋 Summary"
+echo "-- Summary"
 echo "=========="
-echo "✅ LocalStack is running on http://localhost:4566"
-echo "✅ Redshift is available on localhost:5439"
-echo "✅ Connection URLs:"
+echo "[OK] LocalStack is running on http://localhost:4566"
+echo "[OK] Redshift is available on localhost:5439"
+echo "[OK] Connection URLs:"
 echo "   - redshift://testuser:testpass123@localhost:5439/testdb"
 echo "   - postgresql://testuser:testpass123@localhost:5439/testdb"
-echo "✅ Schemas: public, sales, analytics"
+echo "[OK] Schemas: public, sales, analytics"
 echo ""
-echo "🚀 Ready for nlp2sql Redshift testing!"
+echo "[READY] Ready for nlp2sql Redshift testing!"

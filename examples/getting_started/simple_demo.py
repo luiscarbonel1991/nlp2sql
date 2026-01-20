@@ -8,7 +8,7 @@ from nlp2sql.ports.ai_provider import QueryContext, QueryResponse
 def demo_basic_functionality():
     """Demonstrate basic functionality without real API calls."""
 
-    print("🚀 nlp2sql Library Demo")
+    print("nlp2sql Library Demo")
     print("=" * 50)
 
     # 1. Database types
@@ -83,15 +83,15 @@ def demo_basic_functionality():
     print("   - Intelligent caching and query optimization")
 
     print("\n6. Key Features:")
-    print("   ✅ Natural language to SQL conversion")
-    print("   ✅ Schema-aware query generation")
-    print("   ✅ Multi-provider support")
-    print("   ✅ Large database schema handling")
-    print("   ✅ Query validation and optimization")
-    print("   ✅ Intelligent caching")
-    print("   ✅ Vector embeddings for semantic search")
+    print("   [x] Natural language to SQL conversion")
+    print("   [x] Schema-aware query generation")
+    print("   [x] Multi-provider support")
+    print("   [x] Large database schema handling")
+    print("   [x] Query validation and optimization")
+    print("   [x] Intelligent caching")
+    print("   [x] Vector embeddings for semantic search")
 
-    print("\n🎉 Demo completed successfully!")
+    print("\nDemo completed successfully!")
     print("\nNext steps:")
     print("1. Set up your database connection")
     print("2. Configure your AI provider API key")

@@ -15,7 +15,7 @@ structlog.configure(
     cache_logger_on_first_use=True,
 )
 
-from nlp2sql import DatabaseType, create_and_initialize_service
+from nlp2sql import DatabaseType, create_and_initialize_service  # noqa: E402
 
 
 async def test_comprehensive_schema_filtering():
@@ -38,40 +38,40 @@ async def test_comprehensive_schema_filtering():
             break
 
     if not selected_provider:
-        print("❌ No AI provider API key found. Set one of:")
+        print("[ERROR] No AI provider API key found. Set one of:")
         for provider in providers:
             print(f"   export {provider['env_var']}=your-key")
         return
 
-    print(f"🤖 Using {selected_provider['name'].title()} provider")
+    print(f"[INFO] Using {selected_provider['name'].title()} provider")
     ai_provider = selected_provider["name"]
     api_key = selected_provider["key"]
 
-    print("🧪 nlp2sql - Comprehensive Schema Filtering Test")
+    print("nlp2sql - Comprehensive Schema Filtering Test")
     print("=" * 60)
-    print("📋 Testing all filter types with testdb database")
+    print("Testing all filter types with testdb database")
     print()
 
     # Test 1: No filters - Load everything
-    print("1️⃣ BASELINE - No Filters (Load All Tables):")
+    print("1. BASELINE - No Filters (Load All Tables):")
     print("-" * 50)
 
     try:
         service_all = await create_and_initialize_service(database_url, ai_provider=ai_provider, api_key=api_key)
 
         tables_all = await service_all.schema_repository.get_tables()
-        print(f"✅ Loaded {len(tables_all)} tables total")
+        print(f"[OK] Loaded {len(tables_all)} tables total")
 
         # Show what tables we have
         table_names = [table.name for table in tables_all]
-        print(f"📋 Available tables: {', '.join(table_names)}")
+        print(f"Available tables: {', '.join(table_names)}")
 
     except Exception as e:
-        print(f"❌ Error: {e!s}")
+        print(f"[ERROR] {e!s}")
         return
 
     # Test 2: exclude_system_tables
-    print("\n2️⃣ SYSTEM TABLE EXCLUSION:")
+    print("\n2. SYSTEM TABLE EXCLUSION:")
     print("-" * 50)
 
     try:
@@ -82,14 +82,14 @@ async def test_comprehensive_schema_filtering():
         )
 
         tables_no_system = await service_no_system.schema_repository.get_tables()
-        print(f"✅ Loaded {len(tables_no_system)} tables (system tables excluded)")
-        print(f"📊 Reduced by {len(tables_all) - len(tables_no_system)} system tables")
+        print(f"[OK] Loaded {len(tables_no_system)} tables (system tables excluded)")
+        print(f"Reduced by {len(tables_all) - len(tables_no_system)} system tables")
 
     except Exception as e:
-        print(f"❌ Error: {e!s}")
+        print(f"[ERROR] {e!s}")
 
     # Test 3: include_tables (specific tables only)
-    print("\n3️⃣ SPECIFIC TABLE INCLUSION:")
+    print("\n3. SPECIFIC TABLE INCLUSION:")
     print("-" * 50)
 
     try:
@@ -102,21 +102,21 @@ async def test_comprehensive_schema_filtering():
         tables_specific = await service_specific.schema_repository.get_tables()
         included_names = [table.name for table in tables_specific]
 
-        print(f"✅ Loaded {len(tables_specific)} specific tables")
-        print(f"📋 Included tables: {', '.join(included_names)}")
+        print(f"[OK] Loaded {len(tables_specific)} specific tables")
+        print(f"Included tables: {', '.join(included_names)}")
 
         # Test a query with limited schema
-        print("\n🧠 Testing query with limited schema:")
+        print("\nTesting query with limited schema:")
         result = await service_specific.generate_sql("How many users do we have?", database_type=DatabaseType.POSTGRES)
 
-        print(f"   📝 Generated SQL: {result['sql']}")
-        print(f"   📊 Confidence: {result['confidence']}")
+        print(f"   Generated SQL: {result['sql']}")
+        print(f"   Confidence: {result['confidence']}")
 
     except Exception as e:
-        print(f"❌ Error: {e!s}")
+        print(f"[ERROR] {e!s}")
 
     # Test 4: exclude_tables (blacklist specific tables)
-    print("\n4️⃣ SPECIFIC TABLE EXCLUSION:")
+    print("\n4. SPECIFIC TABLE EXCLUSION:")
     print("-" * 50)
 
     try:
@@ -132,18 +132,18 @@ async def test_comprehensive_schema_filtering():
         tables_exclude = await service_exclude.schema_repository.get_tables()
         excluded_names = [table.name for table in tables_exclude]
 
-        print(f"✅ Loaded {len(tables_exclude)} tables (excluded 'reviews')")
-        print(f"📋 Remaining tables: {', '.join(excluded_names)}")
+        print(f"[OK] Loaded {len(tables_exclude)} tables (excluded 'reviews')")
+        print(f"Remaining tables: {', '.join(excluded_names)}")
 
         # Verify reviews table is not included
         has_reviews = any(table.name == "reviews" for table in tables_exclude)
-        print(f"🔍 Reviews table present: {'❌ No' if not has_reviews else '✅ Yes'}")
+        print(f"Reviews table present: {'No' if not has_reviews else 'Yes'}")
 
     except Exception as e:
-        print(f"❌ Error: {e!s}")
+        print(f"[ERROR] {e!s}")
 
     # Test 5: include_schemas (if we have multiple schemas)
-    print("\n5️⃣ SCHEMA-BASED FILTERING:")
+    print("\n5. SCHEMA-BASED FILTERING:")
     print("-" * 50)
 
     try:
@@ -160,7 +160,7 @@ async def test_comprehensive_schema_filtering():
         if not all_schemas:
             all_schemas.add("public")  # Default PostgreSQL schema
 
-        print(f"📊 Available schemas: {', '.join(all_schemas) if all_schemas else 'public (default)'}")
+        print(f"Available schemas: {', '.join(all_schemas) if all_schemas else 'public (default)'}")
 
         # Filter by public schema only
         filters_schema = {"include_schemas": ["public"], "exclude_system_tables": True}
@@ -170,13 +170,13 @@ async def test_comprehensive_schema_filtering():
         )
 
         tables_schema = await service_schema.schema_repository.get_tables()
-        print(f"✅ Loaded {len(tables_schema)} tables from 'public' schema")
+        print(f"[OK] Loaded {len(tables_schema)} tables from 'public' schema")
 
     except Exception as e:
-        print(f"❌ Error: {e!s}")
+        print(f"[ERROR] {e!s}")
 
     # Test 6: Complex combined filtering
-    print("\n6️⃣ COMPLEX COMBINED FILTERING:")
+    print("\n6. COMPLEX COMBINED FILTERING:")
     print("-" * 50)
 
     try:
@@ -194,71 +194,71 @@ async def test_comprehensive_schema_filtering():
         tables_complex = await service_complex.schema_repository.get_tables()
         complex_names = [table.name for table in tables_complex]
 
-        print(f"✅ Loaded {len(tables_complex)} tables with complex filtering")
-        print(f"📋 Final tables: {', '.join(complex_names)}")
+        print(f"[OK] Loaded {len(tables_complex)} tables with complex filtering")
+        print(f"Final tables: {', '.join(complex_names)}")
 
         # Test query with complex filtered schema
-        print("\n🧠 Testing query with complex filtered schema:")
+        print("\nTesting query with complex filtered schema:")
         result = await service_complex.generate_sql(
             "Show me products with their categories", database_type=DatabaseType.POSTGRES
         )
 
-        print(f"   📝 Generated SQL: {result['sql'][:100]}{'...' if len(result['sql']) > 100 else ''}")
-        print(f"   📊 Confidence: {result['confidence']}")
+        print(f"   Generated SQL: {result['sql'][:100]}{'...' if len(result['sql']) > 100 else ''}")
+        print(f"   Confidence: {result['confidence']}")
 
     except Exception as e:
-        print(f"❌ Error: {e!s}")
+        print(f"[ERROR] {e!s}")
 
     # Summary and recommendations
     print("\n" + "=" * 60)
-    print("📊 SCHEMA FILTERING TEST RESULTS SUMMARY")
+    print("SCHEMA FILTERING TEST RESULTS SUMMARY")
     print("=" * 60)
 
-    print("\n🔢 Table Count Comparison:")
-    print(f"   • No filters: {len(tables_all)} tables")
+    print("\nTable Count Comparison:")
+    print(f"   - No filters: {len(tables_all)} tables")
     try:
-        print(f"   • System excluded: {len(tables_no_system)} tables")
-        print(f"   • Specific inclusion: {len(tables_specific)} tables")
-        print(f"   • Specific exclusion: {len(tables_exclude)} tables")
-        print(f"   • Schema filtered: {len(tables_schema)} tables")
-        print(f"   • Complex filtering: {len(tables_complex)} tables")
-    except:
+        print(f"   - System excluded: {len(tables_no_system)} tables")
+        print(f"   - Specific inclusion: {len(tables_specific)} tables")
+        print(f"   - Specific exclusion: {len(tables_exclude)} tables")
+        print(f"   - Schema filtered: {len(tables_schema)} tables")
+        print(f"   - Complex filtering: {len(tables_complex)} tables")
+    except Exception:
         pass
 
-    print("\n💡 Schema Filter Options Available:")
-    print("   ✅ exclude_system_tables: bool - Remove pg_*, information_schema, etc.")
-    print("   ✅ include_schemas: List[str] - Only include specific schemas")
-    print("   ✅ exclude_schemas: List[str] - Exclude specific schemas")
-    print("   ✅ include_tables: List[str] - Only include specific tables")
-    print("   ✅ exclude_tables: List[str] - Exclude specific tables")
+    print("\nSchema Filter Options Available:")
+    print("   [x] exclude_system_tables: bool - Remove pg_*, information_schema, etc.")
+    print("   [x] include_schemas: List[str] - Only include specific schemas")
+    print("   [x] exclude_schemas: List[str] - Exclude specific schemas")
+    print("   [x] include_tables: List[str] - Only include specific tables")
+    print("   [x] exclude_tables: List[str] - Exclude specific tables")
 
-    print("\n🚀 Performance Benefits Observed:")
-    print("   • Reduced table processing for faster initialization")
-    print("   • More focused AI context for better SQL generation")
-    print("   • Lower memory usage with filtered schemas")
-    print("   • Cleaner queries without irrelevant tables")
+    print("\nPerformance Benefits Observed:")
+    print("   - Reduced table processing for faster initialization")
+    print("   - More focused AI context for better SQL generation")
+    print("   - Lower memory usage with filtered schemas")
+    print("   - Cleaner queries without irrelevant tables")
 
-    print("\n🎯 Best Practices:")
+    print("\nBest Practices:")
     print("   1. Always start with exclude_system_tables=True")
     print("   2. Use include_tables for focused business logic")
     print("   3. Use include_schemas for multi-tenant applications")
     print("   4. Combine filters for optimal performance on large databases")
 
-    print("\n📚 Filter Examples for Different Use Cases:")
-    print("   🏢 E-commerce:")
+    print("\nFilter Examples for Different Use Cases:")
+    print("   E-commerce:")
     print("      schema_filters = {")
     print("          'include_tables': ['users', 'products', 'orders', 'payments'],")
     print("          'exclude_system_tables': True")
     print("      }")
     print("   ")
-    print("   🏭 Enterprise (multi-schema):")
+    print("   Enterprise (multi-schema):")
     print("      schema_filters = {")
     print("          'include_schemas': ['sales', 'hr', 'finance'],")
     print("          'exclude_tables': ['audit_logs', 'temp_tables'],")
     print("          'exclude_system_tables': True")
     print("      }")
     print("   ")
-    print("   🚀 High Performance:")
+    print("   High Performance:")
     print("      schema_filters = {")
     print("          'include_tables': ['core_table1', 'core_table2'],")
     print("          'exclude_system_tables': True")
@@ -266,7 +266,7 @@ async def test_comprehensive_schema_filtering():
 
 
 if __name__ == "__main__":
-    print("🔧 nlp2sql Schema Filtering Demo")
+    print("nlp2sql Schema Filtering Demo")
     print("   Set at least one AI provider API key:")
     print("   - export OPENAI_API_KEY=your-openai-key")
     print("   - export ANTHROPIC_API_KEY=your-anthropic-key")
