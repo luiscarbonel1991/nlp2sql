@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(uv run:*)",
+      "Bash(uv sync:*)",
+      "Bash(cd docker && docker compose:*)"
+    ],
+    "deny": [
+      "Read(.env)",
+      "Read(.env.*)"
+    ]
+  }
+}

@@ -163,7 +163,6 @@ cython_debug/
 .idea/
 
 # nlp2sql specific exclusions
-.claude/settings.local.json
 nplsql.toml
 embeddings/
 embeddings
@@ -175,10 +174,15 @@ query_cache.db
 *.md
 !README.md
 !CONTRIBUTING.md
-!CLAUDE.md
 !docs/*.md
 !**/README.md
 !.github/**/*.md
+!.claude/**/*.md
+!CLAUDE.md
+
+# Claude Code local settings
+.claude/settings.local.json
+.claude/CLAUDE.local.md
 
 # macOS specific files
 .DS_Store
