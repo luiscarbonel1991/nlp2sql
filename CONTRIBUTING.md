@@ -2,7 +2,7 @@
 
 Thank you for your interest in contributing to nlp2sql! This project follows enterprise development practices to ensure high quality, maintainability, and reliability.
 
-## 🏗️ Development Philosophy
+## Development Philosophy
 
 nlp2sql is built with enterprise production environments in mind:
 
@@ -12,7 +12,7 @@ nlp2sql is built with enterprise production environments in mind:
 - **Performance First**: Optimized for enterprise scale (1000+ tables)
 - **Multi-Provider**: Avoid vendor lock-in from day one
 
-## 🚀 Getting Started
+## Getting Started
 
 ### Prerequisites
 
@@ -44,7 +44,7 @@ uv run nlp2sql --help
 uv run nlp2sql validate
 ```
 
-## 🔧 Development Workflow
+## Development Workflow
 
 ### 1. Code Quality Standards
 
@@ -115,29 +115,29 @@ from ..exceptions import ProviderException
 
 class ExampleAdapter(AIProviderPort):
     """Example AI provider adapter following enterprise patterns."""
-    
+
     def __init__(self, api_key: Optional[str] = None) -> None:
         """Initialize adapter with configuration.
-        
+
         Args:
             api_key: API key for the provider
-            
+
         Raises:
             ProviderException: If configuration is invalid
         """
         if not api_key:
             raise ProviderException("API key is required")
         self._api_key = api_key
-    
+
     async def generate_query(self, context: QueryContext) -> QueryResponse:
         """Generate SQL query from natural language.
-        
+
         Args:
             context: Query generation context with question and schema
-            
+
         Returns:
             Generated query response with SQL and metadata
-            
+
         Raises:
             ProviderException: If query generation fails
         """
@@ -148,16 +148,16 @@ class ExampleAdapter(AIProviderPort):
             raise ProviderException(f"Query generation failed: {e}") from e
 ```
 
-## 📋 Contribution Types
+## Contribution Types
 
-### 🐛 Bug Fixes
+### Bug Fixes
 
 1. **Create issue** describing the bug with reproduction steps
 2. **Write test** that reproduces the bug
 3. **Fix the bug** ensuring test passes
 4. **Update documentation** if behavior changes
 
-### ✨ New Features
+### New Features
 
 1. **Discuss in issue** before implementing large features
 2. **Follow architecture** patterns (ports/adapters)
@@ -165,7 +165,7 @@ class ExampleAdapter(AIProviderPort):
 4. **Update documentation** and examples
 5. **Consider enterprise impact** (scale, performance, security)
 
-### 🏢 Enterprise Features
+### Enterprise Features
 
 Priority areas for enterprise contributions:
 
@@ -175,14 +175,14 @@ Priority areas for enterprise contributions:
 - **Security features** (audit logging, sanitization)
 - **Monitoring** (metrics, health checks, alerting)
 
-### 📚 Documentation
+### Documentation
 
 - **API documentation** (docstrings, type hints)
 - **User guides** (tutorials, best practices)
 - **Enterprise guides** (deployment, scaling, security)
 - **Migration guides** (from other frameworks)
 
-## 🔍 Pull Request Process
+## Pull Request Process
 
 ### 1. Before Submitting
 
@@ -233,7 +233,7 @@ Brief description of changes and why they're needed.
 4. **Documentation review** for user-facing changes
 5. **Merge** after approval
 
-## 🏢 Enterprise Contribution Guidelines
+## Enterprise Contribution Guidelines
 
 ### Performance Considerations
 
@@ -256,7 +256,7 @@ Brief description of changes and why they're needed.
 - **Database schema changes** need migration scripts
 - **Multi-provider** changes should support all providers
 
-## 🎯 Development Priorities
+## Development Priorities
 
 ### Current Focus Areas
 
@@ -288,7 +288,7 @@ Brief description of changes and why they're needed.
 - **GraphQL support**
 - **Streaming large result sets**
 
-## 📞 Getting Help
+## Getting Help
 
 ### Communication Channels
 
@@ -303,7 +303,7 @@ Brief description of changes and why they're needed.
 - **Pull requests**: 2-5 business days
 - **Enterprise inquiries**: 24 hours
 
-## 🏆 Recognition
+## Recognition
 
 Contributors are recognized in multiple ways:
 
@@ -312,11 +312,11 @@ Contributors are recognized in multiple ways:
 - **Enterprise contributor program** for ongoing contributors
 - **Conference speaking opportunities** for major features
 
-## 📄 License
+## License
 
 By contributing, you agree that your contributions will be licensed under the MIT License.
 
-## 🙏 Thank You
+## Thank You
 
 Every contribution helps make nlp2sql better for enterprise users worldwide. Whether it's a bug fix, new feature, documentation improvement, or performance optimization, your work is valued and appreciated!
 
