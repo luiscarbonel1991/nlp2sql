@@ -171,10 +171,14 @@ query_cache.db
 *.iml
 *.idea/
 .venv_test/
+# Markdown - ignore generated/temp, keep documentation
 *.md
 !README.md
 !CONTRIBUTING.md
+!CLAUDE.md
 !docs/*.md
+!**/README.md
+!.github/**/*.md
 
 # macOS specific files
 .DS_Store
