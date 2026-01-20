@@ -99,3 +99,14 @@ class SchemaRepositoryPort(ABC):
             SchemaException: If query execution fails
         """
         pass
+
+    def clear_cache(self) -> None:
+        """Clear any cached data.
+
+        Optional implementation. Adapters can override this method to clear
+        their local caches (e.g., tables cache stored on disk).
+
+        This is a synchronous method since cache clearing is typically a
+        simple file operation that doesn't require async I/O.
+        """
+        pass  # Default no-op, adapters can override

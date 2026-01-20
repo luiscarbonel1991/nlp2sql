@@ -1,9 +1,13 @@
 """Amazon Redshift repository for schema management."""
 
 import asyncio
+import hashlib
+import os
+import pickle
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import psycopg2
@@ -18,6 +22,10 @@ from ..ports.schema_repository import (
 )
 
 logger = structlog.get_logger()
+
+# Cache configuration
+SCHEMA_CACHE_TTL_HOURS = int(os.getenv("NLP2SQL_SCHEMA_CACHE_TTL_HOURS", "24"))
+SCHEMA_CACHE_VERSION = "1.0"  # Increment when cache format changes
 
 # SQL patterns that are not allowed for security
 DANGEROUS_SQL_PATTERNS = [
@@ -94,6 +102,98 @@ class RedshiftRepository(SchemaRepositoryPort):
         self.schema_name = schema_name
         self._connection_params = self._parse_connection_string(connection_string)
         self._initialized = False
+        self._cache_dir: Optional[Path] = None
+
+    def _get_cache_dir(self) -> Path:
+        """Get the cache directory for this database connection."""
+        if self._cache_dir is None:
+            url_hash = hashlib.md5(self.connection_string.encode()).hexdigest()[:12]
+            base_dir = Path(os.getenv("NLP2SQL_EMBEDDINGS_DIR", "./embeddings"))
+            self._cache_dir = base_dir / url_hash
+            self._cache_dir.mkdir(parents=True, exist_ok=True)
+        return self._cache_dir
+
+    def _get_tables_cache_path(self, schema: str) -> Path:
+        """Get path for the tables cache file."""
+        return self._get_cache_dir() / f"tables_cache_{schema}.pkl"
+
+    def _is_cache_valid(self, schema: str) -> bool:
+        """Check if tables cache exists and is not expired."""
+        cache_path = self._get_tables_cache_path(schema)
+        if not cache_path.exists():
+            return False
+
+        try:
+            with open(cache_path, "rb") as f:
+                cache_data = pickle.load(f)
+
+            if cache_data.get("version") != SCHEMA_CACHE_VERSION:
+                return False
+
+            created_at = cache_data.get("created_at")
+            if created_at is None:
+                return False
+
+            ttl = timedelta(hours=SCHEMA_CACHE_TTL_HOURS)
+            if datetime.now() - created_at > ttl:
+                return False
+
+            if cache_data.get("schema_name") != schema:
+                return False
+
+            return True
+
+        except Exception as e:
+            logger.warning("Failed to validate cache", error=str(e))
+            return False
+
+    def _load_tables_from_cache(self, schema: str) -> Optional[List[TableInfo]]:
+        """Load tables from disk cache if valid."""
+        if not self._is_cache_valid(schema):
+            return None
+
+        cache_path = self._get_tables_cache_path(schema)
+        try:
+            with open(cache_path, "rb") as f:
+                cache_data = pickle.load(f)
+
+            tables = cache_data.get("tables", [])
+            logger.info("Loaded tables from disk cache", count=len(tables))
+            return tables
+
+        except Exception as e:
+            logger.warning("Failed to load tables from cache", error=str(e))
+            return None
+
+    def _save_tables_to_cache(self, tables: List[TableInfo], schema: str) -> None:
+        """Save tables to disk cache."""
+        cache_path = self._get_tables_cache_path(schema)
+        try:
+            cache_data = {
+                "tables": tables,
+                "created_at": datetime.now(),
+                "schema_name": schema,
+                "table_count": len(tables),
+                "version": SCHEMA_CACHE_VERSION,
+            }
+
+            with open(cache_path, "wb") as f:
+                pickle.dump(cache_data, f)
+
+            logger.info("Tables saved to disk cache", count=len(tables))
+
+        except Exception as e:
+            logger.warning("Failed to save tables to cache", error=str(e))
+
+    def clear_cache(self) -> None:
+        """Clear all cached data for this repository."""
+        cache_dir = self._get_cache_dir()
+        try:
+            for cache_file in cache_dir.glob("tables_cache_*.pkl"):
+                cache_file.unlink()
+                logger.info("Cache file deleted", path=str(cache_file))
+        except Exception as e:
+            logger.warning("Failed to clear cache", error=str(e))
 
     def _parse_connection_string(self, conn_str: str) -> Dict[str, Any]:
         """Parse connection string into psycopg2 parameters."""
@@ -168,41 +268,146 @@ class RedshiftRepository(SchemaRepositoryPort):
         results = self._execute_query(query, params)
         return results[0] if results else None
 
-    async def get_tables(self, schema_name: Optional[str] = None) -> List[TableInfo]:
-        """Get all tables in the schema.
+    async def get_tables(self, schema_name: Optional[str] = None, force_refresh: bool = False) -> List[TableInfo]:
+        """Get all tables in the schema using hybrid bulk query + disk cache.
 
-        Uses SVV_TABLES (Redshift system view) instead of information_schema.tables
-        for better permission handling. See AWS docs:
+        Uses SVV_TABLES and SVV_COLUMNS (Redshift system views) for better
+        permission handling. See AWS docs:
         https://docs.aws.amazon.com/redshift/latest/dg/cm_chap_system-tables.html
+
+        Args:
+            schema_name: Schema name to query (defaults to self.schema_name)
+            force_refresh: If True, bypass cache and fetch fresh data
+
+        Returns:
+            List of TableInfo objects
         """
         if not self._initialized:
             await self.initialize()
 
         schema = schema_name or self.schema_name
 
-        # Use SVV_TABLES for better Redshift compatibility and permissions
-        query = """
+        # Step 1: Try to load from cache (unless force_refresh)
+        if not force_refresh:
+            cached_tables = self._load_tables_from_cache(schema)
+            if cached_tables is not None:
+                return cached_tables
+
+        # Step 2: Execute bulk query
+        logger.info("Fetching tables with bulk query...", schema=schema)
+        tables = await self._get_tables_bulk(schema)
+
+        # Step 3: Save to cache
+        self._save_tables_to_cache(tables, schema)
+
+        return tables
+
+    async def _get_tables_bulk(self, schema: str) -> List[TableInfo]:
+        """Fetch all tables with columns and primary keys in a single bulk query.
+
+        Uses Redshift SVV views for better permission handling.
+        """
+        # Note: Redshift's information_schema views have limited support for
+        # constraints, so we skip primary key detection in the bulk query.
+        # Primary keys are not essential for SQL generation.
+        bulk_query = """
         SELECT
-            table_name,
-            table_schema,
-            '' as table_comment
-        FROM svv_tables
-        WHERE table_schema = %s
-        ORDER BY table_name
+            t.table_name,
+            t.table_schema,
+            '' as table_comment,
+            c.column_name,
+            c.data_type,
+            c.is_nullable,
+            c.column_default,
+            c.character_maximum_length,
+            c.numeric_precision,
+            c.numeric_scale,
+            c.ordinal_position,
+            NULL as pk_columns
+        FROM svv_tables t
+        LEFT JOIN svv_columns c ON t.table_name = c.table_name
+            AND t.table_schema = c.table_schema
+        WHERE t.table_schema = %s
+        ORDER BY t.table_name, c.ordinal_position
         """
 
         try:
-            rows = await asyncio.to_thread(self._execute_query, query, (schema,))
+            start_time = time.time()
+            rows = await asyncio.to_thread(
+                self._execute_query, bulk_query, (schema,)
+            )
 
-            tables = []
+            elapsed_ms = round((time.time() - start_time) * 1000, 2)
+            logger.info("Bulk query completed", rows=len(rows), elapsed_ms=elapsed_ms)
+
+            # Process rows and group by table
+            tables_dict: Dict[str, Dict[str, Any]] = {}
             for row in rows:
-                table_info = await self._build_table_info(row, schema)
-                tables.append(table_info)
+                table_name = row["table_name"]
 
+                if table_name not in tables_dict:
+                    # Parse pk_columns - Redshift may return string representation
+                    pk_cols = row.get("pk_columns")
+                    if pk_cols:
+                        if isinstance(pk_cols, str):
+                            # Handle string like '{col1,col2}'
+                            pk_cols = pk_cols.strip("{}").split(",") if pk_cols != "{}" else []
+                        elif isinstance(pk_cols, list):
+                            pk_cols = list(pk_cols)
+                        else:
+                            pk_cols = []
+                    else:
+                        pk_cols = []
+
+                    tables_dict[table_name] = {
+                        "name": table_name,
+                        "schema": row["table_schema"],
+                        "description": row.get("table_comment", ""),
+                        "columns": [],
+                        "primary_keys": pk_cols,
+                        "foreign_keys": [],
+                        "indexes": [],
+                        "_seen_columns": set(),
+                    }
+
+                # Add column (avoiding duplicates)
+                col_name = row.get("column_name")
+                if col_name and col_name not in tables_dict[table_name]["_seen_columns"]:
+                    tables_dict[table_name]["_seen_columns"].add(col_name)
+                    tables_dict[table_name]["columns"].append({
+                        "name": col_name,
+                        "type": row.get("data_type", ""),
+                        "nullable": row.get("is_nullable") == "YES",
+                        "default": row.get("column_default"),
+                        "max_length": row.get("character_maximum_length"),
+                        "precision": row.get("numeric_precision"),
+                        "scale": row.get("numeric_scale"),
+                        "description": "",
+                    })
+
+            # Convert to TableInfo objects
+            tables = []
+            for table_data in tables_dict.values():
+                del table_data["_seen_columns"]
+
+                tables.append(TableInfo(
+                    name=table_data["name"],
+                    schema=table_data["schema"],
+                    columns=table_data["columns"],
+                    primary_keys=table_data["primary_keys"],
+                    foreign_keys=table_data["foreign_keys"],
+                    indexes=table_data["indexes"],
+                    row_count=0,
+                    size_bytes=0,
+                    description=table_data["description"],
+                    last_updated=datetime.now(),
+                ))
+
+            logger.info("Tables processed from bulk query", count=len(tables))
             return tables
 
         except Exception as e:
-            logger.error("Failed to get tables", error=str(e))
+            logger.error("Bulk query failed", error=str(e))
             raise SchemaException(f"Failed to get tables: {e!s}")
 
     async def get_table_info(self, table_name: str, schema_name: Optional[str] = None) -> TableInfo:
