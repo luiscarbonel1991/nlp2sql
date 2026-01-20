@@ -299,7 +299,10 @@ class SchemaManager:
     async def _find_relevant_tables(
         self, query: str, database_type: DatabaseType, max_tables: int = 10
     ) -> List[Tuple[str, float]]:
-        """Find relevant tables using multiple strategies."""
+        """Find relevant tables using multiple strategies including batch scoring.
+
+        Uses batch scoring when analyzing multiple tables to minimize API calls.
+        """
         # Check in-memory cache first (faster than external cache)
         mem_cache_key = f"{query}:{database_type.value}:{max_tables}"
         if mem_cache_key in self._table_relevance_cache:
@@ -319,7 +322,7 @@ class SchemaManager:
                 self._table_relevance_cache[mem_cache_key] = cached_tables
                 return cached_tables
 
-        # Strategy 1: Embedding similarity
+        # Strategy 1: Embedding similarity (uses FAISS index)
         embedding_results = await self.embedding_manager.search_similar(
             query, top_k=max_tables * 2, database_type=database_type
         )
@@ -335,34 +338,43 @@ class SchemaManager:
                 if table_name:
                     table_scores[table_name] = max(table_scores.get(table_name, 0), score * 0.8)
 
-        # Strategy 2: Direct schema analysis
-        # Always analyze tables that have potential token matches with the query
-        # This ensures tables like "organization" are found for queries like "count organizations"
-        query_tokens = set(self.analyzer._tokenize(query.lower()))
-        # Normalize tokens for better singular/plural matching
-        normalized_query_tokens = {self.analyzer._normalize_word(t) for t in query_tokens}
-
-        # Use cached tables if available (avoids expensive DB query)
+        # Strategy 2: Batch schema analysis
+        # Use cached tables (now fast with bulk query + disk cache)
         all_tables = await self._get_cached_tables()
 
+        # Identify tables to analyze with batch scoring
+        query_tokens = set(self.analyzer._tokenize(query.lower()))
+        normalized_query_tokens = {self.analyzer._normalize_word(t) for t in query_tokens}
+
+        tables_to_analyze = []
         for table in all_tables:
             table_name_tokens = set(self.analyzer._tokenize(table.name.lower()))
             normalized_table_tokens = {self.analyzer._normalize_word(t) for t in table_name_tokens}
-            # Check both exact token match and normalized token match
             has_token_match = bool(query_tokens & table_name_tokens) or bool(
                 normalized_query_tokens & normalized_table_tokens
             )
 
             # Analyze if: has token match OR (not in results AND we need more)
-            should_analyze = has_token_match or (table.name not in table_scores and len(table_scores) < max_tables * 2)
+            should_analyze = has_token_match or (
+                table.name not in table_scores and len(table_scores) < max_tables * 2
+            )
 
             if should_analyze:
-                table_dict = self._table_info_to_dict(table)
-                # Use semantic=False for speed when we already have a token match
-                score = await self.analyzer.score_relevance(query, table_dict, use_semantic=not has_token_match)
+                tables_to_analyze.append(table)
+
+        # Use batch scoring for all tables to analyze (single API call)
+        if tables_to_analyze:
+            table_dicts = [self._table_info_to_dict(t) for t in tables_to_analyze]
+
+            # Batch score all tables (uses single embedding API call)
+            scored_tables = await self.analyzer.score_relevance_batch(
+                query, table_dicts, use_semantic=True
+            )
+
+            for table_dict, score in scored_tables:
                 if score > 0.1:  # Minimum threshold
-                    # Use max to keep higher score if already exists
-                    table_scores[table.name] = max(table_scores.get(table.name, 0), score)
+                    table_name = table_dict["name"]
+                    table_scores[table_name] = max(table_scores.get(table_name, 0), score)
 
         # Separate exact matches (score >= 1.0) to ensure they come first
         exact_matches = [(name, score) for name, score in table_scores.items() if score >= 1.0]

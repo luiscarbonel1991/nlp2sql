@@ -384,12 +384,7 @@ class SchemaAnalyzer(SchemaStrategyPort):
             return 0.0
 
         # Create descriptive text for element
-        element_desc = f"{element_name}"
-        if "description" in schema_element:
-            element_desc += f" {schema_element['description']}"
-        if "columns" in schema_element:
-            col_names = [c.get("name", "") for c in schema_element["columns"][:5]]
-            element_desc += f" with columns {', '.join(col_names)}"
+        element_desc = self._create_element_description(schema_element)
 
         # Get query embedding from cache or generate it (avoids N+1 API calls)
         if query not in self._query_embedding_cache:
@@ -406,6 +401,179 @@ class SchemaAnalyzer(SchemaStrategyPort):
         # Calculate similarity
         similarity = cosine_similarity(query_embedding, element_embedding)[0][0]
         return float(similarity)
+
+    def _create_element_description(self, element: Dict[str, Any]) -> str:
+        """Create descriptive text for embedding.
+
+        Creates a rich text description of a schema element that captures
+        its name, description, and column information for semantic matching.
+        """
+        name = element.get("name", "")
+        desc = f"{name}"
+
+        if element.get("description"):
+            desc += f" {element['description']}"
+
+        if "columns" in element:
+            col_names = [c.get("name", "") for c in element["columns"][:5]]
+            if col_names:
+                desc += f" with columns {', '.join(col_names)}"
+
+        return desc
+
+    async def score_relevance_batch(
+        self,
+        query: str,
+        schema_elements: List[Dict[str, Any]],
+        use_semantic: bool = True,
+    ) -> List[Tuple[Dict[str, Any], float]]:
+        """Score relevance of multiple schema elements in a single batch.
+
+        This is more efficient than calling score_relevance() in a loop
+        because it batches embedding API calls into a single request.
+
+        Args:
+            query: The search query
+            schema_elements: List of schema elements to score
+            use_semantic: Whether to use semantic similarity
+
+        Returns:
+            List of (element, score) tuples sorted by score descending
+        """
+        if not schema_elements:
+            return []
+
+        # Step 1: Fast text-based scoring for all elements (no API calls)
+        text_scores: Dict[str, float] = {}
+        query_lower = query.lower()
+        query_tokens = self._tokenize(query_lower)
+        normalized_query_tokens = {self._normalize_word(t) for t in query_tokens}
+
+        for element in schema_elements:
+            element_name = element.get("name", "")
+            element_name_lower = element_name.lower()
+
+            # Calculate text score (same logic as score_relevance)
+            score = 0.0
+
+            # Exact match
+            normalized_element = self._normalize_word(element_name_lower)
+            if element_name_lower in query_lower or normalized_element in query_lower:
+                score = 1.0
+            else:
+                # Token match
+                element_tokens = self._tokenize(element_name_lower)
+                normalized_element_tokens = {self._normalize_word(t) for t in element_tokens}
+                common_tokens = set(query_tokens) & set(element_tokens)
+                common_normalized = normalized_query_tokens & normalized_element_tokens
+
+                if common_tokens or common_normalized:
+                    match_count = max(len(common_tokens), len(common_normalized))
+                    score = match_count / max(len(query_tokens), len(element_tokens))
+
+            # Column-based relevance for tables
+            if element.get("type") == "table" and "columns" in element:
+                column_matches = 0
+                columns_to_check = element["columns"][:15]
+                for column in columns_to_check:
+                    col_name = column.get("name", "").lower()
+                    if col_name in query_lower:
+                        column_matches += 2
+                    elif any(token in col_name for token in query_tokens):
+                        column_matches += 1
+                if column_matches > 0:
+                    column_score = min(column_matches / len(columns_to_check), 1.0) * 0.8
+                    score = max(score, column_score)
+
+            text_scores[element_name] = score
+
+        # Step 2: Batch semantic scoring (single API call) for elements that need it
+        if use_semantic and self.embedding_provider is not None:
+            # Filter elements that need semantic scoring (text score < 0.8)
+            elements_for_semantic = [
+                e for e in schema_elements
+                if text_scores.get(e.get("name", ""), 0) < 0.8
+            ]
+
+            if elements_for_semantic:
+                semantic_scores = await self._calculate_semantic_similarity_batch(
+                    query, elements_for_semantic
+                )
+                # Merge scores (take max of text and semantic)
+                for element, sem_score in semantic_scores:
+                    name = element.get("name", "")
+                    text_scores[name] = max(text_scores.get(name, 0), sem_score)
+
+        # Step 3: Build results
+        results = []
+        for element in schema_elements:
+            score = text_scores.get(element.get("name", ""), 0)
+            results.append((element, score))
+
+        # Sort by score descending
+        results.sort(key=lambda x: x[1], reverse=True)
+        return results
+
+    async def _calculate_semantic_similarity_batch(
+        self,
+        query: str,
+        elements: List[Dict[str, Any]],
+    ) -> List[Tuple[Dict[str, Any], float]]:
+        """Calculate semantic similarity for multiple elements in one API call.
+
+        Args:
+            query: The search query
+            elements: List of schema elements
+
+        Returns:
+            List of (element, similarity_score) tuples
+        """
+        if not elements or self.embedding_provider is None:
+            return []
+
+        # Step 1: Create descriptions for all elements
+        descriptions = []
+        for element in elements:
+            desc = self._create_element_description(element)
+            descriptions.append(desc)
+
+        # Step 2: Get query embedding (cached)
+        if query not in self._query_embedding_cache:
+            self._query_embedding_cache[query] = await self.create_embeddings([query])
+        query_embedding = self._query_embedding_cache[query]
+
+        if query_embedding.size == 0:
+            return []
+
+        # Step 3: Batch embed all element descriptions (SINGLE API CALL)
+        logger.debug("Batch embedding elements", count=len(descriptions))
+        element_embeddings = await self.create_embeddings(descriptions)
+
+        if element_embeddings.size == 0:
+            return []
+
+        # Step 4: Calculate all similarities in memory (vectorized)
+        results = []
+        # Handle both 1D and 2D embeddings
+        if len(element_embeddings.shape) == 1:
+            # Single embedding returned
+            similarity = cosine_similarity(
+                query_embedding.reshape(1, -1),
+                element_embeddings.reshape(1, -1)
+            )[0][0]
+            if len(elements) == 1:
+                results.append((elements[0], float(similarity)))
+        else:
+            # Multiple embeddings - use batch similarity calculation
+            similarities = cosine_similarity(
+                query_embedding.reshape(1, -1),
+                element_embeddings
+            )[0]
+            for i, element in enumerate(elements):
+                if i < len(similarities):
+                    results.append((element, float(similarities[i])))
+
+        return results
 
     def _get_important_columns(self, columns: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Identify important columns based on heuristics."""

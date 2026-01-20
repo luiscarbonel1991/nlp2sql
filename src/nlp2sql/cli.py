@@ -5,6 +5,7 @@ import json
 import os
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -12,7 +13,6 @@ import click
 import structlog
 
 from . import create_and_initialize_service, create_query_service
-from .adapters.postgres_repository import PostgreSQLRepository
 from .core.entities import DatabaseType
 from .exceptions import NLP2SQLException, ProviderException
 
@@ -56,27 +56,30 @@ def detect_command_confusion(ctx, param, value):
 
 
 def detect_database_type(database_url: str) -> DatabaseType:
-    """Detect database type from connection URL."""
-    if database_url.startswith("postgresql://"):
-        return DatabaseType.POSTGRES
-    if database_url.startswith("redshift://"):
-        return DatabaseType.REDSHIFT
-    if database_url.startswith("mysql://"):
-        return DatabaseType.MYSQL
-    if database_url.startswith("sqlite://"):
-        return DatabaseType.SQLITE
-    # Default to PostgreSQL for compatibility
-    return DatabaseType.POSTGRES
+    """Detect database type from connection URL.
+
+    This function delegates to RepositoryFactory.detect_database_type()
+    for centralized database type detection logic.
+
+    Args:
+        database_url: Database connection URL
+
+    Returns:
+        Detected DatabaseType
+    """
+    from .factories import RepositoryFactory
+
+    return RepositoryFactory.detect_database_type(database_url)
 
 
 def validate_database_url(ctx, param, value):
     """Validate database URL format."""
-    if value and not value.startswith(("postgresql://", "mysql://", "sqlite://", "redshift://")):
+    if value and not value.startswith(("postgresql://", "postgres://", "mysql://", "sqlite://", "redshift://")):
         click.echo(f"[ERROR] Invalid database URL format: {value}", err=True)
         click.echo("Hint: Expected format: postgresql://user:pass@host:port/database", err=True)
         click.echo("Note: Examples:", err=True)
         click.echo("   postgresql://testuser:testpass@localhost:5432/testdb", err=True)
-        click.echo("   postgresql://demo:demo123@localhost:5433/enterprise", err=True)
+        click.echo("   postgres://demo:demo123@localhost:5433/enterprise", err=True)
         click.echo("   redshift://user:pass@cluster.region.redshift.amazonaws.com:5439/database", err=True)
         ctx.exit(1)
     return value
@@ -211,23 +214,19 @@ def inspect(
 
     async def _inspect():
         try:
-            # Detect database type and create appropriate repository
+            # Detect database type and create appropriate repository using factory
+            from .factories import RepositoryFactory
+
             database_type = detect_database_type(database_url)
 
             if verbose:
                 click.echo(f"[DATABASE] Detected database type: {database_type.value}")
 
-            if database_type == DatabaseType.POSTGRES:
-                repo = PostgreSQLRepository(database_url, schema)
-            elif database_type == DatabaseType.REDSHIFT:
-                from .adapters.redshift_adapter import RedshiftRepository
-
-                repo = RedshiftRepository(database_url, schema)
-            else:
-                click.echo(f"[ERROR] Database type {database_type.value} not supported for inspection yet", err=True)
+            try:
+                repo = await RepositoryFactory.create_and_initialize(database_url, schema, database_type)
+            except NotImplementedError as e:
+                click.echo(f"[ERROR] {e}", err=True)
                 sys.exit(1)
-
-            await repo.initialize()
 
             # Get schema information
             tables = await repo.get_tables()
@@ -604,11 +603,12 @@ def validate(ctx):
 
 async def _test_database(db_url: str, verbose: bool = False):
     """Test database connection."""
+    from .factories import RepositoryFactory
+
     if verbose:
         click.echo(f"Info: Connecting to: {db_url[:30]}...")
 
-    repo = PostgreSQLRepository(db_url)
-    await repo.connect()
+    repo = await RepositoryFactory.create_and_initialize(db_url)
     if verbose:
         click.echo("   Connection established successfully")
 
@@ -885,59 +885,74 @@ def cache():
 @click.option("--all", "clear_all", is_flag=True, help="Clear all cache files")
 @click.option("--embeddings", is_flag=True, help="Clear embeddings cache")
 @click.option("--queries", is_flag=True, help="Clear query cache")
-def cache_clear(clear_all: bool, embeddings: bool, queries: bool):
-    """Clear various cache files."""
+@click.option("--tables", is_flag=True, help="Clear tables cache (forces re-fetch from database)")
+def cache_clear(clear_all: bool, embeddings: bool, queries: bool, tables: bool):
+    """Clear various cache files.
 
-    if not any([clear_all, embeddings, queries]):
-        click.echo("[ERROR] Specify what to clear: --all, --embeddings, or --queries")
+    Examples:
+        nlp2sql cache clear --tables       # Clear tables cache only
+        nlp2sql cache clear --embeddings   # Clear embeddings cache only
+        nlp2sql cache clear --all          # Clear all caches
+    """
+    if not any([clear_all, embeddings, queries, tables]):
+        click.echo("[ERROR] Specify what to clear: --all, --embeddings, --queries, or --tables")
         return
 
     # Get embeddings directory from environment variable
     embeddings_dir = get_embeddings_dir()
 
-    cache_paths = {
-        "embeddings": [str(embeddings_dir) + "/", "schema_embeddings.pkl", "schema_index.faiss"],
-        "queries": ["query_cache.db", ".nlp2sql_cache/"],
-    }
-
     cleared = []
 
     if clear_all:
-        embeddings = queries = True
+        embeddings = queries = tables = True
 
     if embeddings:
-        click.echo("🗑️  Clearing embeddings cache...")
-        for path in cache_paths["embeddings"]:
+        click.echo("Clearing embeddings cache...")
+        cache_paths = [str(embeddings_dir) + "/", "schema_embeddings.pkl", "schema_index.faiss"]
+        for path in cache_paths:
             if Path(path).exists():
                 if Path(path).is_dir():
                     import shutil
-
                     shutil.rmtree(path)
                 else:
                     Path(path).unlink()
                 cleared.append(path)
 
     if queries:
-        click.echo("🗑️  Clearing query cache...")
-        for path in cache_paths["queries"]:
+        click.echo("Clearing query cache...")
+        cache_paths = ["query_cache.db", ".nlp2sql_cache/"]
+        for path in cache_paths:
             if Path(path).exists():
                 if Path(path).is_dir():
                     import shutil
-
                     shutil.rmtree(path)
                 else:
                     Path(path).unlink()
                 cleared.append(path)
 
+    if tables:
+        click.echo("Clearing tables cache...")
+        # Tables cache files are stored as tables_cache_*.pkl in embeddings subdirectories
+        if embeddings_dir.exists():
+            for cache_file in embeddings_dir.rglob("tables_cache_*.pkl"):
+                try:
+                    cache_file.unlink()
+                    cleared.append(str(cache_file))
+                    click.echo(f"   Deleted: {cache_file}")
+                except Exception as e:
+                    click.echo(f"   [ERROR] Failed to delete {cache_file}: {e}", err=True)
+
     if cleared:
-        click.echo(f"[OK] Cleared: {', '.join(cleared)}")
+        click.echo(f"[OK] Cleared {len(cleared)} cache file(s)")
     else:
-        click.echo("ℹ️  No cache files found to clear")
+        click.echo("No cache files found to clear")
 
 
 @cache.command("info")
 def cache_info():
     """Show cache information and statistics."""
+    import pickle
+
     click.echo("[STATS] Cache Information")
     click.echo("=" * 25)
 
@@ -946,28 +961,54 @@ def cache_info():
     if embeddings_path.exists():
         size = sum(f.stat().st_size for f in embeddings_path.rglob("*") if f.is_file())
         files = len([f for f in embeddings_path.rglob("*") if f.is_file()])
-        click.echo("🧠 Embeddings cache:")
-        click.echo(f"   📁 Location: {embeddings_path.absolute()}")
-        click.echo(f"   [STATS] Size: {size / 1024 / 1024:.2f} MB")
-        click.echo(f"   📄 Files: {files}")
+        click.echo("Embeddings cache:")
+        click.echo(f"   Location: {embeddings_path.absolute()}")
+        click.echo(f"   Size: {size / 1024 / 1024:.2f} MB")
+        click.echo(f"   Files: {files}")
     else:
-        click.echo("🧠 Embeddings cache: Not found")
+        click.echo("Embeddings cache: Not found")
+
+    # Check tables cache
+    tables_caches = list(embeddings_path.rglob("tables_cache_*.pkl")) if embeddings_path.exists() else []
+    if tables_caches:
+        click.echo("\nTables cache:")
+        total_tables = 0
+        for cache_file in tables_caches:
+            try:
+                with open(cache_file, "rb") as f:
+                    cache_data = pickle.load(f)
+                table_count = cache_data.get("table_count", 0)
+                created_at = cache_data.get("created_at")
+                schema_name = cache_data.get("schema_name", "unknown")
+                total_tables += table_count
+
+                age_str = ""
+                if created_at:
+                    age_hours = (datetime.now() - created_at).total_seconds() / 3600
+                    age_str = f", age: {age_hours:.1f}h"
+
+                click.echo(f"   {cache_file.name}: {table_count} tables (schema: {schema_name}{age_str})")
+            except Exception as e:
+                click.echo(f"   {cache_file.name}: [ERROR] {e}")
+        click.echo(f"   Total cached tables: {total_tables}")
+    else:
+        click.echo("\nTables cache: Not found")
 
     # Check FAISS index
     faiss_path = Path("schema_index.faiss")
     if faiss_path.exists():
         size = faiss_path.stat().st_size
-        click.echo("Info: FAISS index:")
-        click.echo(f"   📁 Location: {faiss_path.absolute()}")
-        click.echo(f"   [STATS] Size: {size / 1024 / 1024:.2f} MB")
+        click.echo("\nFAISS index:")
+        click.echo(f"   Location: {faiss_path.absolute()}")
+        click.echo(f"   Size: {size / 1024 / 1024:.2f} MB")
     else:
-        click.echo("Info: FAISS index: Not found")
+        click.echo("\nFAISS index: Not found")
 
     # Check query cache
     query_cache_path = Path("query_cache.db")
     if query_cache_path.exists():
         size = query_cache_path.stat().st_size
-        click.echo("💾 Query cache:")
+        click.echo("\nQuery cache:")
         click.echo(f"   📁 Location: {query_cache_path.absolute()}")
         click.echo(f"   [STATS] Size: {size / 1024:.2f} KB")
     else:

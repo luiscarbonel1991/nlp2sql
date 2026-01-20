@@ -63,12 +63,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from nlp2sql import (
     DatabaseType,
-    PostgreSQLRepository,
-    RedshiftRepository,
     create_and_initialize_service,
+    create_repository,
 )
-from nlp2sql.cli import detect_database_type
 from nlp2sql.exceptions import SecurityException
+from nlp2sql.factories import RepositoryFactory
 
 # Create FastMCP server
 mcp = FastMCP("nlp2sql")
@@ -142,15 +141,7 @@ async def _get_repository(database_url: str, schema_name: str = "public") -> Any
     cache_key = f"{database_url}:{schema_name}"
 
     if cache_key not in _repository_cache:
-        database_type = detect_database_type(database_url)
-
-        if database_type == DatabaseType.REDSHIFT:
-            repository = RedshiftRepository(database_url, schema_name)
-        else:
-            repository = PostgreSQLRepository(database_url, schema_name)
-
-        await repository.initialize()
-        _repository_cache[cache_key] = repository
+        _repository_cache[cache_key] = await create_repository(database_url, schema_name)
 
     return _repository_cache[cache_key]
 
@@ -305,7 +296,7 @@ async def ask_database(
     try:
         # Resolve database
         database_url = _resolve_database(database)
-        database_type = detect_database_type(database_url)
+        database_type = RepositoryFactory.detect_database_type(database_url)
 
         # Get cached service (fast after first call)
         service = await _get_cached_service(database_url, database_type, schema_name=schema)
@@ -528,7 +519,7 @@ async def list_databases() -> str:
         if url:
             # Detect database type without exposing the URL
             try:
-                db_type = detect_database_type(url)
+                db_type = RepositoryFactory.detect_database_type(url)
                 status = "configured"
                 database_type = db_type.value
             except Exception:
@@ -592,7 +583,7 @@ async def explain_sql(
     """
     try:
         database_url = _resolve_database(database)
-        database_type = detect_database_type(database_url)
+        database_type = RepositoryFactory.detect_database_type(database_url)
 
         # Get cached service (fast after first call)
         service = await _get_cached_service(database_url, database_type, schema_name=schema)

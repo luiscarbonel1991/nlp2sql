@@ -8,7 +8,9 @@ from .adapters.redshift_adapter import RedshiftRepository
 from .config.settings import settings
 from .core.entities import DatabaseType, Query, SQLQuery
 from .exceptions import *
+from .factories import RepositoryFactory
 from .ports.embedding_provider import EmbeddingProviderPort
+from .ports.schema_repository import SchemaRepositoryPort
 from .services.query_service import QueryGenerationService
 
 __version__ = "0.2.0rc4"
@@ -23,6 +25,9 @@ __all__ = [
     "create_and_initialize_service",
     "generate_sql_from_db",
     "create_embedding_provider",
+    "create_repository",
+    # Factory
+    "RepositoryFactory",
     # Adapters
     "OpenAIAdapter",
     "PostgreSQLRepository",
@@ -100,6 +105,36 @@ def create_embedding_provider(
     raise ValueError(f"Unknown embedding provider: {provider}. Available providers: {available_providers}")
 
 
+async def create_repository(
+    database_url: str,
+    schema_name: str = "public",
+    database_type: Optional[DatabaseType] = None,
+) -> SchemaRepositoryPort:
+    """Create and initialize a schema repository instance.
+
+    This is a convenience function that creates the repository and initializes
+    it in one step, ready for immediate use.
+
+    Args:
+        database_url: Database connection URL
+        schema_name: Database schema name (default: 'public')
+        database_type: Type of database. If None, auto-detected from URL.
+
+    Returns:
+        Initialized SchemaRepositoryPort instance ready for queries
+
+    Raises:
+        NotImplementedError: If the database type is not supported
+
+    Example:
+        repo = await create_repository("postgresql://user:pass@localhost/db")
+        tables = await repo.get_tables()
+    """
+    return await RepositoryFactory.create_and_initialize(
+        database_url, schema_name, database_type
+    )
+
+
 def create_query_service(
     database_url: str,
     ai_provider: str = "openai",
@@ -134,17 +169,8 @@ def create_query_service(
         - Pass embedding_provider_type='openai' (uses OpenAI embeddings API)
         - Pass a custom embedding_provider instance
     """
-    from .adapters.openai_adapter import OpenAIAdapter
-    from .adapters.postgres_repository import PostgreSQLRepository
-    from .adapters.redshift_adapter import RedshiftRepository
-
-    # Create repository
-    if database_type == DatabaseType.POSTGRES:
-        repository = PostgreSQLRepository(database_url, schema_name)
-    elif database_type == DatabaseType.REDSHIFT:
-        repository = RedshiftRepository(database_url, schema_name)
-    else:
-        raise NotImplementedError(f"Database type {database_type} not yet supported")
+    # Create repository using factory
+    repository = RepositoryFactory.create(database_url, schema_name, database_type)
 
     # Create AI provider
     if ai_provider == "openai":

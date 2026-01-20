@@ -1,8 +1,12 @@
 """PostgreSQL repository for schema management."""
 
+import hashlib
+import os
+import pickle
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import structlog
@@ -13,6 +17,10 @@ from ..exceptions import SchemaException, SecurityException
 from ..ports.schema_repository import SchemaMetadata, SchemaRepositoryPort, TableInfo
 
 logger = structlog.get_logger()
+
+# Cache configuration
+SCHEMA_CACHE_TTL_HOURS = int(os.getenv("NLP2SQL_SCHEMA_CACHE_TTL_HOURS", "24"))
+SCHEMA_CACHE_VERSION = "1.0"  # Increment when cache format changes
 
 # SQL patterns that are not allowed for security
 DANGEROUS_SQL_PATTERNS = [
@@ -105,6 +113,116 @@ class PostgreSQLRepository(SchemaRepositoryPort):
         self.async_engine = None
         self._connection_pool = None
         self._initialized = False
+        self._cache_dir: Optional[Path] = None
+
+    def _get_cache_dir(self) -> Path:
+        """Get the cache directory for this database connection.
+
+        Uses the same directory structure as embeddings for consistency.
+        """
+        if self._cache_dir is None:
+            # Create hash of connection string for unique directory
+            url_hash = hashlib.md5(self.connection_string.encode()).hexdigest()[:12]
+            base_dir = Path(os.getenv("NLP2SQL_EMBEDDINGS_DIR", "./embeddings"))
+            self._cache_dir = base_dir / url_hash
+            self._cache_dir.mkdir(parents=True, exist_ok=True)
+        return self._cache_dir
+
+    def _get_tables_cache_path(self, schema: str) -> Path:
+        """Get path for the tables cache file."""
+        return self._get_cache_dir() / f"tables_cache_{schema}.pkl"
+
+    def _is_cache_valid(self, schema: str) -> bool:
+        """Check if tables cache exists and is not expired."""
+        cache_path = self._get_tables_cache_path(schema)
+        if not cache_path.exists():
+            return False
+
+        try:
+            with open(cache_path, "rb") as f:
+                cache_data = pickle.load(f)
+
+            # Check version
+            if cache_data.get("version") != SCHEMA_CACHE_VERSION:
+                logger.debug("Cache version mismatch, invalidating", path=str(cache_path))
+                return False
+
+            # Check TTL
+            created_at = cache_data.get("created_at")
+            if created_at is None:
+                return False
+
+            ttl = timedelta(hours=SCHEMA_CACHE_TTL_HOURS)
+            if datetime.now() - created_at > ttl:
+                age_hours = (datetime.now() - created_at).total_seconds() / 3600
+                logger.debug("Cache expired", path=str(cache_path), age_hours=age_hours)
+                return False
+
+            # Check schema matches
+            if cache_data.get("schema_name") != schema:
+                return False
+
+            return True
+
+        except Exception as e:
+            logger.warning("Failed to validate cache", error=str(e))
+            return False
+
+    def _load_tables_from_cache(self, schema: str) -> Optional[List[TableInfo]]:
+        """Load tables from disk cache if valid."""
+        if not self._is_cache_valid(schema):
+            return None
+
+        cache_path = self._get_tables_cache_path(schema)
+        try:
+            with open(cache_path, "rb") as f:
+                cache_data = pickle.load(f)
+
+            tables = cache_data.get("tables", [])
+            logger.info(
+                "Loaded tables from disk cache",
+                count=len(tables),
+                cache_path=str(cache_path),
+            )
+            return tables
+
+        except Exception as e:
+            logger.warning("Failed to load tables from cache", error=str(e))
+            return None
+
+    def _save_tables_to_cache(self, tables: List[TableInfo], schema: str) -> None:
+        """Save tables to disk cache."""
+        cache_path = self._get_tables_cache_path(schema)
+        try:
+            cache_data = {
+                "tables": tables,
+                "created_at": datetime.now(),
+                "schema_name": schema,
+                "table_count": len(tables),
+                "version": SCHEMA_CACHE_VERSION,
+            }
+
+            with open(cache_path, "wb") as f:
+                pickle.dump(cache_data, f)
+
+            logger.info(
+                "Tables saved to disk cache",
+                count=len(tables),
+                cache_path=str(cache_path),
+            )
+
+        except Exception as e:
+            logger.warning("Failed to save tables to cache", error=str(e))
+
+    def clear_cache(self) -> None:
+        """Clear all cached data for this repository."""
+        cache_dir = self._get_cache_dir()
+        try:
+            for cache_file in cache_dir.glob("tables_cache_*.pkl"):
+                cache_file.unlink()
+                logger.info("Cache file deleted", path=str(cache_file))
+        except Exception as e:
+            logger.warning("Failed to clear cache", error=str(e))
 
     async def initialize(self) -> None:
         """Initialize database connections."""
@@ -129,44 +247,215 @@ class PostgreSQLRepository(SchemaRepositoryPort):
             logger.error("Failed to initialize PostgreSQL repository", error=str(e))
             raise SchemaException(f"Database initialization failed: {e!s}")
 
-    async def get_tables(self, schema_name: Optional[str] = None) -> List[TableInfo]:
-        """Get all tables in the schema."""
+    async def get_tables(self, schema_name: Optional[str] = None, force_refresh: bool = False) -> List[TableInfo]:
+        """Get all tables in the schema using hybrid bulk query + disk cache.
+
+        Args:
+            schema_name: Schema name to query (defaults to self.schema_name)
+            force_refresh: If True, bypass cache and fetch fresh data
+
+        Returns:
+            List of TableInfo objects
+        """
         if not self._initialized:
             await self.initialize()
 
         schema = schema_name or self.schema_name
 
-        query = """
-        SELECT 
+        # Step 1: Try to load from cache (unless force_refresh)
+        if not force_refresh:
+            cached_tables = self._load_tables_from_cache(schema)
+            if cached_tables is not None:
+                return cached_tables
+
+        # Step 2: Execute bulk query
+        logger.info("Fetching tables with bulk query...", schema=schema)
+        tables = await self._get_tables_bulk(schema)
+
+        # Step 3: Save to cache
+        self._save_tables_to_cache(tables, schema)
+
+        return tables
+
+    async def _get_tables_bulk(self, schema: str) -> List[TableInfo]:
+        """Fetch all tables with columns and primary keys in a single bulk query.
+
+        This replaces the N+1 query pattern (1 + N*2 queries) with a single
+        JOIN query, significantly improving performance for large schemas.
+        """
+        bulk_query = """
+        WITH table_info AS (
+            SELECT
+                t.table_name,
+                t.table_schema,
+                obj_description(c.oid) as table_comment,
+                pg_total_relation_size(c.oid) as size_bytes,
+                COALESCE(s.n_tup_ins + s.n_tup_upd + s.n_tup_del, 0) as row_count
+            FROM information_schema.tables t
+            LEFT JOIN pg_class c ON c.relname = t.table_name
+            LEFT JOIN pg_namespace n ON n.oid = c.relnamespace
+                AND n.nspname = t.table_schema
+            LEFT JOIN pg_stat_user_tables s ON s.relname = t.table_name
+                AND s.schemaname = t.table_schema
+            WHERE t.table_schema = :schema
+            AND t.table_type = 'BASE TABLE'
+        ),
+        columns_info AS (
+            SELECT
+                c.table_name,
+                c.column_name,
+                c.data_type,
+                c.is_nullable,
+                c.column_default,
+                c.character_maximum_length,
+                c.numeric_precision,
+                c.numeric_scale,
+                c.ordinal_position,
+                col_description(pgc.oid, c.ordinal_position) as column_comment
+            FROM information_schema.columns c
+            LEFT JOIN pg_class pgc ON pgc.relname = c.table_name
+            LEFT JOIN pg_namespace pgn ON pgn.oid = pgc.relnamespace
+                AND pgn.nspname = c.table_schema
+            WHERE c.table_schema = :schema
+        ),
+        primary_keys AS (
+            SELECT
+                tc.table_name,
+                array_agg(kcu.column_name ORDER BY kcu.ordinal_position) as pk_columns
+            FROM information_schema.table_constraints tc
+            JOIN information_schema.key_column_usage kcu
+                ON tc.constraint_name = kcu.constraint_name
+                AND tc.table_schema = kcu.table_schema
+            WHERE tc.table_schema = :schema
+            AND tc.constraint_type = 'PRIMARY KEY'
+            GROUP BY tc.table_name
+        ),
+        foreign_keys AS (
+            SELECT
+                kcu.table_name,
+                kcu.column_name,
+                kcu2.table_name as ref_table,
+                kcu2.column_name as ref_column,
+                rc.constraint_name
+            FROM information_schema.key_column_usage kcu
+            JOIN information_schema.referential_constraints rc
+                ON kcu.constraint_name = rc.constraint_name
+                AND kcu.table_schema = rc.constraint_schema
+            JOIN information_schema.key_column_usage kcu2
+                ON rc.unique_constraint_name = kcu2.constraint_name
+                AND rc.unique_constraint_schema = kcu2.table_schema
+            WHERE kcu.table_schema = :schema
+        )
+        SELECT
             t.table_name,
             t.table_schema,
-            obj_description(c.oid) as table_comment,
-            pg_size_pretty(pg_total_relation_size(c.oid)) as table_size,
-            pg_total_relation_size(c.oid) as size_bytes,
-            n_tup_ins + n_tup_upd + n_tup_del as row_count
-        FROM information_schema.tables t
-        LEFT JOIN pg_class c ON c.relname = t.table_name
-        LEFT JOIN pg_namespace n ON n.oid = c.relnamespace
-        LEFT JOIN pg_stat_user_tables s ON s.relname = t.table_name
-        WHERE t.table_schema = :schema
-        AND t.table_type = 'BASE TABLE'
-        ORDER BY t.table_name
+            t.table_comment,
+            t.size_bytes,
+            t.row_count,
+            c.column_name,
+            c.data_type,
+            c.is_nullable,
+            c.column_default,
+            c.character_maximum_length,
+            c.numeric_precision,
+            c.numeric_scale,
+            c.column_comment,
+            c.ordinal_position,
+            pk.pk_columns,
+            fk.column_name as fk_column,
+            fk.ref_table,
+            fk.ref_column,
+            fk.constraint_name as fk_constraint
+        FROM table_info t
+        LEFT JOIN columns_info c ON t.table_name = c.table_name
+        LEFT JOIN primary_keys pk ON t.table_name = pk.table_name
+        LEFT JOIN foreign_keys fk ON t.table_name = fk.table_name AND c.column_name = fk.column_name
+        ORDER BY t.table_name, c.ordinal_position
         """
 
         try:
+            start_time = time.time()
             async with self.async_engine.begin() as conn:
-                result = await conn.execute(text(query), {"schema": schema})
+                result = await conn.execute(text(bulk_query), {"schema": schema})
                 rows = result.fetchall()
 
-                tables = []
-                for row in rows:
-                    table_info = await self._build_table_info(row, schema)
-                    tables.append(table_info)
+            elapsed_ms = round((time.time() - start_time) * 1000, 2)
+            logger.info("Bulk query completed", rows=len(rows), elapsed_ms=elapsed_ms)
 
-                return tables
+            # Process rows and group by table
+            tables_dict: Dict[str, Dict[str, Any]] = {}
+            for row in rows:
+                table_name = row[0]
+
+                if table_name not in tables_dict:
+                    tables_dict[table_name] = {
+                        "name": table_name,
+                        "schema": row[1],
+                        "description": row[2],
+                        "size_bytes": row[3],
+                        "row_count": row[4],
+                        "columns": [],
+                        "primary_keys": list(row[14]) if row[14] else [],
+                        "foreign_keys": [],
+                        "indexes": [],
+                        "_seen_columns": set(),
+                        "_seen_fks": set(),
+                    }
+
+                # Add column (avoiding duplicates from FK join)
+                col_name = row[5]
+                if col_name and col_name not in tables_dict[table_name]["_seen_columns"]:
+                    tables_dict[table_name]["_seen_columns"].add(col_name)
+                    tables_dict[table_name]["columns"].append({
+                        "name": col_name,
+                        "type": row[6],
+                        "nullable": row[7] == "YES",
+                        "default": row[8],
+                        "max_length": row[9],
+                        "precision": row[10],
+                        "scale": row[11],
+                        "description": row[12],
+                    })
+
+                # Add foreign key (if present and not seen)
+                fk_column = row[15]
+                fk_constraint = row[18]
+                if fk_column and fk_constraint:
+                    fk_key = f"{fk_constraint}:{fk_column}"
+                    if fk_key not in tables_dict[table_name]["_seen_fks"]:
+                        tables_dict[table_name]["_seen_fks"].add(fk_key)
+                        tables_dict[table_name]["foreign_keys"].append({
+                            "column": fk_column,
+                            "ref_table": row[16],
+                            "ref_column": row[17],
+                            "constraint_name": fk_constraint,
+                        })
+
+            # Convert to TableInfo objects
+            tables = []
+            for table_data in tables_dict.values():
+                # Remove internal tracking fields
+                del table_data["_seen_columns"]
+                del table_data["_seen_fks"]
+
+                tables.append(TableInfo(
+                    name=table_data["name"],
+                    schema=table_data["schema"],
+                    columns=table_data["columns"],
+                    primary_keys=table_data["primary_keys"],
+                    foreign_keys=table_data["foreign_keys"],
+                    indexes=table_data["indexes"],
+                    row_count=table_data["row_count"],
+                    size_bytes=table_data["size_bytes"],
+                    description=table_data["description"],
+                    last_updated=datetime.now(),
+                ))
+
+            logger.info("Tables processed from bulk query", count=len(tables))
+            return tables
 
         except Exception as e:
-            logger.error("Failed to get tables", error=str(e))
+            logger.error("Bulk query failed", error=str(e))
             raise SchemaException(f"Failed to get tables: {e!s}")
 
     async def get_table_info(self, table_name: str, schema_name: Optional[str] = None) -> TableInfo:
