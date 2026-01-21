@@ -180,6 +180,7 @@ query_cache.db
 !.github/**/*.md
 !.claude/**/*.md
 !CLAUDE.md
+!examples/**/*.md
 
 # Claude Code local settings
 .claude/settings.local.json
