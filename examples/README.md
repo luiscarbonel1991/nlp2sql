@@ -64,6 +64,37 @@ Educational examples and guides:
 ### [`documentation/`](documentation/)
 - **`real_world_example.py`** - Complete real-world scenario
 
+## Web API Integration
+
+Production-ready web applications:
+
+### [`strands-fastapi-agent/`](strands-fastapi-agent/)
+- Complete FastAPI application with Strands Agents integration
+- Natural language database queries via REST API
+- Docker deployment with PostgreSQL
+- Swagger UI documentation included
+- Sub-10ms query performance
+- 25-table e-commerce schema
+
+```bash
+# Quick start with Docker
+cd examples/strands-fastapi-agent
+docker-compose up -d --build
+
+# Test the API
+./test-docker-endpoints.sh
+
+# Access Swagger UI
+open http://localhost:8000/docs
+```
+
+**Features:**
+- Strands AI agents with tool calling
+- Multiple API endpoints (direct tools + agent)
+- Comprehensive documentation (1500+ lines)
+- Production-ready Docker setup
+- Automated test suite
+
 ## Environment Setup
 
 Before running examples, set up your environment:

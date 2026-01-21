@@ -1,0 +1,54 @@
+services:
+  postgres:
+    image: postgres:17
+    container_name: strands-agent-postgres
+    environment:
+      POSTGRES_USER: ecommerce_user
+      POSTGRES_PASSWORD: ecommerce_pass
+      POSTGRES_DB: ecommerce_db
+    ports:
+      - "5434:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/init-ecommerce-schema.sql:/docker-entrypoint-initdb.d/init-ecommerce-schema.sql
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ecommerce_user -d ecommerce_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - strands-network
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: strands-agent-api
+    environment:
+      # API Keys - Set these in .env file
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      # Database connection (internal Docker network)
+      DATABASE_URL: postgresql://ecommerce_user:ecommerce_pass@postgres:5432/ecommerce_db
+      DATABASE_TYPE: POSTGRES
+      SCHEMA_NAME: public
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - strands-network
+    volumes:
+      - embeddings_cache:/app/embeddings
+
+volumes:
+  postgres_data:
+  embeddings_cache:
+
+networks:
+  strands-network:
+    driver: bridge
