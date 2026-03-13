@@ -55,6 +55,13 @@ export NLP2SQL_EMBEDDING_MODEL=all-MiniLM-L6-v2
 export NLP2SQL_EMBEDDING_PROVIDER=local
 ```
 
+**Design rationale for key variables:**
+
+- **`NLP2SQL_MAX_SCHEMA_TOKENS`** -- Limits the schema context sent to the AI provider. Higher values give the AI more schema information (better accuracy for complex joins) but cost more tokens. The default 8000 covers ~20-30 tables with full column definitions. For large schemas with many relevant tables, increase to 12000-16000.
+- **`NLP2SQL_SCHEMA_CACHE_TTL_HOURS`** -- Controls when the FAISS index and schema metadata are refreshed from the database. The 24h default balances freshness against the cost of re-querying system catalogs (especially expensive for Redshift's `SVV_TABLES`/`SVV_COLUMNS`). Set lower in development or when schema changes frequently.
+- **`NLP2SQL_EMBEDDINGS_DIR`** -- Where FAISS index files and TF-IDF metadata are stored on disk. Each database+schema combination gets its own subdirectory (MD5 hash of `{database_url}:{schema_name}`). Must be writable. In containerized environments (e.g., Claude Desktop MCP), the system falls back to `/tmp/nlp2sql_embeddings` if the default `./embeddings` is read-only.
+- **`NLP2SQL_EMBEDDING_MODEL`** -- The `sentence-transformers` model for local embeddings. `all-MiniLM-L6-v2` (384 dimensions) is a good balance of speed and quality. Changing this after an index is built requires clearing the cache (`nlp2sql cache clear --embeddings`) since dimensions must match.
+
 ### General Settings
 
 | Variable | Required | Default | Description |
@@ -75,6 +82,8 @@ export TOKENIZERS_PARALLELISM=false
 ## Schema Filters
 
 Schema filters reduce the database schema to relevant tables for better performance and accuracy.
+
+**Important:** Filters are applied *before* FAISS indexing (`SchemaManager._apply_schema_filters()` in `schema/manager.py`). Fewer elements indexed means faster semantic search and a more focused index. For enterprise databases (1000+ tables), well-chosen filters can reduce indexing time from minutes to seconds.
 
 ### Filter Options
 

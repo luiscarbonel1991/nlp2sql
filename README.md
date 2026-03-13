@@ -135,6 +135,23 @@ nlp2sql inspect --database-url postgresql://localhost/mydb
 nlp2sql benchmark --database-url postgresql://localhost/mydb
 ```
 
+## How It Works
+
+```
+Question ──► Cache check ──► Schema retrieval ──► Relevance filtering ──► Context building ──► AI generation ──► Validation
+                                    │                     │                      │
+                              SchemaRepository    FAISS + TF-IDF hybrid   Reuses precomputed
+                              (+ disk cache)      + batch scoring          relevance scores
+```
+
+1. **Schema retrieval** -- Fetches tables from database via `SchemaRepository` (with disk cache for Redshift)
+2. **Relevance filtering** -- FAISS dense search + TF-IDF sparse search (50/50 hybrid) finds candidate tables; batch scoring refines with precomputed embeddings
+3. **Context building** -- Builds optimized schema context within token limits, reusing scores from step 2 (zero additional embedding calls)
+4. **SQL generation** -- AI provider (OpenAI, Anthropic, or Gemini) generates SQL from question + schema context
+5. **Validation** -- SQL syntax and safety checks before returning results
+
+See [Architecture](docs/ARCHITECTURE.md) for the detailed flow with method references and design decisions.
+
 ## Provider Comparison
 
 | Provider | Context Size | Best For |
@@ -147,16 +164,20 @@ See [Configuration](docs/CONFIGURATION.md) for detailed provider setup.
 
 ## Architecture
 
+Clean Architecture (Ports & Adapters) with three layers: core entities, port interfaces, and adapter implementations. The schema management layer uses FAISS + TF-IDF hybrid search for relevance filtering at scale.
+
 ```
 nlp2sql/
-├── core/           # Business entities
-├── ports/          # Interfaces/abstractions
-├── adapters/       # External implementations (AI providers, databases)
-├── services/       # Application services
-├── schema/         # Schema management and embeddings
-├── config/         # Configuration
-└── exceptions/     # Custom exceptions
+├── core/           # Business entities (pure Python, no dependencies)
+├── ports/          # Interfaces (AIProviderPort, SchemaRepositoryPort, EmbeddingProviderPort)
+├── adapters/       # Implementations (OpenAI, Anthropic, Gemini, PostgreSQL, Redshift)
+├── services/       # Orchestration (QueryGenerationService)
+├── schema/         # Schema management (SchemaManager, SchemaAnalyzer, SchemaEmbeddingManager)
+├── config/         # Pydantic Settings configuration
+└── exceptions/     # Custom exception hierarchy
 ```
+
+See [Architecture](docs/ARCHITECTURE.md) for the full component diagram, data flow, and design decisions.
 
 ## Development
 

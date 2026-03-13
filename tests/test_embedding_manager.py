@@ -192,6 +192,81 @@ class TestOrphanMappingsPrevention:
             assert embedding.shape == (provider.dimension,)
 
 
+class TestSearchSimilarWithEmbedding:
+    """Tests for search_similar_with_embedding() method."""
+
+    @pytest.fixture
+    def temp_index_path(self, tmp_path):
+        return tmp_path / "test_embeddings"
+
+    @pytest.mark.asyncio
+    async def test_returns_query_embedding(self, temp_index_path):
+        """Test that search_similar_with_embedding returns (results, np.ndarray)."""
+        provider = MockEmbeddingProvider()
+
+        manager = SchemaEmbeddingManager(
+            database_url="postgresql://test:test@localhost/test",
+            embedding_provider=provider,
+            index_path=temp_index_path,
+        )
+
+        # Add elements so search has something to find
+        elements = [
+            {"type": "table", "name": "users", "columns": [{"name": "id"}]},
+            {"type": "table", "name": "orders", "columns": [{"name": "id"}]},
+        ]
+        await manager.add_schema_elements(elements, DatabaseType.POSTGRES)
+
+        results, query_embedding = await manager.search_similar_with_embedding(
+            "show users", database_type=DatabaseType.POSTGRES
+        )
+
+        # Results should be a list of (element, score) tuples
+        assert isinstance(results, list)
+        # Query embedding should be a numpy array with correct dimension
+        assert isinstance(query_embedding, np.ndarray)
+        assert query_embedding.size > 0
+        assert query_embedding.shape[-1] == provider.dimension
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_embedding_without_provider(self, temp_index_path):
+        """Test that ([], np.array([])) is returned when no provider is configured."""
+        manager = SchemaEmbeddingManager(
+            database_url="postgresql://test:test@localhost/test",
+            embedding_provider=None,
+            index_path=temp_index_path,
+        )
+
+        results, query_embedding = await manager.search_similar_with_embedding("users")
+
+        assert results == []
+        assert isinstance(query_embedding, np.ndarray)
+        assert query_embedding.size == 0
+
+    @pytest.mark.asyncio
+    async def test_search_similar_unchanged(self, temp_index_path):
+        """Test that search_similar() still returns List[Tuple] (not a tuple)."""
+        provider = MockEmbeddingProvider()
+
+        manager = SchemaEmbeddingManager(
+            database_url="postgresql://test:test@localhost/test",
+            embedding_provider=provider,
+            index_path=temp_index_path,
+        )
+
+        elements = [{"type": "table", "name": "users", "columns": [{"name": "id"}]}]
+        await manager.add_schema_elements(elements, DatabaseType.POSTGRES)
+
+        results = await manager.search_similar("users", database_type=DatabaseType.POSTGRES)
+
+        # search_similar should return a plain list, NOT a tuple
+        assert isinstance(results, list)
+        # Should not accidentally return (results, embedding) tuple
+        if results:
+            assert isinstance(results[0], tuple)
+            assert len(results[0]) == 2  # (element, score)
+
+
 class TestEmbeddingManagerWithoutProvider:
     """Tests for SchemaEmbeddingManager when no provider is configured."""
 
