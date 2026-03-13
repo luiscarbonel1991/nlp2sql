@@ -4,6 +4,50 @@ Complete reference for the nlp2sql Python API and CLI.
 
 ## Python API
 
+### Request Flow
+
+The three entry points differ in lifecycle and performance characteristics:
+
+```
+generate_sql_from_db(question)
+  └─ create_and_initialize_service()     # creates service + loads schema every call
+       └─ create_query_service()          # wires components (AI adapter, repository, embeddings)
+            └─ service.initialize()       # fetches schema, builds FAISS index (skips if cached on disk)
+                 └─ service.generate_sql()
+
+create_and_initialize_service()          # init once, reuse for many queries (recommended)
+  └─ create_query_service()
+       └─ service.initialize()
+            └─ service.generate_sql()    # schema + FAISS index already loaded
+            └─ service.generate_sql()    # in-memory caches warm
+
+create_query_service()                   # full manual control
+  └─ caller must call service.initialize() before first query
+```
+
+**When to use which:**
+
+| Function | Best for | Schema loading |
+|----------|----------|----------------|
+| `generate_sql_from_db` | One-off scripts, notebooks | Every call (init + query) |
+| `create_and_initialize_service` | APIs, multi-query sessions | Once at startup |
+| `create_query_service` | Custom initialization logic | Manual (`initialize()`) |
+
+For multiple queries, always prefer `create_and_initialize_service` -- it loads the schema and FAISS index once, and subsequent `generate_sql()` calls benefit from in-memory caches:
+
+```python
+# Init once, query many times
+service = await create_and_initialize_service(
+    database_url="postgresql://user:pass@localhost:5432/db",
+    ai_provider="openai",
+    api_key=os.getenv("OPENAI_API_KEY"),
+)
+
+for question in ["Count users", "Show recent orders", "Revenue by month"]:
+    result = await service.generate_sql(question)
+    print(result["sql"])
+```
+
 ### Quick Start Functions
 
 #### `generate_sql_from_db`
@@ -65,8 +109,10 @@ result2 = await service.generate_sql("Show recent orders")
 | `ai_provider` | `str` | Yes | AI provider name |
 | `api_key` | `str` | Yes | Provider API key |
 | `schema_filters` | `dict` | No | Schema filtering options |
-| `embedding_provider_type` | `str` | No | Embedding provider type |
+| `embedding_provider_type` | `str` | No | Embedding provider type (see note below) |
 | `database_type` | `DatabaseType` | No | Database type (auto-detected) |
+
+**Note on `embedding_provider_type`:** This controls how schema relevance filtering works. With `"local"` or `"openai"`, the system builds a FAISS vector index for semantic search (recommended for databases with 50+ tables). With `None` (default), the system attempts to load local embeddings silently and falls back to text-only matching if `sentence-transformers` is not installed. Text-only matching uses exact name, normalized singular/plural, and token overlap -- effective for small schemas but less accurate for large ones.
 
 #### `create_query_service`
 

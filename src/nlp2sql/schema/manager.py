@@ -4,6 +4,7 @@ import pickle
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
+import numpy as np
 import structlog
 
 from ..config.settings import settings
@@ -49,7 +50,6 @@ class SchemaManager:
         self.embedding_provider = embedding_provider
         self.schema_name = schema_name
 
-        # Create or use provided embedding manager
         if embedding_manager is None:
             self.embedding_manager = SchemaEmbeddingManager(
                 database_url=repository.database_url,
@@ -60,18 +60,15 @@ class SchemaManager:
         else:
             self.embedding_manager = embedding_manager
 
-        # Create or use provided analyzer
         if analyzer is None:
             self.analyzer = SchemaAnalyzer(embedding_provider=embedding_provider)
         else:
             self.analyzer = analyzer
 
-        # Configuration
         self.max_schema_tokens = settings.max_schema_tokens
         self.cache_enabled = settings.schema_cache_enabled
         self.refresh_interval = timedelta(hours=settings.schema_refresh_interval_hours)
 
-        # Schema filtering
         self.schema_filters = schema_filters or {}
         self.included_schemas = self.schema_filters.get("include_schemas", None)
         self.excluded_schemas = self.schema_filters.get("exclude_schemas", [])
@@ -79,12 +76,10 @@ class SchemaManager:
         self.excluded_tables = self.schema_filters.get("exclude_tables", [])
         self.exclude_system_tables = self.schema_filters.get("exclude_system_tables", True)
 
-        # Internal state
         self._last_refresh = None
         self._schema_cache = {}
         self._table_relevance_cache = {}
 
-        # Load refresh state early if index exists
         self._load_refresh_state_early()
 
     async def initialize(self, database_type: DatabaseType) -> None:
@@ -159,17 +154,14 @@ class SchemaManager:
         """Get optimal schema context for a query."""
         max_tokens = max_tokens or self.max_schema_tokens
 
-        # Check cache first
         cache_key = f"schema_context:{query}:{database_type.value}:{max_tokens}"
         if self.cache_enabled and self.cache:
             cached_context = await self.cache.get(cache_key)
             if cached_context:
                 return cached_context
 
-        # Find relevant tables using multiple strategies
         relevant_tables = await self._find_relevant_tables(query, database_type)
 
-        # Build context using analyzer
         context = SchemaContext(
             query=query,
             max_tokens=max_tokens,
@@ -178,7 +170,6 @@ class SchemaManager:
             include_indexes=True,
         )
 
-        # Get table details
         table_details = []
         for table_name, relevance_score in relevant_tables:
             try:
@@ -189,17 +180,13 @@ class SchemaManager:
             except Exception as e:
                 logger.warning("Failed to get table info", table=table_name, error=str(e))
 
-        # Build optimized context
         schema_context = await self.analyzer.build_context(context, table_details)
 
-        # Validate token count
         estimated_tokens = len(schema_context) // 4  # Rough estimation
         if estimated_tokens > max_tokens:
-            # Compress further
             schema_dict = {table["name"]: table for table in table_details}
             schema_context = await self.analyzer.compress_schema(schema_dict, max_tokens)
 
-        # Cache result
         if self.cache_enabled and self.cache:
             await self.cache.set(cache_key, schema_context)
 
@@ -271,7 +258,6 @@ class SchemaManager:
         self._last_refresh = datetime.now()
         self._save_refresh_state()
 
-        # Clear relevant caches
         if self.cache:
             # Clear schema-related cache keys
             pass  # Implementation depends on cache implementation
@@ -323,11 +309,11 @@ class SchemaManager:
                 return cached_tables
 
         # Strategy 1: Embedding similarity (uses FAISS index)
-        embedding_results = await self.embedding_manager.search_similar(
+        # Use search_similar_with_embedding to capture query_embedding for reuse downstream
+        embedding_results, query_embedding = await self.embedding_manager.search_similar_with_embedding(
             query, top_k=max_tables * 2, database_type=database_type
         )
 
-        # Filter to tables only
         table_scores = {}
         for element, score in embedding_results:
             if element.get("type") == "table":
@@ -339,7 +325,6 @@ class SchemaManager:
                     table_scores[table_name] = max(table_scores.get(table_name, 0), score * 0.8)
 
         # Strategy 2: Batch schema analysis
-        # Use cached tables (now fast with bulk query + disk cache)
         all_tables = await self._get_cached_tables()
 
         # Identify tables to analyze with batch scoring
@@ -366,9 +351,24 @@ class SchemaManager:
         if tables_to_analyze:
             table_dicts = [self._table_info_to_dict(t) for t in tables_to_analyze]
 
-            # Batch score all tables (uses single embedding API call)
+            # Fetch precomputed embeddings from FAISS for tables being analyzed (zero API calls)
+            table_names_to_analyze = [t.name for t in tables_to_analyze]
+            precomputed_element_embeddings = await self.embedding_manager.get_table_embeddings(
+                table_names_to_analyze, database_type
+            )
+
+            # Prepare query embedding for reuse (avoid redundant API call in analyzer)
+            precomputed_query_emb: Optional[np.ndarray] = None
+            if query_embedding.size > 0:
+                precomputed_query_emb = query_embedding
+
+            # Batch score all tables (uses precomputed embeddings — zero additional API calls)
             scored_tables = await self.analyzer.score_relevance_batch(
-                query, table_dicts, use_semantic=True
+                query,
+                table_dicts,
+                use_semantic=True,
+                precomputed_query_embedding=precomputed_query_emb,
+                precomputed_element_embeddings=precomputed_element_embeddings if precomputed_element_embeddings else None,
             )
 
             for table_dict, score in scored_tables:
@@ -380,14 +380,12 @@ class SchemaManager:
         exact_matches = [(name, score) for name, score in table_scores.items() if score >= 1.0]
         other_matches = [(name, score) for name, score in table_scores.items() if score < 1.0]
 
-        # Sort each group by score
         exact_matches.sort(key=lambda x: x[1], reverse=True)
         other_matches.sort(key=lambda x: x[1], reverse=True)
 
         # Combine: exact matches first, then others
         sorted_tables = exact_matches + other_matches
 
-        # Apply minimum threshold and limit
         relevant_tables = []
         for table_name, score in sorted_tables:
             if score >= 0.2 and len(relevant_tables) < max_tables:
@@ -396,7 +394,6 @@ class SchemaManager:
         # Store in memory cache (always enabled, for repeated queries in same session)
         self._table_relevance_cache[mem_cache_key] = relevant_tables
 
-        # Also cache in external cache if available
         if self.cache_enabled and self.cache:
             await self.cache.set(cache_key, relevant_tables)
 
@@ -512,7 +509,6 @@ class SchemaManager:
             elif "." in table.name:
                 schema_name = table.name.split(".")[0]
 
-            # Check schema-level filters
             if self.included_schemas is not None:
                 if schema_name not in self.included_schemas:
                     continue
@@ -520,7 +516,6 @@ class SchemaManager:
             if schema_name in self.excluded_schemas:
                 continue
 
-            # Check table-level filters
             if self.included_tables is not None:
                 if table.name not in self.included_tables:
                     continue
@@ -528,9 +523,7 @@ class SchemaManager:
             if table.name in self.excluded_tables:
                 continue
 
-            # Check system table filter
             if self.exclude_system_tables:
-                # Common system table patterns
                 system_patterns = [
                     "pg_",
                     "sql_",

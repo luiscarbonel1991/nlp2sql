@@ -379,6 +379,135 @@ class TestQueryEmbeddingCache:
         assert len(analyzer._query_embedding_cache) == 0
 
 
+class TestPrecomputedEmbeddings:
+    """Test precomputed embedding parameters in score_relevance_batch and _calculate_semantic_similarity_batch."""
+
+    @pytest.fixture
+    def mock_embedding_provider(self):
+        """Create a mock embedding provider."""
+        provider = MagicMock()
+        provider.encode = AsyncMock(
+            side_effect=lambda texts: np.random.rand(len(texts), 384)
+        )
+        return provider
+
+    @pytest.fixture
+    def analyzer(self, mock_embedding_provider):
+        """Create analyzer with mock provider."""
+        return SchemaAnalyzer(embedding_provider=mock_embedding_provider)
+
+    @pytest.fixture
+    def sample_tables(self) -> List[Dict[str, Any]]:
+        """Sample table elements."""
+        return [
+            {
+                "name": "users",
+                "type": "table",
+                "columns": [{"name": "id"}, {"name": "email"}],
+            },
+            {
+                "name": "orders",
+                "type": "table",
+                "columns": [{"name": "id"}, {"name": "total"}],
+            },
+            {
+                "name": "products",
+                "type": "table",
+                "columns": [{"name": "id"}, {"name": "name"}],
+            },
+        ]
+
+    @pytest.mark.asyncio
+    async def test_precomputed_both_skips_all_api_calls(self, analyzer, mock_embedding_provider, sample_tables):
+        """Verify zero encode() calls when both query and element embeddings are precomputed."""
+        mock_embedding_provider.encode.reset_mock()
+
+        # Precompute embeddings
+        query_embedding = np.random.rand(1, 384).astype(np.float32)
+        element_embeddings = {
+            "users": np.random.rand(384).astype(np.float32),
+            "orders": np.random.rand(384).astype(np.float32),
+            "products": np.random.rand(384).astype(np.float32),
+        }
+
+        result = await analyzer.score_relevance_batch(
+            "find customer data",
+            sample_tables,
+            use_semantic=True,
+            precomputed_query_embedding=query_embedding,
+            precomputed_element_embeddings=element_embeddings,
+        )
+
+        # All 3 tables returned
+        assert len(result) == 3
+        # Zero API calls since everything was precomputed
+        mock_embedding_provider.encode.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_partial_precomputed_element_embeddings(self, analyzer, mock_embedding_provider, sample_tables):
+        """Verify only missing elements trigger API calls."""
+        mock_embedding_provider.encode.reset_mock()
+
+        query_embedding = np.random.rand(1, 384).astype(np.float32)
+        # Only precompute 2 of 3 table embeddings
+        element_embeddings = {
+            "users": np.random.rand(384).astype(np.float32),
+            "orders": np.random.rand(384).astype(np.float32),
+            # "products" is missing — should trigger API call
+        }
+
+        result = await analyzer.score_relevance_batch(
+            "find customer data",
+            sample_tables,
+            use_semantic=True,
+            precomputed_query_embedding=query_embedding,
+            precomputed_element_embeddings=element_embeddings,
+        )
+
+        assert len(result) == 3
+        # Should have exactly 1 API call for the missing "products" element
+        assert mock_embedding_provider.encode.call_count == 1
+        # The single call should be for 1 element description
+        call_args = mock_embedding_provider.encode.call_args[0][0]
+        assert len(call_args) == 1
+
+    @pytest.mark.asyncio
+    async def test_empty_precomputed_falls_back(self, analyzer, mock_embedding_provider, sample_tables):
+        """Verify np.array([]) falls back to original behavior (cache/API)."""
+        mock_embedding_provider.encode.reset_mock()
+
+        # Pass empty array as precomputed query embedding
+        empty_embedding = np.array([])
+
+        result = await analyzer.score_relevance_batch(
+            "find customer data",
+            sample_tables,
+            use_semantic=True,
+            precomputed_query_embedding=empty_embedding,
+            precomputed_element_embeddings=None,
+        )
+
+        assert len(result) == 3
+        # Should have made API calls: 1 for query + 1 for elements batch
+        assert mock_embedding_provider.encode.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_backward_compatibility_without_precomputed(self, analyzer, mock_embedding_provider, sample_tables):
+        """Verify original behavior when no precomputed args are passed."""
+        mock_embedding_provider.encode.reset_mock()
+
+        # Call without any precomputed args (original API)
+        result = await analyzer.score_relevance_batch(
+            "find customer data",
+            sample_tables,
+            use_semantic=True,
+        )
+
+        assert len(result) == 3
+        # Should make API calls as before (query + elements)
+        assert mock_embedding_provider.encode.call_count == 2
+
+
 class TestIntegrationWithSchemaManager:
     """Integration tests for batch scoring with SchemaManager patterns."""
 
@@ -489,3 +618,121 @@ class TestIntegrationWithSchemaManager:
         assert len(result) == 100
         # Should be very fast without API calls (< 1 second)
         assert elapsed < 1.0
+
+
+class TestBuildContextReusesScores:
+    """Test that build_context() reuses pre-computed relevance_score from SchemaManager."""
+
+    @pytest.fixture
+    def mock_embedding_provider(self):
+        """Create a mock embedding provider."""
+        provider = MagicMock()
+        provider.encode = AsyncMock(
+            side_effect=lambda texts: np.random.rand(len(texts), 384)
+        )
+        return provider
+
+    @pytest.fixture
+    def analyzer_with_provider(self, mock_embedding_provider):
+        """Create analyzer with embedding provider."""
+        return SchemaAnalyzer(embedding_provider=mock_embedding_provider)
+
+    @pytest.fixture
+    def schema_context(self):
+        """Create a SchemaContext for build_context calls."""
+        from nlp2sql.ports.schema_strategy import SchemaContext
+        return SchemaContext(
+            query="show me all orders",
+            max_tokens=4000,
+            database_type="postgresql",
+            include_samples=False,
+            include_indexes=False,
+        )
+
+    @pytest.mark.asyncio
+    async def test_build_context_uses_existing_relevance_score(
+        self, analyzer_with_provider, mock_embedding_provider, schema_context
+    ):
+        """Tables with relevance_score key skip score_relevance() entirely, zero encode() calls."""
+        mock_embedding_provider.encode.reset_mock()
+
+        tables = [
+            {
+                "name": "orders",
+                "type": "table",
+                "relevance_score": 0.95,
+                "columns": [
+                    {"name": "id", "type": "integer"},
+                    {"name": "total", "type": "decimal"},
+                ],
+            },
+            {
+                "name": "users",
+                "type": "table",
+                "relevance_score": 0.7,
+                "columns": [
+                    {"name": "id", "type": "integer"},
+                    {"name": "name", "type": "varchar"},
+                ],
+            },
+        ]
+
+        result = await analyzer_with_provider.build_context(schema_context, tables)
+
+        # Should produce valid context output
+        assert "orders" in result
+        # Zero embedding API calls since all tables had pre-computed scores
+        mock_embedding_provider.encode.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_build_context_falls_back_without_relevance_score(
+        self, analyzer_with_provider, mock_embedding_provider, schema_context
+    ):
+        """Tables without the relevance_score key still call score_relevance() (backward compat)."""
+        mock_embedding_provider.encode.reset_mock()
+
+        tables = [
+            {
+                "name": "orders",
+                "type": "table",
+                "columns": [
+                    {"name": "id", "type": "integer"},
+                    {"name": "total", "type": "decimal"},
+                ],
+            },
+        ]
+
+        result = await analyzer_with_provider.build_context(schema_context, tables)
+
+        # Should still produce valid context
+        assert "orders" in result
+        # Should have called encode() since score_relevance() was used
+        mock_embedding_provider.encode.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_build_context_mixed_tables(
+        self, analyzer_with_provider, mock_embedding_provider, schema_context
+    ):
+        """Only tables missing relevance_score trigger scoring; pre-scored ones don't."""
+        mock_embedding_provider.encode.reset_mock()
+
+        tables = [
+            {
+                "name": "orders",
+                "type": "table",
+                "relevance_score": 0.95,
+                "columns": [{"name": "id", "type": "integer"}],
+            },
+            {
+                "name": "unscored_table",
+                "type": "table",
+                "columns": [{"name": "id", "type": "integer"}],
+            },
+        ]
+
+        result = await analyzer_with_provider.build_context(schema_context, tables)
+
+        # orders should appear (high pre-computed score)
+        assert "orders" in result
+        # encode() should have been called for unscored_table's score_relevance()
+        mock_embedding_provider.encode.assert_called()
