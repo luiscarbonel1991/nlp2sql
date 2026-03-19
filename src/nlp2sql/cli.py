@@ -913,6 +913,7 @@ def cache_clear(clear_all: bool, embeddings: bool, queries: bool, tables: bool):
             if Path(path).exists():
                 if Path(path).is_dir():
                     import shutil
+
                     shutil.rmtree(path)
                 else:
                     Path(path).unlink()
@@ -925,6 +926,7 @@ def cache_clear(clear_all: bool, embeddings: bool, queries: bool, tables: bool):
             if Path(path).exists():
                 if Path(path).is_dir():
                     import shutil
+
                     shutil.rmtree(path)
                 else:
                     Path(path).unlink()

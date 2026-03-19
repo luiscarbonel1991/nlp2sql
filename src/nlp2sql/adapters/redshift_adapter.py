@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import psycopg2
 import structlog
+from psycopg2 import sql as psycopg2_sql
 from psycopg2.extras import RealDictCursor
 
 from ..exceptions import SchemaException, SecurityException
@@ -333,9 +334,7 @@ class RedshiftRepository(SchemaRepositoryPort):
 
         try:
             start_time = time.time()
-            rows = await asyncio.to_thread(
-                self._execute_query, bulk_query, (schema,)
-            )
+            rows = await asyncio.to_thread(self._execute_query, bulk_query, (schema,))
 
             elapsed_ms = round((time.time() - start_time) * 1000, 2)
             logger.info("Bulk query completed", rows=len(rows), elapsed_ms=elapsed_ms)
@@ -374,34 +373,38 @@ class RedshiftRepository(SchemaRepositoryPort):
                 col_name = row.get("column_name")
                 if col_name and col_name not in tables_dict[table_name]["_seen_columns"]:
                     tables_dict[table_name]["_seen_columns"].add(col_name)
-                    tables_dict[table_name]["columns"].append({
-                        "name": col_name,
-                        "type": row.get("data_type", ""),
-                        "nullable": row.get("is_nullable") == "YES",
-                        "default": row.get("column_default"),
-                        "max_length": row.get("character_maximum_length"),
-                        "precision": row.get("numeric_precision"),
-                        "scale": row.get("numeric_scale"),
-                        "description": "",
-                    })
+                    tables_dict[table_name]["columns"].append(
+                        {
+                            "name": col_name,
+                            "type": row.get("data_type", ""),
+                            "nullable": row.get("is_nullable") == "YES",
+                            "default": row.get("column_default"),
+                            "max_length": row.get("character_maximum_length"),
+                            "precision": row.get("numeric_precision"),
+                            "scale": row.get("numeric_scale"),
+                            "description": "",
+                        }
+                    )
 
             # Convert to TableInfo objects
             tables = []
             for table_data in tables_dict.values():
                 del table_data["_seen_columns"]
 
-                tables.append(TableInfo(
-                    name=table_data["name"],
-                    schema=table_data["schema"],
-                    columns=table_data["columns"],
-                    primary_keys=table_data["primary_keys"],
-                    foreign_keys=table_data["foreign_keys"],
-                    indexes=table_data["indexes"],
-                    row_count=0,
-                    size_bytes=0,
-                    description=table_data["description"],
-                    last_updated=datetime.now(),
-                ))
+                tables.append(
+                    TableInfo(
+                        name=table_data["name"],
+                        schema=table_data["schema"],
+                        columns=table_data["columns"],
+                        primary_keys=table_data["primary_keys"],
+                        foreign_keys=table_data["foreign_keys"],
+                        indexes=table_data["indexes"],
+                        row_count=0,
+                        size_bytes=0,
+                        description=table_data["description"],
+                        last_updated=datetime.now(),
+                    )
+                )
 
             logger.info("Tables processed from bulk query", count=len(tables))
             return tables
@@ -646,8 +649,11 @@ class RedshiftRepository(SchemaRepositoryPort):
             start_time = time.time()
             conn = self._get_connection()
             try:
-                # Set statement timeout (in milliseconds for Redshift)
                 cursor = conn.cursor()
+                # Set search_path so unqualified table names resolve to our schema
+                cursor.execute(
+                    psycopg2_sql.SQL("SET search_path TO {}, public").format(psycopg2_sql.Identifier(self.schema_name))
+                )
                 cursor.execute(f"SET statement_timeout TO {timeout_seconds * 1000}")
                 cursor.close()
 

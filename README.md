@@ -101,7 +101,33 @@ async def main():
     result2 = await service.generate_sql("Show recent orders")
 ```
 
-### 4. Large Database with Schema Filtering
+### 4. Few-Shot Examples (Improved Accuracy)
+
+```python
+from nlp2sql import ExampleStore, create_embedding_provider, create_and_initialize_service
+
+# Create example store with domain-specific examples
+embedding_provider = create_embedding_provider("openai", api_key=os.getenv("OPENAI_API_KEY"))
+example_store = ExampleStore(embedding_provider=embedding_provider)
+await example_store.add_examples([
+    {
+        "question": "What was the total revenue last month?",
+        "sql": "SELECT SUM(gross_revenue) FROM sales WHERE date >= DATE_TRUNC('month', DATEADD(month, -1, CURRENT_DATE))",
+        "database_type": "redshift",
+        "metadata": {"category": "aggregation"}
+    }
+])
+
+service = await create_and_initialize_service(
+    database_url="redshift://user:pass@host:5439/db",
+    ai_provider="openai",
+    api_key=os.getenv("OPENAI_API_KEY"),
+    example_store=example_store
+)
+result = await service.generate_sql("Show me total sales this quarter")
+```
+
+### 5. Large Database with Schema Filtering
 
 ```python
 from nlp2sql import create_and_initialize_service

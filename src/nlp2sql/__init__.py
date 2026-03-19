@@ -11,9 +11,10 @@ from .exceptions import *
 from .factories import RepositoryFactory
 from .ports.embedding_provider import EmbeddingProviderPort
 from .ports.schema_repository import SchemaRepositoryPort
+from .schema.example_store import ExampleStore
 from .services.query_service import QueryGenerationService
 
-__version__ = "0.2.0rc6"
+__version__ = "0.2.0rc7"
 __author__ = "Luis Carbonel"
 __email__ = "devhighlevel@gmail.com"
 
@@ -38,6 +39,8 @@ __all__ = [
     "SQLQuery",
     # Embedding Provider
     "EmbeddingProviderPort",
+    # Example Store
+    "ExampleStore",
     # Configuration
     "settings",
     # Exceptions
@@ -130,9 +133,7 @@ async def create_repository(
         repo = await create_repository("postgresql://user:pass@localhost/db")
         tables = await repo.get_tables()
     """
-    return await RepositoryFactory.create_and_initialize(
-        database_url, schema_name, database_type
-    )
+    return await RepositoryFactory.create_and_initialize(database_url, schema_name, database_type)
 
 
 def create_query_service(
@@ -144,6 +145,7 @@ def create_query_service(
     embedding_provider: Optional[EmbeddingProviderPort] = None,
     embedding_provider_type: Optional[str] = None,
     schema_name: str = "public",
+    example_store: Optional[ExampleStore] = None,
 ) -> QueryGenerationService:
     """
     Create a configured query service instance.
@@ -224,6 +226,7 @@ def create_query_service(
         schema_filters=schema_filters,
         embedding_provider=embedding_provider,
         schema_name=schema_name,
+        example_store=example_store,
     )
 
     return service
@@ -238,6 +241,7 @@ async def create_and_initialize_service(
     embedding_provider: Optional[EmbeddingProviderPort] = None,
     embedding_provider_type: Optional[str] = None,
     schema_name: str = "public",
+    example_store: Optional[ExampleStore] = None,
 ) -> QueryGenerationService:
     """
     Create and initialize a query service with automatic schema loading.
@@ -274,6 +278,7 @@ async def create_and_initialize_service(
         embedding_provider,
         embedding_provider_type,
         schema_name,
+        example_store,
     )
     await service.initialize(database_type)
     return service
@@ -289,6 +294,7 @@ async def generate_sql_from_db(
     embedding_provider: Optional[EmbeddingProviderPort] = None,
     embedding_provider_type: Optional[str] = None,
     schema_name: str = "public",
+    example_store: Optional[ExampleStore] = None,
     **kwargs,
 ) -> Dict[str, Any]:
     """
@@ -346,5 +352,6 @@ async def generate_sql_from_db(
         embedding_provider,
         embedding_provider_type,
         schema_name,
+        example_store,
     )
     return await service.generate_sql(question=question, database_type=database_type, **kwargs)

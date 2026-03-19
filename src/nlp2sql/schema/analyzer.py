@@ -213,13 +213,20 @@ class SchemaAnalyzer(SchemaStrategyPort):
                 important_cols = self._get_important_columns(table_info["columns"])
                 col_info = []
 
-                for col in important_cols[:10]:  # Limit columns
+                for col in important_cols[:20]:
                     col_str = f"{col['name']}:{col['type']}"
                     if col.get("nullable", True):
                         col_str += "?"
                     col_info.append(col_str)
 
                 table_desc += f"\n  Columns: {', '.join(col_info)}"
+
+                # List remaining column names as reference
+                all_col_names = [c["name"] for c in table_info["columns"]]
+                if len(all_col_names) > 20:
+                    remaining = [c for c in all_col_names if c not in {ic["name"] for ic in important_cols[:20]}]
+                    if remaining:
+                        table_desc += f"\n  Other columns: {', '.join(remaining)}"
 
             if table_info.get("foreign_keys"):
                 fk_info = []
@@ -473,10 +480,7 @@ class SchemaAnalyzer(SchemaStrategyPort):
         # Step 2: Batch semantic scoring (single API call) for elements that need it
         if use_semantic and self.embedding_provider is not None:
             # Filter elements that need semantic scoring (text score < 0.8)
-            elements_for_semantic = [
-                e for e in schema_elements
-                if text_scores.get(e.get("name", ""), 0) < 0.8
-            ]
+            elements_for_semantic = [e for e in schema_elements if text_scores.get(e.get("name", ""), 0) < 0.8]
 
             if elements_for_semantic:
                 semantic_scores = await self._calculate_semantic_similarity_batch(
@@ -587,18 +591,12 @@ class SchemaAnalyzer(SchemaStrategyPort):
         # Handle both 1D and 2D embeddings
         if len(element_embeddings.shape) == 1:
             # Single embedding returned
-            similarity = cosine_similarity(
-                query_embedding.reshape(1, -1),
-                element_embeddings.reshape(1, -1)
-            )[0][0]
+            similarity = cosine_similarity(query_embedding.reshape(1, -1), element_embeddings.reshape(1, -1))[0][0]
             if len(valid_elements) == 1:
                 results.append((valid_elements[0], float(similarity)))
         else:
             # Multiple embeddings - use batch similarity calculation
-            similarities = cosine_similarity(
-                query_embedding.reshape(1, -1),
-                element_embeddings
-            )[0]
+            similarities = cosine_similarity(query_embedding.reshape(1, -1), element_embeddings)[0]
             for i, element in enumerate(valid_elements):
                 if i < len(similarities):
                     results.append((element, float(similarities[i])))
@@ -609,7 +607,27 @@ class SchemaAnalyzer(SchemaStrategyPort):
         """Identify important columns based on heuristics."""
         important = []
 
-        priority_patterns = ["id", "name", "date", "amount", "total", "count", "status", "type"]
+        priority_patterns = [
+            "id",
+            "name",
+            "date",
+            "amount",
+            "total",
+            "count",
+            "status",
+            "type",
+            "revenue",
+            "profit",
+            "cost",
+            "sales",
+            "orders",
+            "items",
+            "price",
+            "quantity",
+            "rate",
+            "spend",
+            "fee",
+        ]
 
         for col in columns:
             if col.get("is_primary_key") or col.get("is_foreign_key"):
@@ -625,7 +643,7 @@ class SchemaAnalyzer(SchemaStrategyPort):
         for col in columns:
             if col not in important:
                 important.append(col)
-            if len(important) >= 15:
+            if len(important) >= 30:
                 break
 
         return important
@@ -670,12 +688,19 @@ class SchemaAnalyzer(SchemaStrategyPort):
 
         if "columns" in table:
             important_cols = self._get_important_columns(table["columns"])
-            for col in important_cols[:8]:  # Limit to 8 columns
-                col_str = f"{col['name']}:{col['type'][:3]}"  # Abbreviate type
+            for col in important_cols[:20]:
+                col_str = f"{col['name']}:{col['type'][:3]}"
                 if col.get("is_primary_key"):
                     col_str += "*"
                 if col.get("is_foreign_key"):
                     col_str += "→"
                 cols.append(col_str)
+
+            # List remaining column names as reference
+            all_col_names = [c["name"] for c in table["columns"]]
+            if len(all_col_names) > 20:
+                remaining = [c for c in all_col_names if c not in {ic["name"] for ic in important_cols[:20]}]
+                if remaining:
+                    cols.append(f"... other: {', '.join(remaining)}")
 
         return f"{name}({', '.join(cols)})"

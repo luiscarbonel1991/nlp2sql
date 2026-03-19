@@ -340,9 +340,7 @@ class SchemaManager:
             )
 
             # Analyze if: has token match OR (not in results AND we need more)
-            should_analyze = has_token_match or (
-                table.name not in table_scores and len(table_scores) < max_tables * 2
-            )
+            should_analyze = has_token_match or (table.name not in table_scores and len(table_scores) < max_tables * 2)
 
             if should_analyze:
                 tables_to_analyze.append(table)
@@ -368,7 +366,9 @@ class SchemaManager:
                 table_dicts,
                 use_semantic=True,
                 precomputed_query_embedding=precomputed_query_emb,
-                precomputed_element_embeddings=precomputed_element_embeddings if precomputed_element_embeddings else None,
+                precomputed_element_embeddings=precomputed_element_embeddings
+                if precomputed_element_embeddings
+                else None,
             )
 
             for table_dict, score in scored_tables:

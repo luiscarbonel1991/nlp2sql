@@ -80,6 +80,7 @@ print(result['validation'])   # Validation results
 | `api_key` | `str` | Yes | Provider API key |
 | `embedding_provider_type` | `str` | No | Embedding provider: `local` (default), `openai` |
 | `schema_filters` | `dict` | No | Schema filtering options |
+| `example_store` | `ExampleStore` | No | Pre-loaded few-shot examples for better SQL generation |
 
 **Returns:** `dict` with keys `sql`, `confidence`, `explanation`, `validation`
 
@@ -111,6 +112,7 @@ result2 = await service.generate_sql("Show recent orders")
 | `schema_filters` | `dict` | No | Schema filtering options |
 | `embedding_provider_type` | `str` | No | Embedding provider type (see note below) |
 | `database_type` | `DatabaseType` | No | Database type (auto-detected) |
+| `example_store` | `ExampleStore` | No | Pre-loaded few-shot examples for better SQL generation |
 
 **Note on `embedding_provider_type`:** This controls how schema relevance filtering works. With `"local"` or `"openai"`, the system builds a FAISS vector index for semantic search (recommended for databases with 50+ tables). With `None` (default), the system attempts to load local embeddings silently and falls back to text-only matching if `sentence-transformers` is not installed. Text-only matching uses exact name, normalized singular/plural, and token overlap -- effective for small schemas but less accurate for large ones.
 
@@ -138,6 +140,42 @@ result = await service.generate_sql(
     database_type=DatabaseType.POSTGRES,
     max_tokens=1500,
     temperature=0.1
+)
+```
+
+### Few-Shot Examples
+
+Improve SQL accuracy by providing domain-specific examples via `ExampleStore`. Examples are indexed with FAISS for semantic retrieval -- the most relevant examples are automatically included in the LLM prompt.
+
+```python
+from nlp2sql import ExampleStore, create_embedding_provider, create_and_initialize_service
+
+# Create example store
+embedding_provider = create_embedding_provider("openai", api_key="your-key")
+example_store = ExampleStore(embedding_provider=embedding_provider)
+
+# Add domain-specific examples
+await example_store.add_examples([
+    {
+        "question": "What was the total revenue last month?",
+        "sql": "SELECT SUM(gross_revenue) FROM sales WHERE date >= DATE_TRUNC('month', DATEADD(month, -1, CURRENT_DATE))",
+        "database_type": "redshift",
+        "metadata": {"category": "aggregation"}
+    },
+    {
+        "question": "Show orders by country",
+        "sql": "SELECT country, COUNT(*) AS total_orders FROM orders GROUP BY country ORDER BY total_orders DESC",
+        "database_type": "redshift",
+        "metadata": {"category": "aggregation"}
+    }
+])
+
+# Pass to service
+service = await create_and_initialize_service(
+    database_url="redshift://user:pass@host:5439/db",
+    ai_provider="openai",
+    api_key="your-key",
+    example_store=example_store
 )
 ```
 

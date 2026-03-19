@@ -229,7 +229,8 @@ The system has multiple caching layers:
 ```
 src/nlp2sql/
 ├── core/           # Business entities (pure Python, no external dependencies)
-│   └── entities.py         # Query, SQLQuery, DatabaseType
+│   ├── entities.py         # Query, SQLQuery, DatabaseType
+│   └── database_prompts.py # SQL dialect hints for AI providers (centralized)
 ├── ports/          # Interfaces/abstractions
 │   ├── ai_provider.py      # AIProviderPort, QueryContext, QueryResponse
 │   ├── schema_repository.py # SchemaRepositoryPort, TableInfo
@@ -250,7 +251,8 @@ src/nlp2sql/
 ├── schema/         # Schema management
 │   ├── manager.py           # SchemaManager (coordinates strategies)
 │   ├── analyzer.py          # SchemaAnalyzer (scoring, compression)
-│   └── embedding_manager.py # SchemaEmbeddingManager (FAISS + TF-IDF)
+│   ├── embedding_manager.py # SchemaEmbeddingManager (FAISS + TF-IDF)
+│   └── example_store.py     # ExampleStore (FAISS-indexed few-shot examples)
 ├── config/         # Configuration
 │   └── settings.py          # Pydantic Settings (env vars)
 ├── exceptions/     # Custom exception hierarchy

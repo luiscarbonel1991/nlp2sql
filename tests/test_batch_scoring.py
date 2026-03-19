@@ -21,9 +21,7 @@ class TestScoreRelevanceBatch:
         """Create a mock embedding provider."""
         provider = MagicMock()
         # Return embeddings that simulate real behavior
-        provider.encode = AsyncMock(
-            side_effect=lambda texts: np.random.rand(len(texts), 384)
-        )
+        provider.encode = AsyncMock(side_effect=lambda texts: np.random.rand(len(texts), 384))
         return provider
 
     @pytest.fixture
@@ -81,15 +79,11 @@ class TestScoreRelevanceBatch:
     @pytest.mark.asyncio
     async def test_empty_elements_returns_empty_list(self, analyzer_without_provider):
         """Test that empty elements list returns empty results."""
-        result = await analyzer_without_provider.score_relevance_batch(
-            "show me users", []
-        )
+        result = await analyzer_without_provider.score_relevance_batch("show me users", [])
         assert result == []
 
     @pytest.mark.asyncio
-    async def test_text_scoring_without_provider(
-        self, analyzer_without_provider, sample_tables
-    ):
+    async def test_text_scoring_without_provider(self, analyzer_without_provider, sample_tables):
         """Test that text-based scoring works without embedding provider."""
         result = await analyzer_without_provider.score_relevance_batch(
             "show me all users",
@@ -103,9 +97,7 @@ class TestScoreRelevanceBatch:
         assert result[0][1] == 1.0  # Exact match score
 
     @pytest.mark.asyncio
-    async def test_results_sorted_by_score_descending(
-        self, analyzer_without_provider, sample_tables
-    ):
+    async def test_results_sorted_by_score_descending(self, analyzer_without_provider, sample_tables):
         """Test that results are sorted by score in descending order."""
         result = await analyzer_without_provider.score_relevance_batch(
             "user orders",
@@ -151,9 +143,7 @@ class TestScoreRelevanceBatch:
         assert users_entry[1] > products_entry[1]
 
     @pytest.mark.asyncio
-    async def test_batch_semantic_scoring_with_provider(
-        self, analyzer_with_provider, sample_tables
-    ):
+    async def test_batch_semantic_scoring_with_provider(self, analyzer_with_provider, sample_tables):
         """Test that semantic scoring is called when provider is available."""
         result = await analyzer_with_provider.score_relevance_batch(
             "find customer information",
@@ -168,9 +158,7 @@ class TestScoreRelevanceBatch:
         analyzer_with_provider.embedding_provider.encode.assert_called()
 
     @pytest.mark.asyncio
-    async def test_semantic_scoring_skipped_for_high_text_scores(
-        self, analyzer_with_provider
-    ):
+    async def test_semantic_scoring_skipped_for_high_text_scores(self, analyzer_with_provider):
         """Test that semantic scoring is skipped for elements with high text scores."""
         tables = [
             {"name": "users", "type": "table", "columns": []},  # Exact match
@@ -189,9 +177,7 @@ class TestScoreRelevanceBatch:
         assert result[0][1] == 1.0
 
     @pytest.mark.asyncio
-    async def test_semantic_disabled_with_flag(
-        self, analyzer_with_provider, sample_tables
-    ):
+    async def test_semantic_disabled_with_flag(self, analyzer_with_provider, sample_tables):
         """Test that use_semantic=False disables semantic scoring."""
         # Reset mock call count
         analyzer_with_provider.embedding_provider.encode.reset_mock()
@@ -241,11 +227,13 @@ class TestCalculateSemanticSimilarityBatch:
         """Test that batch embeddings uses single API call."""
         # Setup mock to track calls
         query_embedding = np.array([[0.1, 0.2, 0.3]])
-        element_embeddings = np.array([
-            [0.1, 0.2, 0.3],  # Similar to query
-            [0.9, 0.8, 0.7],  # Different from query
-            [0.2, 0.3, 0.4],  # Somewhat similar
-        ])
+        element_embeddings = np.array(
+            [
+                [0.1, 0.2, 0.3],  # Similar to query
+                [0.9, 0.8, 0.7],  # Different from query
+                [0.2, 0.3, 0.4],  # Somewhat similar
+            ]
+        )
 
         call_count = 0
 
@@ -276,9 +264,7 @@ class TestCalculateSemanticSimilarityBatch:
         query_embedding = np.array([[0.1, 0.2, 0.3]])
         element_embedding = np.array([[0.2, 0.3, 0.4]])
 
-        mock_embedding_provider.encode = AsyncMock(
-            side_effect=[query_embedding, element_embedding, element_embedding]
-        )
+        mock_embedding_provider.encode = AsyncMock(side_effect=[query_embedding, element_embedding, element_embedding])
 
         elements = [{"name": "table1", "type": "table"}]
 
@@ -332,9 +318,7 @@ class TestCreateElementDescription:
         """Test that only first 5 columns are included."""
         element = {
             "name": "wide_table",
-            "columns": [
-                {"name": f"col{i}"} for i in range(10)
-            ],
+            "columns": [{"name": f"col{i}"} for i in range(10)],
         }
         desc = analyzer._create_element_description(element)
         assert "col0" in desc
@@ -386,9 +370,7 @@ class TestPrecomputedEmbeddings:
     def mock_embedding_provider(self):
         """Create a mock embedding provider."""
         provider = MagicMock()
-        provider.encode = AsyncMock(
-            side_effect=lambda texts: np.random.rand(len(texts), 384)
-        )
+        provider.encode = AsyncMock(side_effect=lambda texts: np.random.rand(len(texts), 384))
         return provider
 
     @pytest.fixture
@@ -627,9 +609,7 @@ class TestBuildContextReusesScores:
     def mock_embedding_provider(self):
         """Create a mock embedding provider."""
         provider = MagicMock()
-        provider.encode = AsyncMock(
-            side_effect=lambda texts: np.random.rand(len(texts), 384)
-        )
+        provider.encode = AsyncMock(side_effect=lambda texts: np.random.rand(len(texts), 384))
         return provider
 
     @pytest.fixture
@@ -641,6 +621,7 @@ class TestBuildContextReusesScores:
     def schema_context(self):
         """Create a SchemaContext for build_context calls."""
         from nlp2sql.ports.schema_strategy import SchemaContext
+
         return SchemaContext(
             query="show me all orders",
             max_tokens=4000,
@@ -710,9 +691,7 @@ class TestBuildContextReusesScores:
         mock_embedding_provider.encode.assert_called()
 
     @pytest.mark.asyncio
-    async def test_build_context_mixed_tables(
-        self, analyzer_with_provider, mock_embedding_provider, schema_context
-    ):
+    async def test_build_context_mixed_tables(self, analyzer_with_provider, mock_embedding_provider, schema_context):
         """Only tables missing relevance_score trigger scoring; pre-scored ones don't."""
         mock_embedding_provider.encode.reset_mock()
 
