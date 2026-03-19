@@ -51,6 +51,8 @@ The codebase follows Clean Architecture (Hexagonal/Ports & Adapters):
 ```
 src/nlp2sql/
 ├── core/           # Business entities (pure Python, no external dependencies)
+│   ├── entities.py            # Query, SQLQuery, DatabaseType
+│   └── database_prompts.py    # SQL dialect hints for AI providers
 ├── ports/          # Interfaces/abstractions (contracts)
 │   ├── ai_provider.py          # AIProviderPort - interface for AI providers
 │   ├── embedding_provider.py   # EmbeddingProviderPort - interface for embeddings
@@ -69,7 +71,8 @@ src/nlp2sql/
 ├── schema/         # Schema management
 │   ├── schema_manager.py       # Coordinates filtering and strategies
 │   ├── schema_analyzer.py      # Scores schema relevance
-│   └── schema_embedding_manager.py  # FAISS vector embeddings
+│   ├── schema_embedding_manager.py  # FAISS vector embeddings
+│   └── example_store.py        # ExampleStore - FAISS-indexed few-shot examples
 ├── config/         # Configuration (Pydantic Settings)
 ├── exceptions/     # Custom exceptions hierarchy
 └── cli.py          # Click-based CLI

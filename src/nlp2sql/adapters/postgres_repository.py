@@ -406,16 +406,18 @@ class PostgreSQLRepository(SchemaRepositoryPort):
                 col_name = row[5]
                 if col_name and col_name not in tables_dict[table_name]["_seen_columns"]:
                     tables_dict[table_name]["_seen_columns"].add(col_name)
-                    tables_dict[table_name]["columns"].append({
-                        "name": col_name,
-                        "type": row[6],
-                        "nullable": row[7] == "YES",
-                        "default": row[8],
-                        "max_length": row[9],
-                        "precision": row[10],
-                        "scale": row[11],
-                        "description": row[12],
-                    })
+                    tables_dict[table_name]["columns"].append(
+                        {
+                            "name": col_name,
+                            "type": row[6],
+                            "nullable": row[7] == "YES",
+                            "default": row[8],
+                            "max_length": row[9],
+                            "precision": row[10],
+                            "scale": row[11],
+                            "description": row[12],
+                        }
+                    )
 
                 # Add foreign key (if present and not seen)
                 fk_column = row[15]
@@ -424,12 +426,14 @@ class PostgreSQLRepository(SchemaRepositoryPort):
                     fk_key = f"{fk_constraint}:{fk_column}"
                     if fk_key not in tables_dict[table_name]["_seen_fks"]:
                         tables_dict[table_name]["_seen_fks"].add(fk_key)
-                        tables_dict[table_name]["foreign_keys"].append({
-                            "column": fk_column,
-                            "ref_table": row[16],
-                            "ref_column": row[17],
-                            "constraint_name": fk_constraint,
-                        })
+                        tables_dict[table_name]["foreign_keys"].append(
+                            {
+                                "column": fk_column,
+                                "ref_table": row[16],
+                                "ref_column": row[17],
+                                "constraint_name": fk_constraint,
+                            }
+                        )
 
             # Convert to TableInfo objects
             tables = []
@@ -438,18 +442,20 @@ class PostgreSQLRepository(SchemaRepositoryPort):
                 del table_data["_seen_columns"]
                 del table_data["_seen_fks"]
 
-                tables.append(TableInfo(
-                    name=table_data["name"],
-                    schema=table_data["schema"],
-                    columns=table_data["columns"],
-                    primary_keys=table_data["primary_keys"],
-                    foreign_keys=table_data["foreign_keys"],
-                    indexes=table_data["indexes"],
-                    row_count=table_data["row_count"],
-                    size_bytes=table_data["size_bytes"],
-                    description=table_data["description"],
-                    last_updated=datetime.now(),
-                ))
+                tables.append(
+                    TableInfo(
+                        name=table_data["name"],
+                        schema=table_data["schema"],
+                        columns=table_data["columns"],
+                        primary_keys=table_data["primary_keys"],
+                        foreign_keys=table_data["foreign_keys"],
+                        indexes=table_data["indexes"],
+                        row_count=table_data["row_count"],
+                        size_bytes=table_data["size_bytes"],
+                        description=table_data["description"],
+                        last_updated=datetime.now(),
+                    )
+                )
 
             logger.info("Tables processed from bulk query", count=len(tables))
             return tables
