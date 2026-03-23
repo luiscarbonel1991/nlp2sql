@@ -91,6 +91,7 @@ class NLP2SQL:
 # Factory — the ``connect()`` function
 # ------------------------------------------------------------------
 
+
 async def connect(
     database_url: str,
     *,

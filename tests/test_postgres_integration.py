@@ -23,9 +23,7 @@ class TestPostgresRepository:
         tables = await repo.get_tables()
         table_names = {t.name.lower() for t in tables}
 
-        assert EXPECTED_TABLES.issubset(table_names), (
-            f"Missing tables: {EXPECTED_TABLES - table_names}"
-        )
+        assert EXPECTED_TABLES.issubset(table_names), f"Missing tables: {EXPECTED_TABLES - table_names}"
 
     async def test_column_discovery(self, postgres_available):
         repo = PostgreSQLRepository(postgres_available)
@@ -77,9 +75,7 @@ class TestSchemaManagerWithPostgres:
         await repo.initialize()
         await manager.initialize(DatabaseType.POSTGRES)
 
-        context = await manager.get_optimal_schema_context(
-            "How many users?", DatabaseType.POSTGRES, max_tokens=4000
-        )
+        context = await manager.get_optimal_schema_context("How many users?", DatabaseType.POSTGRES, max_tokens=4000)
         assert "reviews" not in context.lower()
 
     async def test_schema_filters_include_tables(self, postgres_available, mock_embedding_provider):
@@ -92,9 +88,7 @@ class TestSchemaManagerWithPostgres:
         await repo.initialize()
         await manager.initialize(DatabaseType.POSTGRES)
 
-        context = await manager.get_optimal_schema_context(
-            "How many users?", DatabaseType.POSTGRES, max_tokens=4000
-        )
+        context = await manager.get_optimal_schema_context("How many users?", DatabaseType.POSTGRES, max_tokens=4000)
         assert "users" in context.lower()
 
     async def test_embedding_search_against_real_schema(self, postgres_available, mock_embedding_provider, tmp_path):
@@ -110,9 +104,18 @@ class TestSchemaManagerWithPostgres:
 
         elements = []
         for table in tables:
-            elements.append({"type": "table", "name": table.name, "columns": [{"name": c["name"]} for c in table.columns]})
+            elements.append(
+                {"type": "table", "name": table.name, "columns": [{"name": c["name"]} for c in table.columns]}
+            )
             for col in table.columns:
-                elements.append({"type": "column", "name": col["name"], "table_name": table.name, "data_type": col.get("data_type", "unknown")})
+                elements.append(
+                    {
+                        "type": "column",
+                        "name": col["name"],
+                        "table_name": table.name,
+                        "data_type": col.get("data_type", "unknown"),
+                    }
+                )
 
         await emb_manager.add_schema_elements(elements, DatabaseType.POSTGRES)
         results = await emb_manager.search_similar("customer email", top_k=5, min_score=0.0)
