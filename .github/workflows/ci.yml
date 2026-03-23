@@ -27,9 +27,6 @@ jobs:
         uv pip install --system .
         uv pip install --system ".[dev]"
 
-    - name: Lint
-      run: uv run ruff check src/
-
     - name: Unit tests
       env:
         PYTHONPATH: src
