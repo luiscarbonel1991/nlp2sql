@@ -54,111 +54,109 @@ pip install nlp2sql[embeddings-openai]  # OpenAI embeddings
 
 ## Quick Start
 
-### 1. Set Environment Variables
+### 1. Set an API Key
 
 ```bash
-# At least one AI provider key required
 export OPENAI_API_KEY="your-openai-key"
-# export ANTHROPIC_API_KEY="your-anthropic-key"
-# export GOOGLE_API_KEY="your-google-key"
+# or ANTHROPIC_API_KEY, GOOGLE_API_KEY
 ```
 
-### 2. One-Line Usage
+### 2. Connect and Ask
 
 ```python
 import asyncio
-import os
-from nlp2sql import generate_sql_from_db
+import nlp2sql
+from nlp2sql import ProviderConfig
 
 async def main():
-    result = await generate_sql_from_db(
-        database_url="postgresql://user:pass@localhost:5432/mydb",
-        question="Show me all active users",
-        ai_provider="openai",
-        api_key=os.getenv("OPENAI_API_KEY")
+    nlp = await nlp2sql.connect(
+        "postgresql://user:pass@localhost:5432/mydb",
+        provider=ProviderConfig(provider="openai", api_key="sk-..."),
     )
-    print(result['sql'])
-    print(f"Confidence: {result['confidence']}")
+
+    result = await nlp.ask("Show me all active users")
+    print(result.sql)
+    print(result.confidence)
+    print(result.is_valid)
 
 asyncio.run(main())
 ```
 
-### 3. Pre-Initialized Service (Better Performance)
+`connect()` auto-detects the database type from the URL, loads the schema, and builds the FAISS embedding index. Subsequent `ask()` calls reuse everything from disk cache.
+
+### 3. Few-Shot Examples
+
+Pass a list of dicts -- `connect()` handles embedding and indexing automatically:
 
 ```python
-from nlp2sql import create_and_initialize_service
-
-async def main():
-    # Initialize once
-    service = await create_and_initialize_service(
-        database_url="postgresql://user:pass@localhost:5432/mydb",
-        ai_provider="openai",
-        api_key=os.getenv("OPENAI_API_KEY")
-    )
-
-    # Use multiple times
-    result1 = await service.generate_sql("Count total users")
-    result2 = await service.generate_sql("Show recent orders")
-```
-
-### 4. Few-Shot Examples (Improved Accuracy)
-
-```python
-from nlp2sql import ExampleStore, create_embedding_provider, create_and_initialize_service
-
-# Create example store with domain-specific examples
-embedding_provider = create_embedding_provider("openai", api_key=os.getenv("OPENAI_API_KEY"))
-example_store = ExampleStore(embedding_provider=embedding_provider)
-await example_store.add_examples([
-    {
-        "question": "What was the total revenue last month?",
-        "sql": "SELECT SUM(gross_revenue) FROM sales WHERE date >= DATE_TRUNC('month', DATEADD(month, -1, CURRENT_DATE))",
-        "database_type": "redshift",
-        "metadata": {"category": "aggregation"}
-    }
-])
-
-service = await create_and_initialize_service(
-    database_url="redshift://user:pass@host:5439/db",
-    ai_provider="openai",
-    api_key=os.getenv("OPENAI_API_KEY"),
-    example_store=example_store
+nlp = await nlp2sql.connect(
+    "redshift://user:pass@host:5439/db",
+    provider=ProviderConfig(provider="openai", api_key="sk-..."),
+    schema="dwh_data_share_llm",
+    examples=[
+        {
+            "question": "Total revenue last month?",
+            "sql": "SELECT SUM(revenue) FROM sales WHERE date >= DATE_TRUNC('month', CURRENT_DATE - INTERVAL '1 month')",
+            "database_type": "redshift",
+        },
+    ],
 )
-result = await service.generate_sql("Show me total sales this quarter")
+
+result = await nlp.ask("Show me total sales this quarter")
 ```
 
-### 5. Large Database with Schema Filtering
+### 4. Schema Filtering (Large Databases)
 
 ```python
-from nlp2sql import create_and_initialize_service
-
-service = await create_and_initialize_service(
-    database_url="postgresql://localhost/enterprise",
-    ai_provider="anthropic",  # Best for large schemas (200K context)
-    api_key=os.getenv("ANTHROPIC_API_KEY"),
+nlp = await nlp2sql.connect(
+    "postgresql://localhost/enterprise",
+    provider=ProviderConfig(provider="anthropic", api_key="sk-ant-..."),
     schema_filters={
         "include_schemas": ["sales", "finance"],
-        "exclude_system_tables": True
-    }
+        "exclude_system_tables": True,
+    },
 )
-
-result = await service.generate_sql("Show revenue by month")
 ```
 
-### 5. CLI Usage
+### 5. Custom Model and Temperature
+
+```python
+nlp = await nlp2sql.connect(
+    "postgresql://localhost/mydb",
+    provider=ProviderConfig(
+        provider="openai",
+        api_key="sk-...",
+        model="gpt-4o",
+        temperature=0.0,
+        max_tokens=4000,
+    ),
+)
+```
+
+### 6. CLI
 
 ```bash
-# Generate SQL
 nlp2sql query \
   --database-url postgresql://user:pass@localhost:5432/mydb \
   --question "Show all active users" \
   --explain
 
-# Inspect schema
 nlp2sql inspect --database-url postgresql://localhost/mydb
+```
 
-# Benchmark providers
-nlp2sql benchmark --database-url postgresql://localhost/mydb
+### Advanced: Direct Service Access
+
+For full control over the lifecycle, the lower-level API is still available:
+
+```python
+from nlp2sql import create_and_initialize_service, ProviderConfig, DatabaseType
+
+service = await create_and_initialize_service(
+    database_url="postgresql://localhost/mydb",
+    provider_config=ProviderConfig(provider="openai", api_key="sk-..."),
+    database_type=DatabaseType.POSTGRES,
+)
+result = await service.generate_sql("Count total users", database_type=DatabaseType.POSTGRES)
 ```
 
 ## How It Works
@@ -180,13 +178,13 @@ See [Architecture](docs/ARCHITECTURE.md) for the detailed flow with method refer
 
 ## Provider Comparison
 
-| Provider | Context Size | Best For |
-|----------|-------------|----------|
-| OpenAI GPT-4 | 128K | Complex reasoning |
-| Anthropic Claude | 200K | Large schemas |
-| Google Gemini | 1M | High volume, cost efficiency |
+| Provider | Default Model | Context Size | Best For |
+|----------|--------------|-------------|----------|
+| OpenAI | gpt-4o-mini | 128K | Cost-effective, fast |
+| Anthropic | claude-sonnet-4-20250514 | 200K | Large schemas |
+| Google Gemini | gemini-2.0-flash | 1M | High volume |
 
-See [Configuration](docs/CONFIGURATION.md) for detailed provider setup.
+All models are configurable via `ProviderConfig(model="...")`. See [Configuration](docs/CONFIGURATION.md) for details.
 
 ## Architecture
 
@@ -194,13 +192,17 @@ Clean Architecture (Ports & Adapters) with three layers: core entities, port int
 
 ```
 nlp2sql/
-├── core/           # Business entities (pure Python, no dependencies)
-├── ports/          # Interfaces (AIProviderPort, SchemaRepositoryPort, EmbeddingProviderPort)
-├── adapters/       # Implementations (OpenAI, Anthropic, Gemini, PostgreSQL, Redshift)
-├── services/       # Orchestration (QueryGenerationService)
-├── schema/         # Schema management (SchemaManager, SchemaAnalyzer, SchemaEmbeddingManager)
-├── config/         # Pydantic Settings configuration
-└── exceptions/     # Custom exception hierarchy
+├── client.py       # DSL: connect() + NLP2SQL class (recommended entry point)
+├── core/           # Pure Python: entities, ProviderConfig, QueryResult, sql_safety, sql_keywords
+├── ports/          # Interfaces: AIProviderPort, SchemaRepositoryPort, EmbeddingProviderPort,
+│                   #   ExampleRepositoryPort, QuerySafetyPort, QueryValidatorPort, CachePort
+├── adapters/       # Implementations: OpenAI, Anthropic, Gemini, PostgreSQL, Redshift,
+│                   #   RegexQueryValidator
+├── services/       # Orchestration: QueryGenerationService
+├── schema/         # Schema management: SchemaManager, SchemaAnalyzer, SchemaEmbeddingManager,
+│                   #   ExampleStore
+├── config/         # Pydantic Settings (centralized defaults)
+└── exceptions/     # Exception hierarchy (NLP2SQLException -> 8 subclasses)
 ```
 
 See [Architecture](docs/ARCHITECTURE.md) for the full component diagram, data flow, and design decisions.

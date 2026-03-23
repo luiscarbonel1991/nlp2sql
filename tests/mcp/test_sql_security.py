@@ -1,6 +1,6 @@
-"""Tests for SQL security validation in repositories."""
+"""Tests for SQL security validation."""
 
-from nlp2sql.adapters.postgres_repository import apply_row_limit, is_safe_query
+from nlp2sql.core.sql_safety import apply_row_limit, is_safe_query
 
 
 class TestIsSafeQuery:

@@ -1,7 +1,6 @@
 """Embedding manager for schema vectorization and search."""
 
 import hashlib
-import os
 import pickle
 from datetime import datetime
 from pathlib import Path
@@ -17,49 +16,9 @@ from ..core.entities import DatabaseType
 from ..exceptions import SchemaException
 from ..ports.cache import CachePort
 from ..ports.embedding_provider import EmbeddingProviderPort
+from ..utils.storage import get_data_directory
 
 logger = structlog.get_logger()
-
-
-def _get_embeddings_directory() -> Path:
-    """Get writable embeddings directory with fallback chain.
-
-    Tries directories in order:
-    1. NLP2SQL_EMBEDDINGS_DIR environment variable (explicit user config)
-    2. ./embeddings (development default, tests writability)
-    3. /tmp/nlp2sql_embeddings (containerized/sandboxed fallback)
-
-    This ensures the MCP server works in containerized environments like
-    Claude Desktop where the current directory may be read-only.
-
-    Returns:
-        Path to a writable embeddings directory
-    """
-    # Try explicit config first
-    explicit_dir = os.getenv("NLP2SQL_EMBEDDINGS_DIR")
-    if explicit_dir:
-        return Path(explicit_dir)
-
-    # Try ./embeddings (development default)
-    local_dir = Path("./embeddings")
-    try:
-        local_dir.mkdir(parents=True, exist_ok=True)
-        # Test if writable by creating and removing a test file
-        test_file = local_dir / ".write_test"
-        test_file.touch()
-        test_file.unlink()
-        return local_dir
-    except (OSError, PermissionError):
-        pass
-
-    # Fallback to /tmp for containerized environments
-    tmp_dir = Path("/tmp/nlp2sql_embeddings")
-    tmp_dir.mkdir(parents=True, exist_ok=True)
-    logger.info(
-        "Using /tmp fallback for embeddings directory (current directory not writable)",
-        path=str(tmp_dir),
-    )
-    return tmp_dir
 
 
 class SchemaEmbeddingManager:
@@ -107,7 +66,7 @@ class SchemaEmbeddingManager:
         db_hash = hashlib.md5(index_key.encode()).hexdigest()
 
         # Get embeddings directory with fallback chain for containerized environments
-        embeddings_dir = _get_embeddings_directory()
+        embeddings_dir = get_data_directory("NLP2SQL_EMBEDDINGS_DIR", "embeddings", "nlp2sql_embeddings")
         self.index_path = (index_path or embeddings_dir) / db_hash
 
         try:
@@ -137,11 +96,8 @@ class SchemaEmbeddingManager:
         if index_file.exists() and metadata_file.exists():
             try:
                 with open(metadata_file, "rb") as f:
-                    metadata = pickle.load(f)
+                    pickle.load(f)  # validate file is readable
                     provider_dim = self.embedding_provider.get_embedding_dimension()
-
-                    # Use provider dimension, not stored dimension
-                    # This ensures we detect mismatches correctly
                     self.embedding_dim = provider_dim
             except Exception as e:
                 logger.warning("Failed to load dimension from metadata, loading model", error=str(e))
@@ -173,7 +129,6 @@ class SchemaEmbeddingManager:
             # Check dimension mismatch
             existing_dim = self.index.d
             stored_provider = metadata.get("provider_type", "unknown")
-            stored_dim = metadata.get("embedding_dimension", existing_dim)
             provider_dimension = self.embedding_provider.get_embedding_dimension()
 
             # Compare with current provider dimension, not stored dimension

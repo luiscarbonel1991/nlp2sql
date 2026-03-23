@@ -7,7 +7,14 @@ nlp2sql follows Clean Architecture (Hexagonal/Ports & Adapters) principles, enab
 ```mermaid
 graph TB
     subgraph "Public API"
-        API[create_query_service<br>generate_sql_from_db]
+        DSL["nlp2sql.connect() → NLP2SQL.ask()"]
+        API["create_and_initialize_service()<br>generate_sql_from_db()"]
+    end
+
+    subgraph "Core (Pure Python)"
+        PC[ProviderConfig]
+        QR[QueryResult]
+        SS[sql_safety / sql_keywords]
     end
 
     subgraph "Service Layer"
@@ -24,6 +31,9 @@ graph TB
         AIP[AIProviderPort]
         SRP[SchemaRepositoryPort]
         EP[EmbeddingProviderPort]
+        ERP[ExampleRepositoryPort]
+        QVP[QueryValidatorPort]
+        QSP[QuerySafetyPort]
     end
 
     subgraph "AI Adapters"
@@ -42,9 +52,19 @@ graph TB
         OE[OpenAI Embeddings]
     end
 
+    subgraph "Other Adapters"
+        ES[ExampleStore<br>FAISS-backed]
+        RQV[RegexQueryValidator]
+    end
+
+    DSL --> QGS
     API --> QGS
+    DSL -.-> PC
+    DSL -.-> QR
     QGS --> SM
     QGS --> AIP
+    QGS --> ERP
+    QGS --> QVP
     SM --> SA
     SM --> SEM
     SM --> SRP
@@ -56,19 +76,24 @@ graph TB
     SRP --> RS
     EP --> LE
     EP --> OE
+    ERP --> ES
+    QVP --> RQV
+    PG -.-> SS
+    RS -.-> SS
 ```
 
 ## Component Descriptions
 
 ### Public API
 
-Entry points for the library (`__init__.py`):
+Entry points for the library:
 
 | Function | Purpose |
 |----------|---------|
-| `generate_sql_from_db` | One-line convenience: creates service, loads schema, generates SQL, returns result |
-| `create_and_initialize_service` | Creates and initializes service once; reuse for multiple queries (recommended) |
-| `create_query_service` | Creates service with full control; caller must call `initialize()` manually |
+| `nlp2sql.connect()` | **Recommended.** DSL entry point: returns `NLP2SQL` client with `.ask()`, `.validate()`, `.explain()` |
+| `create_and_initialize_service` | Lower-level: returns `QueryGenerationService` for advanced wiring |
+| `create_query_service` | Full manual control; caller must call `initialize()` manually |
+| `generate_sql_from_db` | One-shot convenience: creates everything per call |
 
 ### Service Layer
 
@@ -76,11 +101,12 @@ Entry points for the library (`__init__.py`):
 
 1. Check query cache
 2. Get optimal schema context via `SchemaManager`
-3. Find relevant examples (from `ExampleStore` or hardcoded fallback)
+3. Find relevant examples via `ExampleRepositoryPort` (if configured)
 4. Build `QueryContext` and call `AIProvider.generate_query()`
-5. Optionally optimize via `QueryOptimizerPort`
-6. Validate SQL via `AIProvider.validate_query()`
-7. Cache valid results
+5. Validate columns via `QueryValidatorPort` (retry once if errors found)
+6. Optionally optimize via `QueryOptimizerPort`
+7. Validate SQL via `AIProvider.validate_query()`
+8. Cache valid results
 
 ### Schema Management
 
@@ -94,11 +120,17 @@ Entry points for the library (`__init__.py`):
 
 Abstract contracts in `ports/` that define layer boundaries:
 
-- **AIProviderPort** (`ports/ai_provider.py`): `generate_query()`, `validate_query()`
-- **SchemaRepositoryPort** (`ports/schema_repository.py`): `get_tables()`, `get_table_info()`, `get_related_tables()`
-- **EmbeddingProviderPort** (`ports/embedding_provider.py`): `encode()`, `get_embedding_dimension()`
-- **SchemaStrategyPort** (`ports/schema_strategy.py`): `build_context()`, `score_relevance()`, `chunk_schema()`
-- **CachePort** (`ports/cache.py`): `get()`, `set()`, `clear()`
+| Port | File | Methods |
+|------|------|---------|
+| **AIProviderPort** | `ports/ai_provider.py` | `generate_query()`, `validate_query()` |
+| **SchemaRepositoryPort** | `ports/schema_repository.py` | `get_tables()`, `get_table_info()`, `get_related_tables()` |
+| **EmbeddingProviderPort** | `ports/embedding_provider.py` | `encode()`, `get_embedding_dimension()` |
+| **ExampleRepositoryPort** | `ports/example_repository.py` | `add_examples()`, `search_similar()`, `clear()`, `get_stats()` |
+| **QueryValidatorPort** | `ports/query_validator.py` | `validate_columns()` |
+| **QuerySafetyPort** | `ports/query_safety.py` | `validate()`, `apply_row_limit()` |
+| **SchemaStrategyPort** | `ports/schema_strategy.py` | `build_context()`, `score_relevance()`, `chunk_schema()` |
+| **CachePort** | `ports/cache.py` | `get()`, `set()`, `clear()` |
+| **QueryOptimizerPort** | `ports/query_optimizer.py` | `optimize()` |
 
 ### Adapters
 
@@ -109,6 +141,8 @@ Concrete implementations of ports:
 | AI Providers | OpenAI GPT, Anthropic Claude, Google Gemini | `adapters/openai_adapter.py`, `anthropic_adapter.py`, `gemini_adapter.py` |
 | Databases | PostgreSQL, Amazon Redshift | `adapters/postgres_repository.py`, `redshift_adapter.py` |
 | Embeddings | Local (sentence-transformers), OpenAI | `adapters/local_embedding_adapter.py`, `openai_embedding_adapter.py` |
+| Examples | FAISS-backed ExampleStore | `schema/example_store.py` (implements `ExampleRepositoryPort`) |
+| Validation | Regex-based column validator | `adapters/regex_query_validator.py` (implements `QueryValidatorPort`) |
 
 ## Detailed Query Flow
 
@@ -223,18 +257,33 @@ The system has multiple caching layers:
 | **Repository disk cache (Redshift)** | Redshift's `SVV_TABLES`/`SVV_COLUMNS` queries are expensive. Bulk query + pickle cache avoids repeated system catalog scans. |
 | **Graceful embedding degradation** | System works without embeddings (text-based matching only). If `sentence-transformers` is not installed, logs a warning and continues. |
 | **Schema filters applied before indexing** | Filters reduce the number of elements indexed in FAISS, making search faster and more focused. |
+| **DSL `connect()` + `ask()`** | Pythonic API inspired by httpx/redis-py. Auto-detects database type, auto-creates embeddings, accepts plain dicts for examples. Wraps `QueryGenerationService` without replacing it. |
+| **ProviderConfig** | Single object for AI provider settings (provider, api_key, model, temperature, max_tokens). Eliminates scattered params across factory functions. |
+| **QueryResult** | Typed dataclass instead of raw dict. `.sql`, `.confidence`, `.is_valid` instead of `result["sql"]`, `result["validation"]["is_valid"]`. |
+| **SQL safety in core** | `is_safe_query()` and `DANGEROUS_SQL_PATTERNS` moved from adapters to `core/sql_safety.py`. Eliminates duplication between PostgreSQL and Redshift adapters. |
+| **QueryValidatorPort** | Column validation logic (90 lines of regex) extracted from service to `adapters/regex_query_validator.py`. Enables future `sqlglot`-based implementation. |
+| **ExampleRepositoryPort** | Few-shot examples behind a port interface. `ExampleStore` (FAISS) is one implementation; users can provide DB-backed or API-backed stores. |
 
 ## Directory Structure
 
 ```
 src/nlp2sql/
-├── core/           # Business entities (pure Python, no external dependencies)
+├── client.py       # DSL: connect() + NLP2SQL class (recommended entry point)
+├── __init__.py     # Public API: exports, factory functions
+├── core/           # Pure Python, no external dependencies
 │   ├── entities.py         # Query, SQLQuery, DatabaseType
-│   └── database_prompts.py # SQL dialect hints for AI providers (centralized)
+│   ├── provider_config.py  # ProviderConfig (AI provider settings)
+│   ├── result.py           # QueryResult (typed result from ask())
+│   ├── database_prompts.py # SQL dialect hints for AI providers
+│   ├── sql_safety.py       # is_safe_query(), apply_row_limit(), DANGEROUS_SQL_PATTERNS
+│   └── sql_keywords.py     # SQL_KEYWORDS frozenset (shared by validators)
 ├── ports/          # Interfaces/abstractions
-│   ├── ai_provider.py      # AIProviderPort, QueryContext, QueryResponse
+│   ├── ai_provider.py       # AIProviderPort, QueryContext, QueryResponse
 │   ├── schema_repository.py # SchemaRepositoryPort, TableInfo
 │   ├── embedding_provider.py # EmbeddingProviderPort
+│   ├── example_repository.py # ExampleRepositoryPort (few-shot examples)
+│   ├── query_validator.py   # QueryValidatorPort (column validation)
+│   ├── query_safety.py      # QuerySafetyPort (SQL safety checks)
 │   ├── schema_strategy.py   # SchemaStrategyPort, SchemaContext, SchemaChunk
 │   ├── cache.py             # CachePort
 │   └── query_optimizer.py   # QueryOptimizerPort
@@ -245,16 +294,19 @@ src/nlp2sql/
 │   ├── postgres_repository.py      # PostgreSQL
 │   ├── redshift_adapter.py         # Amazon Redshift (with disk cache)
 │   ├── local_embedding_adapter.py  # sentence-transformers
-│   └── openai_embedding_adapter.py # OpenAI embeddings
+│   ├── openai_embedding_adapter.py # OpenAI embeddings
+│   └── regex_query_validator.py    # Regex-based column validation
 ├── services/       # Application services
 │   └── query_service.py    # QueryGenerationService (orchestrator)
 ├── schema/         # Schema management
 │   ├── manager.py           # SchemaManager (coordinates strategies)
 │   ├── analyzer.py          # SchemaAnalyzer (scoring, compression)
 │   ├── embedding_manager.py # SchemaEmbeddingManager (FAISS + TF-IDF)
-│   └── example_store.py     # ExampleStore (FAISS-indexed few-shot examples)
+│   └── example_store.py     # ExampleStore (implements ExampleRepositoryPort)
 ├── config/         # Configuration
-│   └── settings.py          # Pydantic Settings (env vars)
+│   └── settings.py          # Pydantic Settings (centralized defaults)
+├── utils/          # Shared utilities
+│   └── storage.py           # get_data_directory() (disk persistence)
 ├── exceptions/     # Custom exception hierarchy
 └── factories.py    # RepositoryFactory
 ```

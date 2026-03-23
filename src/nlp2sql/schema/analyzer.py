@@ -353,8 +353,12 @@ class SchemaAnalyzer(SchemaStrategyPort):
 
         return word_lower
 
+    def tokenize(self, text: str) -> list[str]:
+        """Tokenize text for matching. Handles snake_case and camelCase."""
+        return self._tokenize(text)
+
     def _tokenize(self, text: str) -> List[str]:
-        """Tokenize text for matching."""
+        """Internal tokenizer."""
         tokens = re.findall(r"\w+", text.lower())
         # Handle snake_case and camelCase
         expanded_tokens = []

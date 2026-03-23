@@ -10,34 +10,60 @@ import faiss
 import numpy as np
 import structlog
 
+from ..exceptions import SchemaException
 from ..ports.embedding_provider import EmbeddingProviderPort
+from ..ports.example_repository import ExampleRepositoryPort
+from ..utils.storage import get_data_directory
 
 logger = structlog.get_logger()
 
 
-class ExampleStore:
-    """Manages examples for few-shot learning with FAISS indexing."""
+class ExampleStore(ExampleRepositoryPort):
+    """FAISS-based implementation of ExampleRepositoryPort.
+
+    Uses FAISS vector indexing for semantic similarity search of few-shot
+    examples. Supports per-database isolation when ``database_url`` is
+    provided, preventing example contamination across different database
+    connections.
+    """
 
     def __init__(
         self,
         embedding_provider: EmbeddingProviderPort,
         index_path: Optional[Path] = None,
+        database_url: Optional[str] = None,
+        schema_name: str = "public",
     ):
         """
         Initialize example store.
 
         Args:
-            embedding_provider: Embedding provider for vectorizing questions
-            index_path: Optional custom path for index storage
+            embedding_provider: Embedding provider for vectorizing questions.
+            index_path: Optional custom path for index storage. Takes precedence
+                over automatic directory resolution.
+            database_url: Optional database URL for per-database isolation.
+                When provided, examples are stored in a subdirectory hashed from
+                ``database_url:schema_name``, preventing collisions across databases.
+                When omitted, a single global directory is used (backward compatible).
+            schema_name: Database schema name (default: ``"public"``). Used together
+                with *database_url* for index isolation.
         """
         self.embedding_provider = embedding_provider
         self.embedding_dim = self.embedding_provider.get_embedding_dimension()
 
-        # Use environment variable or default path
-        import os
+        # Resolve writable base directory with fallback chain
+        base_dir = get_data_directory("NLP2SQL_EXAMPLES_DIR", "examples_index", "nlp2sql_examples")
 
-        examples_dir = os.getenv("NLP2SQL_EXAMPLES_DIR", "./examples_index")
-        self.index_path = index_path or Path(examples_dir)
+        if index_path is not None:
+            self.index_path = index_path
+        elif database_url:
+            # Per-database isolation (same pattern as SchemaEmbeddingManager)
+            index_key = f"{database_url}:{schema_name}"
+            db_hash = hashlib.md5(index_key.encode()).hexdigest()
+            self.index_path = base_dir / db_hash
+        else:
+            # Backward compatible: global directory
+            self.index_path = base_dir
 
         try:
             self.index_path.mkdir(parents=True, exist_ok=True)
@@ -55,7 +81,7 @@ class ExampleStore:
         self._initialize_index()
 
     def _initialize_index(self) -> None:
-        """Initialize or load FAISS index."""
+        """Initialize or load FAISS index with dimension validation."""
         index_file = self.index_path / "examples_index.faiss"
         metadata_file = self.index_path / "examples_metadata.pkl"
 
@@ -67,6 +93,19 @@ class ExampleStore:
                 self.id_to_example = metadata["id_to_example"]
                 self.example_to_id = metadata["example_to_id"]
                 self._next_id = metadata["next_id"]
+
+            # Dimension validation (same pattern as SchemaEmbeddingManager)
+            existing_dim = self.index.d
+            provider_dim = self.embedding_provider.get_embedding_dimension()
+            if existing_dim != provider_dim:
+                stored_provider = metadata.get("provider_type", "unknown")
+                raise SchemaException(
+                    f"Example store embedding dimension mismatch. "
+                    f"Index has {existing_dim} dims but provider produces {provider_dim}. "
+                    f"Previous provider: {stored_provider}, "
+                    f"current provider: {self.embedding_provider.provider_type}. "
+                    f"Clear with: nlp2sql cache clear --embeddings"
+                )
 
             logger.info(
                 "Loaded existing example index",
@@ -185,19 +224,21 @@ class ExampleStore:
         return hashlib.md5(content.encode()).hexdigest()
 
     async def _save_index(self) -> None:
-        """Save FAISS index and metadata."""
+        """Save FAISS index and metadata with provider tracking."""
         index_file = self.index_path / "examples_index.faiss"
         metadata_file = self.index_path / "examples_metadata.pkl"
 
         # Save FAISS index
         faiss.write_index(self.index, str(index_file))
 
-        # Save metadata
+        # Save metadata (includes provider info for dimension validation on reload)
         metadata = {
             "id_to_example": self.id_to_example,
             "example_to_id": self.example_to_id,
             "next_id": self._next_id,
             "saved_at": datetime.now().isoformat(),
+            "provider_type": self.embedding_provider.provider_type,
+            "embedding_dimension": self.embedding_dim,
         }
         with open(metadata_file, "wb") as f:
             pickle.dump(metadata, f)

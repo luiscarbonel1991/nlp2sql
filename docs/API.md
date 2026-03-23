@@ -4,265 +4,172 @@ Complete reference for the nlp2sql Python API and CLI.
 
 ## Python API
 
-### Request Flow
-
-The three entry points differ in lifecycle and performance characteristics:
+### Entry Points
 
 ```
-generate_sql_from_db(question)
-  └─ create_and_initialize_service()     # creates service + loads schema every call
-       └─ create_query_service()          # wires components (AI adapter, repository, embeddings)
-            └─ service.initialize()       # fetches schema, builds FAISS index (skips if cached on disk)
-                 └─ service.generate_sql()
+nlp2sql.connect(url, provider=...)         # DSL: returns NLP2SQL client (recommended)
+  └─ nlp.ask(question)                     # returns QueryResult (.sql, .confidence, .is_valid)
+  └─ nlp.validate(sql)                     # validate a SQL string
+  └─ nlp.explain(sql)                      # explain a SQL query
+  └─ nlp.suggest(partial)                  # autocomplete suggestions
 
-create_and_initialize_service()          # init once, reuse for many queries (recommended)
-  └─ create_query_service()
-       └─ service.initialize()
-            └─ service.generate_sql()    # schema + FAISS index already loaded
-            └─ service.generate_sql()    # in-memory caches warm
+create_and_initialize_service(url, ...)    # lower-level: returns QueryGenerationService
+  └─ service.generate_sql(question, ...)   # returns dict
 
-create_query_service()                   # full manual control
-  └─ caller must call service.initialize() before first query
+generate_sql_from_db(url, question, ...)   # one-shot: creates everything per call
 ```
 
 **When to use which:**
 
 | Function | Best for | Schema loading |
 |----------|----------|----------------|
-| `generate_sql_from_db` | One-off scripts, notebooks | Every call (init + query) |
-| `create_and_initialize_service` | APIs, multi-query sessions | Once at startup |
-| `create_query_service` | Custom initialization logic | Manual (`initialize()`) |
+| `nlp2sql.connect()` | Most users, APIs, notebooks | Once at startup |
+| `create_and_initialize_service` | Custom wiring, legacy code | Once at startup |
+| `generate_sql_from_db` | One-off scripts | Every call |
 
-For multiple queries, always prefer `create_and_initialize_service` -- it loads the schema and FAISS index once, and subsequent `generate_sql()` calls benefit from in-memory caches:
-
-```python
-# Init once, query many times
-service = await create_and_initialize_service(
-    database_url="postgresql://user:pass@localhost:5432/db",
-    ai_provider="openai",
-    api_key=os.getenv("OPENAI_API_KEY"),
-)
-
-for question in ["Count users", "Show recent orders", "Revenue by month"]:
-    result = await service.generate_sql(question)
-    print(result["sql"])
-```
-
-### Quick Start Functions
-
-#### `generate_sql_from_db`
-
-One-line function for generating SQL from a natural language question.
+### `nlp2sql.connect()` (Recommended)
 
 ```python
-from nlp2sql import generate_sql_from_db
+import nlp2sql
+from nlp2sql import ProviderConfig
 
-result = await generate_sql_from_db(
-    database_url="postgresql://user:pass@localhost:5432/db",
-    question="Show me all active users",
-    ai_provider="openai",  # "openai", "anthropic", or "gemini"
-    api_key="your-api-key",
-    embedding_provider_type="local"  # "local" or "openai"
+nlp = await nlp2sql.connect(
+    "postgresql://user:pass@localhost:5432/mydb",
+    provider=ProviderConfig(provider="openai", api_key="sk-..."),
 )
 
-print(result['sql'])          # Generated SQL query
-print(result['confidence'])   # Confidence score (0-1)
-print(result['explanation'])  # Query explanation
-print(result['validation'])   # Validation results
+result = await nlp.ask("Show me all active users")
+print(result.sql)           # Generated SQL
+print(result.confidence)    # 0.0 - 1.0
+print(result.is_valid)      # bool
+print(result.explanation)   # Natural language explanation
 ```
 
 **Parameters:**
+
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `database_url` | `str` | Yes | Database connection URL |
-| `question` | `str` | Yes | Natural language question |
-| `ai_provider` | `str` | Yes | AI provider: `openai`, `anthropic`, `gemini` |
-| `api_key` | `str` | Yes | Provider API key |
-| `embedding_provider_type` | `str` | No | Embedding provider: `local` (default), `openai` |
+| `provider` | `ProviderConfig` | No | AI provider configuration (falls back to env vars) |
+| `schema` | `str` | No | Database schema name (default: `"public"`) |
+| `database_type` | `DatabaseType` | No | Auto-detected from URL if not provided |
 | `schema_filters` | `dict` | No | Schema filtering options |
-| `example_store` | `ExampleStore` | No | Pre-loaded few-shot examples for better SQL generation |
+| `examples` | `list[dict]` or `ExampleRepositoryPort` | No | Few-shot examples (see below) |
+| `embedding_provider` | `EmbeddingProviderPort` | No | Pre-built embedding provider |
+| `embedding_provider_type` | `str` | No | Auto-create embeddings: `"local"` or `"openai"` |
 
-**Returns:** `dict` with keys `sql`, `confidence`, `explanation`, `validation`
+**Returns:** `NLP2SQL` client with `.ask()`, `.validate()`, `.explain()`, `.suggest()` methods.
 
-#### `create_and_initialize_service`
+### `ProviderConfig`
 
-Create a pre-initialized service for multiple queries (better performance).
+Unified configuration for AI providers:
 
 ```python
-from nlp2sql import create_and_initialize_service
+from nlp2sql import ProviderConfig
 
-service = await create_and_initialize_service(
-    database_url="postgresql://user:pass@localhost:5432/db",
-    ai_provider="openai",
-    api_key="your-api-key",
-    schema_filters={"exclude_system_tables": True}
+config = ProviderConfig(
+    provider="openai",          # "openai", "anthropic", "gemini"
+    api_key="sk-...",           # or use env vars
+    model="gpt-4o",            # None = provider default
+    temperature=0.1,            # None = 0.1
+    max_tokens=2000,            # None = 2000
 )
 
-# Use multiple times - schema is cached
-result1 = await service.generate_sql("Count total users")
-result2 = await service.generate_sql("Show recent orders")
+# Check resolved model
+print(config.resolved_model)  # "gpt-4o" (or default if model=None)
 ```
 
-**Parameters:**
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `database_url` | `str` | Yes | Database connection URL |
-| `ai_provider` | `str` | Yes | AI provider name |
-| `api_key` | `str` | Yes | Provider API key |
-| `schema_filters` | `dict` | No | Schema filtering options |
-| `embedding_provider_type` | `str` | No | Embedding provider type (see note below) |
-| `database_type` | `DatabaseType` | No | Database type (auto-detected) |
-| `example_store` | `ExampleStore` | No | Pre-loaded few-shot examples for better SQL generation |
+**Default models per provider:**
 
-**Note on `embedding_provider_type`:** This controls how schema relevance filtering works. With `"local"` or `"openai"`, the system builds a FAISS vector index for semantic search (recommended for databases with 50+ tables). With `None` (default), the system attempts to load local embeddings silently and falls back to text-only matching if `sentence-transformers` is not installed. Text-only matching uses exact name, normalized singular/plural, and token overlap -- effective for small schemas but less accurate for large ones.
+| Provider | Default Model |
+|----------|--------------|
+| openai | gpt-4o-mini |
+| anthropic | claude-sonnet-4-20250514 |
+| gemini | gemini-2.0-flash |
 
-#### `create_query_service`
+### `QueryResult`
 
-Create a service with full control over initialization.
+Typed result from `nlp.ask()`:
 
-```python
-from nlp2sql import create_query_service, DatabaseType
-
-service = create_query_service(
-    database_url="postgresql://user:pass@localhost:5432/db",
-    ai_provider="anthropic",
-    api_key="your-api-key",
-    schema_filters={
-        "include_schemas": ["sales", "finance"],
-        "exclude_system_tables": True
-    }
-)
-
-await service.initialize(DatabaseType.POSTGRES)
-
-result = await service.generate_sql(
-    question="Show revenue by month",
-    database_type=DatabaseType.POSTGRES,
-    max_tokens=1500,
-    temperature=0.1
-)
-```
+| Field | Type | Description |
+|-------|------|-------------|
+| `sql` | `str` | Generated SQL query |
+| `confidence` | `float` | Confidence score (0.0 - 1.0) |
+| `is_valid` | `bool` | SQL validation result |
+| `explanation` | `str \| None` | Natural language explanation |
+| `provider` | `str` | Provider that generated the SQL |
+| `database_type` | `str` | Database type used |
+| `tokens_used` | `int` | Tokens consumed |
+| `generation_time_ms` | `float` | Generation time in milliseconds |
+| `examples_used` | `int` | Number of few-shot examples included |
+| `metadata` | `dict` | Additional metadata |
 
 ### Few-Shot Examples
 
-Improve SQL accuracy by providing domain-specific examples via `ExampleStore`. Examples are indexed with FAISS for semantic retrieval -- the most relevant examples are automatically included in the LLM prompt.
+Pass a plain list of dicts to `connect()` -- it handles embedding and FAISS indexing:
 
 ```python
-from nlp2sql import ExampleStore, create_embedding_provider, create_and_initialize_service
-
-# Create example store
-embedding_provider = create_embedding_provider("openai", api_key="your-key")
-example_store = ExampleStore(embedding_provider=embedding_provider)
-
-# Add domain-specific examples
-await example_store.add_examples([
-    {
-        "question": "What was the total revenue last month?",
-        "sql": "SELECT SUM(gross_revenue) FROM sales WHERE date >= DATE_TRUNC('month', DATEADD(month, -1, CURRENT_DATE))",
-        "database_type": "redshift",
-        "metadata": {"category": "aggregation"}
-    },
-    {
-        "question": "Show orders by country",
-        "sql": "SELECT country, COUNT(*) AS total_orders FROM orders GROUP BY country ORDER BY total_orders DESC",
-        "database_type": "redshift",
-        "metadata": {"category": "aggregation"}
-    }
-])
-
-# Pass to service
-service = await create_and_initialize_service(
-    database_url="redshift://user:pass@host:5439/db",
-    ai_provider="openai",
-    api_key="your-key",
-    example_store=example_store
+nlp = await nlp2sql.connect(
+    "redshift://user:pass@host:5439/db",
+    provider=ProviderConfig(provider="openai", api_key="sk-..."),
+    schema="dwh_data_share_llm",
+    examples=[
+        {
+            "question": "Total revenue last month?",
+            "sql": "SELECT SUM(revenue) FROM sales WHERE date >= DATE_TRUNC('month', CURRENT_DATE - INTERVAL '1 month')",
+            "database_type": "redshift",
+        },
+        {
+            "question": "Orders by country",
+            "sql": "SELECT country, COUNT(*) FROM orders GROUP BY country ORDER BY 2 DESC",
+            "database_type": "redshift",
+        },
+    ],
 )
 ```
 
-### Embedding Providers
-
-```python
-from nlp2sql import create_embedding_provider
-
-# Local embeddings (free, works offline)
-local_provider = create_embedding_provider("local", model="all-MiniLM-L6-v2")
-
-# OpenAI embeddings
-openai_provider = create_embedding_provider("openai", api_key="your-key")
-
-# Use with service
-service = create_query_service(
-    database_url="postgresql://localhost/db",
-    ai_provider="openai",
-    api_key="your-key",
-    embedding_provider=local_provider
-)
-```
+For advanced control, pass an `ExampleRepositoryPort` instance instead.
 
 ### Error Handling
 
 ```python
-from nlp2sql import generate_sql_from_db
 from nlp2sql.exceptions import (
     SchemaException,
     QueryGenerationException,
     TokenLimitException,
-    ProviderException
+    ProviderException,
+    SecurityException,
 )
 
-async def robust_query(question: str):
-    try:
-        result = await generate_sql_from_db(
-            database_url="postgresql://localhost/db",
-            question=question,
-            ai_provider="openai",
-            api_key="your-key"
-        )
-
-        if not result['validation']['is_valid']:
-            print(f"Validation issues: {result['validation']['issues']}")
-
-        return result
-
-    except TokenLimitException as e:
-        print(f"Query too complex: {e}")
-    except SchemaException as e:
-        print(f"Database/schema error: {e}")
-    except QueryGenerationException as e:
-        print(f"Generation failed: {e}")
-    except ProviderException as e:
-        print(f"AI provider error: {e}")
+try:
+    result = await nlp.ask("Show revenue by month")
+except TokenLimitException:
+    print("Schema too large -- add schema_filters")
+except SchemaException:
+    print("Database connection or schema error")
+except QueryGenerationException:
+    print("AI provider failed to generate SQL")
+except ProviderException:
+    print("AI provider API error (rate limit, auth, etc.)")
 ```
 
-### Provider Fallback Pattern
+### Advanced: Direct Service Access
+
+For full control over the lifecycle:
 
 ```python
-async def query_with_fallback(question: str, database_url: str):
-    """Try multiple providers with fallback."""
-    providers = [
-        {"name": "openai", "env_var": "OPENAI_API_KEY"},
-        {"name": "anthropic", "env_var": "ANTHROPIC_API_KEY"},
-        {"name": "gemini", "env_var": "GOOGLE_API_KEY"}
-    ]
+from nlp2sql import create_and_initialize_service, ProviderConfig, DatabaseType
 
-    for provider in providers:
-        api_key = os.getenv(provider["env_var"])
-        if not api_key:
-            continue
+service = await create_and_initialize_service(
+    database_url="postgresql://localhost/mydb",
+    provider_config=ProviderConfig(provider="openai", api_key="sk-..."),
+    database_type=DatabaseType.POSTGRES,
+)
 
-        try:
-            result = await generate_sql_from_db(
-                database_url=database_url,
-                question=question,
-                ai_provider=provider["name"],
-                api_key=api_key
-            )
-            return result
-        except Exception as e:
-            print(f"{provider['name']} failed: {e}")
-            continue
-
-    raise Exception("All providers failed")
+# Returns raw dict (not QueryResult)
+result = await service.generate_sql("Count total users", database_type=DatabaseType.POSTGRES)
+print(result["sql"])
+print(result["validation"]["is_valid"])
 ```
 
 ---
@@ -423,87 +330,55 @@ nlp2sql validate -v  # Verbose
 ### FastAPI
 
 ```python
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-from nlp2sql import create_and_initialize_service
+import os
+from contextlib import asynccontextmanager
 
-app = FastAPI()
-service = None
+import nlp2sql
+from fastapi import FastAPI, HTTPException
+from nlp2sql import ProviderConfig
+from pydantic import BaseModel
+
+nlp_client = None
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global nlp_client
+    nlp_client = await nlp2sql.connect(
+        os.getenv("DATABASE_URL"),
+        provider=ProviderConfig(provider="openai", api_key=os.getenv("OPENAI_API_KEY")),
+    )
+    yield
+
+app = FastAPI(lifespan=lifespan)
 
 class QueryRequest(BaseModel):
     question: str
-    database: str = "default"
-
-@app.on_event("startup")
-async def startup():
-    global service
-    service = await create_and_initialize_service(
-        database_url=os.getenv("DATABASE_URL"),
-        ai_provider="openai",
-        api_key=os.getenv("OPENAI_API_KEY")
-    )
 
 @app.post("/query")
 async def generate_query(request: QueryRequest):
-    try:
-        result = await service.generate_sql(request.question)
-        return {
-            "sql": result['sql'],
-            "confidence": result['confidence']
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    result = await nlp_client.ask(request.question)
+    return {"sql": result.sql, "confidence": result.confidence, "valid": result.is_valid}
 ```
 
 ### Jupyter Notebook
 
 ```python
-import asyncio
-from nlp2sql import generate_sql_from_db
+import nlp2sql
+from nlp2sql import ProviderConfig
 
-# Generate SQL
-result = await generate_sql_from_db(
+nlp = await nlp2sql.connect(
     "postgresql://localhost/analytics",
-    "Show user engagement by month",
-    ai_provider="openai",
-    api_key="your-key"
+    provider=ProviderConfig(provider="openai", api_key="sk-..."),
 )
 
-print(result['sql'])
+result = await nlp.ask("Show user engagement by month")
+print(result.sql)
 
 # Execute with pandas
 import pandas as pd
-df = pd.read_sql(result['sql'], "postgresql://localhost/analytics")
+df = pd.read_sql(result.sql, "postgresql://localhost/analytics")
 df.head()
 ```
-
----
-
-## Response Format
-
-All query methods return a dictionary with:
-
-```python
-{
-    "sql": "SELECT * FROM users WHERE active = true",
-    "confidence": 0.92,
-    "explanation": "This query selects all columns from the users table...",
-    "validation": {
-        "is_valid": True,
-        "is_safe": True,
-        "issues": []
-    }
-}
-```
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `sql` | `str` | Generated SQL query |
-| `confidence` | `float` | Confidence score (0.0 - 1.0) |
-| `explanation` | `str` | Natural language explanation |
-| `validation.is_valid` | `bool` | SQL syntax validity |
-| `validation.is_safe` | `bool` | No dangerous operations detected |
-| `validation.issues` | `list[str]` | Any validation warnings |
 
 ---
 

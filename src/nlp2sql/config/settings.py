@@ -29,7 +29,7 @@ class Settings(BaseSettings):
 
     # General settings
     app_name: str = "nlp2sql"
-    version: str = "0.2.0rc7"
+    version: str = "0.2.0rc8"
     debug: bool = Field(default=False, validation_alias="NLP2SQL_DEBUG")
     log_level: LogLevel = Field(default=LogLevel.INFO, validation_alias="NLP2SQL_LOG_LEVEL")
 
@@ -62,6 +62,7 @@ class Settings(BaseSettings):
     # Query generation settings
     default_temperature: float = Field(default=0.1, validation_alias="NLP2SQL_TEMPERATURE")
     default_max_tokens: int = Field(default=2000, validation_alias="NLP2SQL_MAX_TOKENS")
+    max_examples: int = Field(default=5, validation_alias="NLP2SQL_MAX_EXAMPLES")
     retry_attempts: int = Field(default=3, validation_alias="NLP2SQL_RETRY_ATTEMPTS")
     retry_delay_seconds: float = Field(default=1.0, validation_alias="NLP2SQL_RETRY_DELAY")
 
@@ -107,19 +108,19 @@ class Settings(BaseSettings):
         configs = {
             "openai": {
                 "api_key": self.openai_api_key,
-                "model": "gpt-4-turbo-preview",
+                "model": "gpt-4o-mini",
                 "max_tokens": self.default_max_tokens,
                 "temperature": self.default_temperature,
             },
             "anthropic": {
                 "api_key": self.anthropic_api_key,
-                "model": "claude-3-opus-20240229",
+                "model": "claude-sonnet-4-20250514",
                 "max_tokens": self.default_max_tokens,
                 "temperature": self.default_temperature,
             },
             "gemini": {
                 "api_key": self.google_api_key,
-                "model": "gemini-pro",
+                "model": "gemini-2.0-flash",
                 "max_tokens": self.default_max_tokens,
                 "temperature": self.default_temperature,
             },
@@ -134,12 +135,32 @@ class Settings(BaseSettings):
             "azure_openai": {
                 "api_key": self.azure_openai_api_key,
                 "endpoint": self.azure_openai_endpoint,
-                "model": "gpt-4",
+                "model": "gpt-4o",
                 "max_tokens": self.default_max_tokens,
                 "temperature": self.default_temperature,
             },
         }
         return configs.get(provider, {})
+
+    def build_provider_config(self, provider: str) -> "ProviderConfig":
+        """Build a ProviderConfig from settings for a specific provider.
+
+        This bridges the settings layer with the core ProviderConfig entity,
+        enabling the factory functions to use settings as the default config source.
+        """
+        from ..core.provider_config import ProviderConfig
+
+        raw = self.get_provider_config(provider)
+        if not raw:
+            return ProviderConfig(provider=provider)
+
+        return ProviderConfig(
+            provider=provider,
+            api_key=raw.get("api_key"),
+            model=raw.get("model"),
+            max_tokens=raw.get("max_tokens"),
+            temperature=raw.get("temperature"),
+        )
 
 
 # Global settings instance

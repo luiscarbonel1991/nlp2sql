@@ -4,17 +4,17 @@ import asyncio
 import hashlib
 import os
 import pickle
-import re
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import psycopg2
 import structlog
 from psycopg2 import sql as psycopg2_sql
 from psycopg2.extras import RealDictCursor
 
+from ..core.sql_safety import DEFAULT_QUERY_ROWS, apply_row_limit, is_safe_query
 from ..exceptions import SchemaException, SecurityException
 from ..ports.schema_repository import (
     SchemaMetadata,
@@ -27,67 +27,6 @@ logger = structlog.get_logger()
 # Cache configuration
 SCHEMA_CACHE_TTL_HOURS = int(os.getenv("NLP2SQL_SCHEMA_CACHE_TTL_HOURS", "24"))
 SCHEMA_CACHE_VERSION = "1.0"  # Increment when cache format changes
-
-# SQL patterns that are not allowed for security
-DANGEROUS_SQL_PATTERNS = [
-    r"\bINSERT\b",
-    r"\bUPDATE\b",
-    r"\bDELETE\b",
-    r"\bDROP\b",
-    r"\bTRUNCATE\b",
-    r"\bALTER\b",
-    r"\bCREATE\b",
-    r"\bGRANT\b",
-    r"\bREVOKE\b",
-    r"\bEXEC\b",
-    r"\bEXECUTE\b",
-    r"\bCALL\b",
-    r"\bSET\b",
-    r"\bCOPY\b",
-    r"\bUNLOAD\b",  # Redshift-specific
-    r"\bVACUUM\b",  # Redshift-specific
-]
-
-MAX_QUERY_ROWS = 1000
-DEFAULT_QUERY_ROWS = 100
-
-
-def is_safe_query(sql: str) -> Tuple[bool, str]:
-    """Check if a SQL query is safe to execute (read-only)."""
-    sql_upper = sql.upper().strip()
-
-    allowed_prefixes = ("SELECT", "WITH", "EXPLAIN")
-    if not any(sql_upper.startswith(prefix) for prefix in allowed_prefixes):
-        return False, "Only SELECT, WITH, or EXPLAIN queries are allowed"
-
-    for pattern in DANGEROUS_SQL_PATTERNS:
-        if re.search(pattern, sql_upper, re.IGNORECASE):
-            return False, "Query contains prohibited operation"
-
-    # Handle SQL escaped quotes: 'O''Reilly' -> '' (single quotes escaped by doubling)
-    sql_no_strings = re.sub(r"'(?:[^']|'')*'", "", sql)
-    sql_no_strings = re.sub(r'"(?:[^"]|"")*"', "", sql_no_strings)
-    if ";" in sql_no_strings.rstrip(";"):
-        return False, "Multiple SQL statements are not allowed"
-
-    return True, ""
-
-
-def apply_row_limit(sql: str, limit: int) -> str:
-    """Ensure query has a row limit applied."""
-    limit = min(limit, MAX_QUERY_ROWS)
-
-    # Remove string literals to avoid false positives
-    # e.g., WHERE message LIKE '%LIMIT%' should not bypass the limit
-    # Handle SQL escaped quotes: 'O''Reilly' -> '' (single quotes escaped by doubling)
-    sql_no_strings = re.sub(r"'(?:[^']|'')*'", "''", sql)
-    sql_no_strings = re.sub(r'"(?:[^"]|"")*"', '""', sql_no_strings)
-
-    # Check for LIMIT keyword outside of strings (word boundary match)
-    if re.search(r"\bLIMIT\b", sql_no_strings, re.IGNORECASE):
-        return sql
-
-    return f"{sql.rstrip(';')} LIMIT {limit}"
 
 
 class RedshiftRepository(SchemaRepositoryPort):
