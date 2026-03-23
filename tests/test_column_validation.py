@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from nlp2sql.adapters.regex_query_validator import RegexQueryValidator
 from nlp2sql.services.query_service import QueryGenerationService
 
 
@@ -16,10 +17,11 @@ def _make_table(name: str, columns: list[str]):
 
 
 def _make_service(tables: list) -> QueryGenerationService:
-    """Create a service with mocked schema manager."""
+    """Create a service with mocked schema manager and regex query validator."""
     service = object.__new__(QueryGenerationService)
     service.schema_manager = MagicMock()
-    service.schema_manager._get_cached_tables = AsyncMock(return_value=tables)
+    service.schema_manager.get_tables = AsyncMock(return_value=tables)
+    service.query_validator = RegexQueryValidator()
     return service
 
 
@@ -151,7 +153,8 @@ class TestValidateColumnNames:
     async def test_schema_unavailable_returns_empty(self):
         service = object.__new__(QueryGenerationService)
         service.schema_manager = MagicMock()
-        service.schema_manager._get_cached_tables = AsyncMock(side_effect=Exception("no cache"))
+        service.schema_manager.get_tables = AsyncMock(side_effect=Exception("no cache"))
+        service.query_validator = RegexQueryValidator()
         errors = await service._validate_column_names("SELECT * FROM foo")
         assert errors == []
 

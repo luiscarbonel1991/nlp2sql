@@ -63,6 +63,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from nlp2sql import (
     DatabaseType,
+    ProviderConfig,
     create_and_initialize_service,
     create_repository,
 )
@@ -231,10 +232,10 @@ async def _get_cached_service(
     start_time = time.time()
 
     try:
+        config = ProviderConfig(provider=provider, api_key=api_key)
         service = await create_and_initialize_service(
             database_url=database_url,
-            ai_provider=provider,
-            api_key=api_key,
+            provider_config=config,
             database_type=database_type,
             schema_name=schema_name,
         )

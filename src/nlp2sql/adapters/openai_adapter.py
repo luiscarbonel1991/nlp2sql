@@ -11,6 +11,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 from ..config.settings import settings
 from ..exceptions import ProviderException, TokenLimitException
 from ..ports.ai_provider import AIProviderPort, AIProviderType, QueryContext, QueryResponse
+from ..utils.helpers import first_not_none
 
 logger = structlog.get_logger()
 
@@ -18,27 +19,40 @@ logger = structlog.get_logger()
 class OpenAIAdapter(AIProviderPort):
     """OpenAI adapter for natural language to SQL generation."""
 
+    DEFAULT_MODEL = "gpt-4o-mini"
+    DEFAULT_MAX_TOKENS = 2000
+    DEFAULT_TEMPERATURE = 0.1
+
     def __init__(
         self,
         api_key: Optional[str] = None,
-        model: str = "gpt-4-turbo-preview",
-        max_tokens: int = 2000,
-        temperature: float = 0.1,
+        model: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
     ):
         self.api_key = api_key or settings.openai_api_key
         if not self.api_key:
             raise ProviderException("OpenAI API key is required")
 
+        self.model = model or self.DEFAULT_MODEL
+        self.max_tokens = first_not_none(max_tokens, self.DEFAULT_MAX_TOKENS)
+        self.temperature = first_not_none(temperature, self.DEFAULT_TEMPERATURE)
+
         self.client = AsyncOpenAI(api_key=self.api_key)
-        self.model = model
-        self.max_tokens = max_tokens
-        self.temperature = temperature
 
         # Token encoding
         try:
-            self.encoding = tiktoken.encoding_for_model(model)
+            self.encoding = tiktoken.encoding_for_model(self.model)
         except Exception:
             self.encoding = tiktoken.get_encoding("cl100k_base")
+
+        logger.debug(
+            "Provider configured",
+            provider="openai",
+            model=self.model,
+            max_tokens=self.max_tokens,
+            temperature=self.temperature,
+        )
 
     @property
     def provider_type(self) -> AIProviderType:
@@ -51,6 +65,9 @@ class OpenAIAdapter(AIProviderPort):
     def get_max_context_size(self) -> int:
         """Get maximum context size for the model."""
         context_limits = {
+            "gpt-4o": 128000,
+            "gpt-4o-mini": 128000,
+            "gpt-4-turbo": 128000,
             "gpt-4-turbo-preview": 128000,
             "gpt-4": 8192,
             "gpt-3.5-turbo": 16385,

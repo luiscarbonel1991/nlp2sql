@@ -90,3 +90,5 @@ class QueryExample:
     complexity: int  # 1-5 scale
     tags: List[str] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
+
+

@@ -14,6 +14,7 @@ import structlog
 
 from . import create_and_initialize_service, create_query_service
 from .core.entities import DatabaseType
+from .core.provider_config import ProviderConfig
 from .exceptions import NLP2SQLException, ProviderException
 
 
@@ -290,6 +291,7 @@ def inspect(
     help="AI provider to use (default: openai)",
 )
 @click.option("--api-key", help="API key (or use environment variables)")
+@click.option("--model", default=None, help="AI model name (e.g., gpt-4o, claude-sonnet-4-20250514)")
 @click.option("--explain", is_flag=True, help="Include detailed explanation")
 @click.option("--temperature", type=float, default=0.1, help="Model temperature (0.0-1.0)")
 @click.option("--max-tokens", type=int, default=1000, help="Maximum tokens for response")
@@ -308,6 +310,7 @@ def query(
     schema: str,
     provider: str,
     api_key: Optional[str],
+    model: Optional[str],
     explain: bool,
     temperature: float,
     max_tokens: int,
@@ -363,11 +366,19 @@ def query(
             else:
                 embedding_provider_type = embedding_provider  # "local" or "openai"
 
+            # Build unified provider config
+            provider_config = ProviderConfig(
+                provider=provider,
+                api_key=final_api_key,
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+
             # Create service
             service = await create_and_initialize_service(
                 database_url=database_url,
-                ai_provider=provider,
-                api_key=final_api_key,
+                provider_config=provider_config,
                 database_type=database_type,
                 schema_filters=filters,
                 schema_name=schema,
@@ -489,8 +500,8 @@ async def _test_providers(providers: list, verbose: bool = False):
             env_var_mapping = {"openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY", "gemini": "GOOGLE_API_KEY"}
             env_var = env_var_mapping.get(provider, f"{provider.upper()}_API_KEY")
 
-            # Create a simple service to test the provider
-            service = create_query_service(
+            # Create a simple service to test the provider (side-effect: validates credentials)
+            create_query_service(
                 database_url="postgresql://test:test@localhost/test", ai_provider=provider, api_key=os.getenv(env_var)
             )
             click.echo(f"   [OK] {provider.title()}: Connection successful")
@@ -561,7 +572,7 @@ def validate(ctx):
             continue
 
         try:
-            service = create_query_service(
+            create_query_service(
                 database_url="postgresql://test:test@localhost/test", ai_provider=provider, api_key=key
             )
             click.echo(f"   [OK] {provider.title()}: Valid")
@@ -608,7 +619,7 @@ async def _test_database(db_url: str, verbose: bool = False):
     if verbose:
         click.echo(f"Info: Connecting to: {db_url[:30]}...")
 
-    repo = await RepositoryFactory.create_and_initialize(db_url)
+    await RepositoryFactory.create_and_initialize(db_url)
     if verbose:
         click.echo("   Connection established successfully")
 
@@ -699,7 +710,7 @@ def providers_test(provider):
                 }
                 env_var = env_var_mapping.get(p, f"{p.upper()}_API_KEY")
 
-                service = create_query_service(
+                create_query_service(
                     database_url="postgresql://test:test@localhost/test", ai_provider=p, api_key=os.getenv(env_var)
                 )
 

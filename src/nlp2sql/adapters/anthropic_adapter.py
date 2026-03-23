@@ -10,6 +10,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 from ..config.settings import settings
 from ..exceptions import ProviderException, TokenLimitException
 from ..ports.ai_provider import AIProviderPort, AIProviderType, QueryContext, QueryResponse
+from ..utils.helpers import first_not_none
 
 logger = structlog.get_logger()
 
@@ -17,21 +18,34 @@ logger = structlog.get_logger()
 class AnthropicAdapter(AIProviderPort):
     """Anthropic Claude adapter for natural language to SQL generation."""
 
+    DEFAULT_MODEL = "claude-sonnet-4-20250514"
+    DEFAULT_MAX_TOKENS = 2000
+    DEFAULT_TEMPERATURE = 0.1
+
     def __init__(
         self,
         api_key: Optional[str] = None,
-        model: str = "claude-3-opus-20240229",
-        max_tokens: int = 2000,
-        temperature: float = 0.1,
+        model: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
     ):
         self.api_key = api_key or settings.anthropic_api_key
         if not self.api_key:
             raise ProviderException("Anthropic API key is required")
 
+        self.model = model or self.DEFAULT_MODEL
+        self.max_tokens = first_not_none(max_tokens, self.DEFAULT_MAX_TOKENS)
+        self.temperature = first_not_none(temperature, self.DEFAULT_TEMPERATURE)
+
         self.client = anthropic.AsyncAnthropic(api_key=self.api_key)
-        self.model = model
-        self.max_tokens = max_tokens
-        self.temperature = temperature
+
+        logger.debug(
+            "Provider configured",
+            provider="anthropic",
+            model=self.model,
+            max_tokens=self.max_tokens,
+            temperature=self.temperature,
+        )
 
     @property
     def provider_type(self) -> AIProviderType:
@@ -46,12 +60,16 @@ class AnthropicAdapter(AIProviderPort):
     def get_max_context_size(self) -> int:
         """Get maximum context size for the model."""
         context_limits = {
+            "claude-sonnet-4-20250514": 200000,
+            "claude-opus-4-20250514": 200000,
+            "claude-3-7-sonnet-20250219": 200000,
+            "claude-3-5-sonnet-20241022": 200000,
+            "claude-3-5-haiku-20241022": 200000,
             "claude-3-opus-20240229": 200000,
             "claude-3-sonnet-20240229": 200000,
             "claude-3-haiku-20240307": 200000,
             "claude-2.1": 200000,
             "claude-2.0": 100000,
-            "claude-instant-1.2": 100000,
         }
         return context_limits.get(self.model, 100000)
 

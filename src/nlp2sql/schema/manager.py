@@ -100,9 +100,10 @@ class SchemaManager:
                             elements=existing_elements,
                         )
                         await self._refresh_schema_if_needed()
-                        if self.embedding_provider and hasattr(self.embedding_provider, "_load_model"):
+                        if self.embedding_provider:
                             try:
-                                self.embedding_provider._load_model()
+                                # Warm up the embedding provider using the public API
+                                await self.embedding_provider.encode(["warmup"])
                             except Exception:
                                 pass
                         return
@@ -236,7 +237,7 @@ class SchemaManager:
         similar_elements = await self.embedding_manager.search_similar(query, top_k=5)
 
         # Analyze query tokens
-        query_tokens = self.analyzer._tokenize(query)
+        query_tokens = self.analyzer.tokenize(query)
 
         # Estimate complexity
         complexity_score = self._estimate_complexity(query, query_tokens)
@@ -267,13 +268,17 @@ class SchemaManager:
 
         logger.info("Schema refreshed")
 
-    async def _get_cached_tables(self) -> List[TableInfo]:
-        """Get tables from internal cache or fetch from repository.
+    async def get_tables(self) -> List[TableInfo]:
+        """Get all tables (filtered and cached).
 
-        This avoids expensive database queries on every call to _find_relevant_tables.
+        Returns the current set of tables after applying schema filters.
         Tables are cached in memory for the lifetime of the SchemaManager instance.
         Call refresh_schema() to clear the cache and fetch fresh data.
         """
+        return await self._get_cached_tables()
+
+    async def _get_cached_tables(self) -> List[TableInfo]:
+        """Internal: get tables from cache or fetch from repository."""
         cache_key = "_all_tables"
         if cache_key not in self._schema_cache:
             tables = await self.repository.get_tables()
@@ -328,12 +333,12 @@ class SchemaManager:
         all_tables = await self._get_cached_tables()
 
         # Identify tables to analyze with batch scoring
-        query_tokens = set(self.analyzer._tokenize(query.lower()))
+        query_tokens = set(self.analyzer.tokenize(query.lower()))
         normalized_query_tokens = {self.analyzer._normalize_word(t) for t in query_tokens}
 
         tables_to_analyze = []
         for table in all_tables:
-            table_name_tokens = set(self.analyzer._tokenize(table.name.lower()))
+            table_name_tokens = set(self.analyzer.tokenize(table.name.lower()))
             normalized_table_tokens = {self.analyzer._normalize_word(t) for t in table_name_tokens}
             has_token_match = bool(query_tokens & table_name_tokens) or bool(
                 normalized_query_tokens & normalized_table_tokens
