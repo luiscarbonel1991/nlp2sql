@@ -21,10 +21,7 @@ POSTGRES_USER = os.getenv("NLP2SQL_TEST_POSTGRES_USER", "testuser")
 POSTGRES_PASS = os.getenv("NLP2SQL_TEST_POSTGRES_PASS", "testpass")
 POSTGRES_DB = os.getenv("NLP2SQL_TEST_POSTGRES_DB", "testdb")
 
-POSTGRES_URL = (
-    f"postgresql://{POSTGRES_USER}:{POSTGRES_PASS}"
-    f"@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
-)
+POSTGRES_URL = f"postgresql://{POSTGRES_USER}:{POSTGRES_PASS}@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
 
 # Expected tables from docker/init-schema.sql
 EXPECTED_TABLES = {"users", "categories", "products", "orders", "order_items", "reviews"}

@@ -48,9 +48,7 @@ class RegexQueryValidator(QueryValidatorPort):
 
         # Extract table aliases (FROM/JOIN table alias, table AS alias)
         table_aliases: set[str] = set()
-        for match in re.finditer(
-            r"\b(?:from|join)\s+(?:\w+\.)?(\w+)\s+(?:AS\s+)?([a-z_]\w*)\b", sql, re.IGNORECASE
-        ):
+        for match in re.finditer(r"\b(?:from|join)\s+(?:\w+\.)?(\w+)\s+(?:AS\s+)?([a-z_]\w*)\b", sql, re.IGNORECASE):
             alias = match.group(2).lower()
             if alias not in SQL_KEYWORDS:
                 table_aliases.add(alias)

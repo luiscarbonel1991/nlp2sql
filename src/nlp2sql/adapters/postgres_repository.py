@@ -20,7 +20,7 @@ logger = structlog.get_logger()
 
 # Cache configuration
 SCHEMA_CACHE_TTL_HOURS = int(os.getenv("NLP2SQL_SCHEMA_CACHE_TTL_HOURS", "24"))
-SCHEMA_CACHE_VERSION = "1.0"  # Increment when cache format changes
+SCHEMA_CACHE_VERSION = "2.0"  # v2: pg_catalog queries replace information_schema (Issue #32)
 
 
 class PostgreSQLRepository(SchemaRepositoryPort):
@@ -204,68 +204,85 @@ class PostgreSQLRepository(SchemaRepositoryPort):
         This replaces the N+1 query pattern (1 + N*2 queries) with a single
         JOIN query, significantly improving performance for large schemas.
         """
+        # Uses pg_catalog instead of information_schema to avoid ownership-based
+        # filtering that hides tables from non-owner users (Issue #32).
         bulk_query = """
         WITH table_info AS (
             SELECT
-                t.table_name,
-                t.table_schema,
-                obj_description(c.oid) as table_comment,
-                pg_total_relation_size(c.oid) as size_bytes,
-                COALESCE(s.n_tup_ins + s.n_tup_upd + s.n_tup_del, 0) as row_count
-            FROM information_schema.tables t
-            LEFT JOIN pg_class c ON c.relname = t.table_name
-            LEFT JOIN pg_namespace n ON n.oid = c.relnamespace
-                AND n.nspname = t.table_schema
-            LEFT JOIN pg_stat_user_tables s ON s.relname = t.table_name
-                AND s.schemaname = t.table_schema
-            WHERE t.table_schema = :schema
-            AND t.table_type = 'BASE TABLE'
+                c.relname AS table_name,
+                n.nspname AS table_schema,
+                obj_description(c.oid) AS table_comment,
+                pg_total_relation_size(c.oid) AS size_bytes,
+                COALESCE(s.n_tup_ins + s.n_tup_upd + s.n_tup_del, 0) AS row_count
+            FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            LEFT JOIN pg_stat_user_tables s ON s.relid = c.oid
+            WHERE n.nspname = :schema
+            AND c.relkind = 'r'
         ),
         columns_info AS (
             SELECT
-                c.table_name,
-                c.column_name,
-                c.data_type,
-                c.is_nullable,
-                c.column_default,
-                c.character_maximum_length,
-                c.numeric_precision,
-                c.numeric_scale,
-                c.ordinal_position,
-                col_description(pgc.oid, c.ordinal_position) as column_comment
-            FROM information_schema.columns c
-            LEFT JOIN pg_class pgc ON pgc.relname = c.table_name
-            LEFT JOIN pg_namespace pgn ON pgn.oid = pgc.relnamespace
-                AND pgn.nspname = c.table_schema
-            WHERE c.table_schema = :schema
+                cls.relname AS table_name,
+                a.attname AS column_name,
+                pg_catalog.format_type(a.atttypid, a.atttypmod) AS data_type,
+                CASE WHEN a.attnotnull THEN 'NO' ELSE 'YES' END AS is_nullable,
+                pg_get_expr(d.adbin, d.adrelid) AS column_default,
+                CASE
+                    WHEN a.atttypid IN (1043, 1042) THEN a.atttypmod - 4
+                    ELSE NULL
+                END AS character_maximum_length,
+                CASE
+                    WHEN a.atttypid = 21 THEN 16
+                    WHEN a.atttypid = 23 THEN 32
+                    WHEN a.atttypid = 20 THEN 64
+                    WHEN a.atttypid = 1700 AND a.atttypmod >= 0 THEN ((a.atttypmod - 4) >> 16) & 65535
+                    ELSE NULL
+                END AS numeric_precision,
+                CASE
+                    WHEN a.atttypid = 1700 AND a.atttypmod >= 0 THEN (a.atttypmod - 4) & 65535
+                    ELSE NULL
+                END AS numeric_scale,
+                a.attnum AS ordinal_position,
+                col_description(cls.oid, a.attnum) AS column_comment
+            FROM pg_class cls
+            JOIN pg_namespace ns ON ns.oid = cls.relnamespace
+            JOIN pg_attribute a ON a.attrelid = cls.oid
+            LEFT JOIN pg_attrdef d ON d.adrelid = cls.oid AND d.adnum = a.attnum
+            WHERE ns.nspname = :schema
+            AND cls.relkind = 'r'
+            AND a.attnum > 0
+            AND NOT a.attisdropped
         ),
         primary_keys AS (
             SELECT
-                tc.table_name,
-                array_agg(kcu.column_name ORDER BY kcu.ordinal_position) as pk_columns
-            FROM information_schema.table_constraints tc
-            JOIN information_schema.key_column_usage kcu
-                ON tc.constraint_name = kcu.constraint_name
-                AND tc.table_schema = kcu.table_schema
-            WHERE tc.table_schema = :schema
-            AND tc.constraint_type = 'PRIMARY KEY'
-            GROUP BY tc.table_name
+                c.relname AS table_name,
+                array_agg(a.attname ORDER BY k.ordinality) AS pk_columns
+            FROM pg_constraint con
+            JOIN pg_class c ON c.oid = con.conrelid
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            CROSS JOIN LATERAL unnest(con.conkey) WITH ORDINALITY AS k(attnum, ordinality)
+            JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.attnum
+            WHERE n.nspname = :schema
+            AND con.contype = 'p'
+            GROUP BY c.relname
         ),
         foreign_keys AS (
             SELECT
-                kcu.table_name,
-                kcu.column_name,
-                kcu2.table_name as ref_table,
-                kcu2.column_name as ref_column,
-                rc.constraint_name
-            FROM information_schema.key_column_usage kcu
-            JOIN information_schema.referential_constraints rc
-                ON kcu.constraint_name = rc.constraint_name
-                AND kcu.table_schema = rc.constraint_schema
-            JOIN information_schema.key_column_usage kcu2
-                ON rc.unique_constraint_name = kcu2.constraint_name
-                AND rc.unique_constraint_schema = kcu2.table_schema
-            WHERE kcu.table_schema = :schema
+                c.relname AS table_name,
+                a.attname AS column_name,
+                refc.relname AS ref_table,
+                refa.attname AS ref_column,
+                con.conname AS constraint_name
+            FROM pg_constraint con
+            JOIN pg_class c ON c.oid = con.conrelid
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            JOIN pg_class refc ON refc.oid = con.confrelid
+            CROSS JOIN LATERAL unnest(con.conkey, con.confkey)
+                WITH ORDINALITY AS k(attnum, refattnum, ordinality)
+            JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.attnum
+            JOIN pg_attribute refa ON refa.attrelid = con.confrelid AND refa.attnum = k.refattnum
+            WHERE n.nspname = :schema
+            AND con.contype = 'f'
         )
         SELECT
             t.table_name,
@@ -392,18 +409,18 @@ class PostgreSQLRepository(SchemaRepositoryPort):
         try:
             # Get basic table info
             table_query = """
-            SELECT 
-                t.table_name,
-                t.table_schema,
-                obj_description(c.oid) as table_comment,
-                pg_size_pretty(pg_total_relation_size(c.oid)) as table_size,
-                pg_total_relation_size(c.oid) as size_bytes,
-                COALESCE(s.n_tup_ins + s.n_tup_upd + s.n_tup_del, 0) as row_count
-            FROM information_schema.tables t
-            LEFT JOIN pg_class c ON c.relname = t.table_name
-            LEFT JOIN pg_namespace n ON n.oid = c.relnamespace AND n.nspname = t.table_schema
-            LEFT JOIN pg_stat_user_tables s ON s.relname = t.table_name AND s.schemaname = t.table_schema
-            WHERE t.table_name = :table_name AND t.table_schema = :schema
+            SELECT
+                c.relname AS table_name,
+                n.nspname AS table_schema,
+                obj_description(c.oid) AS table_comment,
+                pg_size_pretty(pg_total_relation_size(c.oid)) AS table_size,
+                pg_total_relation_size(c.oid) AS size_bytes,
+                COALESCE(s.n_tup_ins + s.n_tup_upd + s.n_tup_del, 0) AS row_count
+            FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            LEFT JOIN pg_stat_user_tables s ON s.relid = c.oid
+            WHERE c.relname = :table_name AND n.nspname = :schema
+            AND c.relkind = 'r'
             """
 
             async with self.async_engine.begin() as conn:
@@ -422,21 +439,20 @@ class PostgreSQLRepository(SchemaRepositoryPort):
     async def search_tables(self, pattern: str) -> List[TableInfo]:
         """Search tables by name pattern."""
         query = """
-        SELECT 
-            t.table_name,
-            t.table_schema,
-            obj_description(c.oid) as table_comment,
-            pg_size_pretty(pg_total_relation_size(c.oid)) as table_size,
-            pg_total_relation_size(c.oid) as size_bytes,
-            COALESCE(s.n_tup_ins + s.n_tup_upd + s.n_tup_del, 0) as row_count
-        FROM information_schema.tables t
-        LEFT JOIN pg_class c ON c.relname = t.table_name
-        LEFT JOIN pg_namespace n ON n.oid = c.relnamespace
-        LEFT JOIN pg_stat_user_tables s ON s.relname = t.table_name
-        WHERE t.table_schema = :schema
-        AND t.table_type = 'BASE TABLE'
-        AND (t.table_name ILIKE :pattern OR obj_description(c.oid) ILIKE :pattern)
-        ORDER BY t.table_name
+        SELECT
+            c.relname AS table_name,
+            n.nspname AS table_schema,
+            obj_description(c.oid) AS table_comment,
+            pg_size_pretty(pg_total_relation_size(c.oid)) AS table_size,
+            pg_total_relation_size(c.oid) AS size_bytes,
+            COALESCE(s.n_tup_ins + s.n_tup_upd + s.n_tup_del, 0) AS row_count
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        LEFT JOIN pg_stat_user_tables s ON s.relid = c.oid
+        WHERE n.nspname = :schema
+        AND c.relkind = 'r'
+        AND (c.relname ILIKE :pattern OR obj_description(c.oid) ILIKE :pattern)
+        ORDER BY c.relname
         """
 
         try:
@@ -459,40 +475,45 @@ class PostgreSQLRepository(SchemaRepositoryPort):
         """Get tables related through foreign keys."""
         query = """
         WITH related_tables AS (
-            -- Tables that reference this table
+            -- Tables that reference this table (incoming FKs)
             SELECT DISTINCT
-                kcu.table_name as related_table,
-                kcu.table_schema as related_schema
-            FROM information_schema.key_column_usage kcu
-            JOIN information_schema.referential_constraints rc ON kcu.constraint_name = rc.constraint_name
-            JOIN information_schema.key_column_usage kcu2 ON rc.unique_constraint_name = kcu2.constraint_name
-            WHERE kcu2.table_name = :table_name AND kcu2.table_schema = :schema
-            
+                src.relname AS related_table,
+                srcn.nspname AS related_schema
+            FROM pg_constraint con
+            JOIN pg_class src ON src.oid = con.conrelid
+            JOIN pg_namespace srcn ON srcn.oid = src.relnamespace
+            JOIN pg_class tgt ON tgt.oid = con.confrelid
+            JOIN pg_namespace tgtn ON tgtn.oid = tgt.relnamespace
+            WHERE con.contype = 'f'
+            AND tgt.relname = :table_name AND tgtn.nspname = :schema
+
             UNION
-            
-            -- Tables that this table references
+
+            -- Tables that this table references (outgoing FKs)
             SELECT DISTINCT
-                kcu2.table_name as related_table,
-                kcu2.table_schema as related_schema
-            FROM information_schema.key_column_usage kcu
-            JOIN information_schema.referential_constraints rc ON kcu.constraint_name = rc.constraint_name
-            JOIN information_schema.key_column_usage kcu2 ON rc.unique_constraint_name = kcu2.constraint_name
-            WHERE kcu.table_name = :table_name AND kcu.table_schema = :schema
+                tgt.relname AS related_table,
+                tgtn.nspname AS related_schema
+            FROM pg_constraint con
+            JOIN pg_class src ON src.oid = con.conrelid
+            JOIN pg_namespace srcn ON srcn.oid = src.relnamespace
+            JOIN pg_class tgt ON tgt.oid = con.confrelid
+            JOIN pg_namespace tgtn ON tgtn.oid = tgt.relnamespace
+            WHERE con.contype = 'f'
+            AND src.relname = :table_name AND srcn.nspname = :schema
         )
-        SELECT 
-            t.table_name,
-            t.table_schema,
-            obj_description(c.oid) as table_comment,
-            pg_size_pretty(pg_total_relation_size(c.oid)) as table_size,
-            pg_total_relation_size(c.oid) as size_bytes,
-            COALESCE(s.n_tup_ins + s.n_tup_upd + s.n_tup_del, 0) as row_count
+        SELECT
+            tc.relname AS table_name,
+            tn.nspname AS table_schema,
+            obj_description(tc.oid) AS table_comment,
+            pg_size_pretty(pg_total_relation_size(tc.oid)) AS table_size,
+            pg_total_relation_size(tc.oid) AS size_bytes,
+            COALESCE(s.n_tup_ins + s.n_tup_upd + s.n_tup_del, 0) AS row_count
         FROM related_tables rt
-        JOIN information_schema.tables t ON rt.related_table = t.table_name AND rt.related_schema = t.table_schema
-        LEFT JOIN pg_class c ON c.relname = t.table_name
-        LEFT JOIN pg_namespace n ON n.oid = c.relnamespace
-        LEFT JOIN pg_stat_user_tables s ON s.relname = t.table_name
-        WHERE t.table_type = 'BASE TABLE'
-        ORDER BY t.table_name
+        JOIN pg_class tc ON tc.relname = rt.related_table
+        JOIN pg_namespace tn ON tn.oid = tc.relnamespace AND tn.nspname = rt.related_schema
+        LEFT JOIN pg_stat_user_tables s ON s.relid = tc.oid
+        WHERE tc.relkind = 'r'
+        ORDER BY tc.relname
         """
 
         try:
@@ -514,21 +535,20 @@ class PostgreSQLRepository(SchemaRepositoryPort):
     async def get_schema_metadata(self) -> SchemaMetadata:
         """Get metadata about the entire schema."""
         query = """
-        SELECT 
-            current_database() as database_name,
-            version() as database_version,
-            COUNT(*) as total_tables,
-            SUM(pg_total_relation_size(c.oid)) as total_size
-        FROM information_schema.tables t
-        LEFT JOIN pg_class c ON c.relname = t.table_name
-        LEFT JOIN pg_namespace n ON n.oid = c.relnamespace
-        WHERE t.table_schema = :schema
-        AND t.table_type = 'BASE TABLE'
+        SELECT
+            current_database() AS database_name,
+            version() AS database_version,
+            COUNT(*) AS total_tables,
+            SUM(pg_total_relation_size(c.oid)) AS total_size
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = :schema
+        AND c.relkind = 'r'
         """
 
         try:
             async with self.async_engine.begin() as conn:
-                result = await conn.execute(text(query), (self.schema_name,))
+                result = await conn.execute(text(query), {"schema": self.schema_name})
                 row = result.fetchone()
 
                 return SchemaMetadata(
@@ -608,20 +628,35 @@ class PostgreSQLRepository(SchemaRepositoryPort):
     async def _get_table_columns(self, table_name: str, schema: str) -> List[Dict[str, Any]]:
         """Get column information for a table."""
         query = """
-        SELECT 
-            column_name,
-            data_type,
-            is_nullable,
-            column_default,
-            character_maximum_length,
-            numeric_precision,
-            numeric_scale,
-            col_description(pgc.oid, ordinal_position) as column_comment
-        FROM information_schema.columns c
-        LEFT JOIN pg_class pgc ON pgc.relname = c.table_name
-        LEFT JOIN pg_namespace pgn ON pgn.oid = pgc.relnamespace
-        WHERE c.table_name = :table_name AND c.table_schema = :schema
-        ORDER BY ordinal_position
+        SELECT
+            a.attname AS column_name,
+            pg_catalog.format_type(a.atttypid, a.atttypmod) AS data_type,
+            CASE WHEN a.attnotnull THEN 'NO' ELSE 'YES' END AS is_nullable,
+            pg_get_expr(d.adbin, d.adrelid) AS column_default,
+            CASE
+                WHEN a.atttypid IN (1043, 1042) THEN a.atttypmod - 4
+                ELSE NULL
+            END AS character_maximum_length,
+            CASE
+                WHEN a.atttypid = 21 THEN 16
+                WHEN a.atttypid = 23 THEN 32
+                WHEN a.atttypid = 20 THEN 64
+                WHEN a.atttypid = 1700 AND a.atttypmod >= 0 THEN ((a.atttypmod - 4) >> 16) & 65535
+                ELSE NULL
+            END AS numeric_precision,
+            CASE
+                WHEN a.atttypid = 1700 AND a.atttypmod >= 0 THEN (a.atttypmod - 4) & 65535
+                ELSE NULL
+            END AS numeric_scale,
+            col_description(c.oid, a.attnum) AS column_comment
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        JOIN pg_attribute a ON a.attrelid = c.oid
+        LEFT JOIN pg_attrdef d ON d.adrelid = c.oid AND d.adnum = a.attnum
+        WHERE c.relname = :table_name AND n.nspname = :schema
+        AND a.attnum > 0
+        AND NOT a.attisdropped
+        ORDER BY a.attnum
         """
 
         async with self.async_engine.begin() as conn:
@@ -648,12 +683,15 @@ class PostgreSQLRepository(SchemaRepositoryPort):
     async def _get_primary_keys(self, table_name: str, schema: str) -> List[str]:
         """Get primary key columns for a table."""
         query = """
-        SELECT kcu.column_name
-        FROM information_schema.table_constraints tc
-        JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name
-        WHERE tc.table_name = :table_name AND tc.table_schema = :schema
-        AND tc.constraint_type = 'PRIMARY KEY'
-        ORDER BY kcu.ordinal_position
+        SELECT a.attname AS column_name
+        FROM pg_constraint con
+        JOIN pg_class c ON c.oid = con.conrelid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        CROSS JOIN LATERAL unnest(con.conkey) WITH ORDINALITY AS k(attnum, ordinality)
+        JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.attnum
+        WHERE c.relname = :table_name AND n.nspname = :schema
+        AND con.contype = 'p'
+        ORDER BY k.ordinality
         """
 
         async with self.async_engine.begin() as conn:
@@ -665,16 +703,22 @@ class PostgreSQLRepository(SchemaRepositoryPort):
     async def _get_foreign_keys(self, table_name: str, schema: str) -> List[Dict[str, Any]]:
         """Get foreign key constraints for a table."""
         query = """
-        SELECT 
-            kcu.column_name,
-            kcu2.table_name as referenced_table,
-            kcu2.column_name as referenced_column,
-            rc.constraint_name
-        FROM information_schema.key_column_usage kcu
-        JOIN information_schema.referential_constraints rc ON kcu.constraint_name = rc.constraint_name
-        JOIN information_schema.key_column_usage kcu2 ON rc.unique_constraint_name = kcu2.constraint_name
-        WHERE kcu.table_name = :table_name AND kcu.table_schema = :schema
-        ORDER BY kcu.ordinal_position
+        SELECT
+            a.attname AS column_name,
+            refc.relname AS referenced_table,
+            refa.attname AS referenced_column,
+            con.conname AS constraint_name
+        FROM pg_constraint con
+        JOIN pg_class c ON c.oid = con.conrelid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        JOIN pg_class refc ON refc.oid = con.confrelid
+        CROSS JOIN LATERAL unnest(con.conkey, con.confkey)
+            WITH ORDINALITY AS k(attnum, refattnum, ordinality)
+        JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.attnum
+        JOIN pg_attribute refa ON refa.attrelid = con.confrelid AND refa.attnum = k.refattnum
+        WHERE c.relname = :table_name AND n.nspname = :schema
+        AND con.contype = 'f'
+        ORDER BY k.ordinality
         """
 
         async with self.async_engine.begin() as conn:
