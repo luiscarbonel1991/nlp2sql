@@ -47,32 +47,35 @@ class PostgreSQLRepository(SchemaRepositoryPort):
         self._cache_dir: Optional[Path] = None
 
     def _parse_connection_string(self, conn_str: str) -> Dict[str, Any]:
-        """Parse connection string into psycopg2 parameters."""
-        if conn_str.startswith("postgresql://"):
-            conn_str = conn_str[len("postgresql://") :]
-        elif conn_str.startswith("postgres://"):
-            conn_str = conn_str[len("postgres://") :]
+        """Parse connection string into psycopg2 parameters.
 
-        # Parse user:password@host:port/database
-        auth_host, database = conn_str.rsplit("/", 1)
-        auth, host_port = auth_host.rsplit("@", 1)
-        user, password = auth.split(":", 1)
+        Uses urllib.parse.urlparse to correctly handle query parameters,
+        URL-encoded characters in passwords, and all supported schemes
+        (postgresql://, postgres://).
+        """
+        from urllib.parse import urlparse, parse_qs, unquote
 
-        if ":" in host_port:
-            host, port = host_port.split(":", 1)
-            port = int(port)
-        else:
-            host = host_port
-            port = 5432
+        # Normalize postgres:// to postgresql:// for urlparse
+        if conn_str.startswith("postgres://"):
+            conn_str = "postgresql://" + conn_str[len("postgres://"):]
 
-        return {
-            "host": host,
-            "port": port,
-            "database": database,
-            "user": user,
-            "password": password,
+        parsed = urlparse(conn_str)
+
+        params = {
+            "host": parsed.hostname or "localhost",
+            "port": parsed.port or 5432,
+            "database": parsed.path.lstrip("/") if parsed.path else "",
+            "user": unquote(parsed.username or ""),
+            "password": unquote(parsed.password or ""),
             "sslmode": "prefer",
         }
+
+        # Honor query parameters (e.g., ?sslmode=require&connect_timeout=10)
+        query_params = parse_qs(parsed.query)
+        for key, values in query_params.items():
+            params[key] = values[0]
+
+        return params
 
     def _get_connection(self):
         """Create a new database connection."""
