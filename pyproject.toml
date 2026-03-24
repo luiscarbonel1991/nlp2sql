@@ -1,6 +1,6 @@
 [project]
 name = "nlp2sql"
-version = "0.2.0rc9"
+version = "0.2.0rc10"
 description = "Enterprise-ready Natural Language to SQL converter with multi-provider support. Built for production scale (1000+ tables) with Clean Architecture."
 readme = "README.md"
 license = {text = "MIT"}
@@ -38,7 +38,6 @@ dependencies = [
     "structlog>=24.1.0",
     "httpx>=0.25.0",
     "redis>=5.0.0",
-    "asyncpg>=0.29.0",
     "tiktoken>=0.5.0",
     "faiss-cpu>=1.7.4",
     "pandas>=2.0.0",

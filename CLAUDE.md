@@ -148,3 +148,10 @@ Configuration example: `.mcp.json.example`
 - **Async/await**: For all I/O operations
 - **Naming**: PascalCase classes, snake_case functions, UPPER_SNAKE_CASE constants
 - **Documentation**: No emojis in code or technical docs
+
+
+## Branch Naming Convention
+
+- When creating worktree branches, use the pattern: `fix/`, `feat/`, `chore/`, `refactor/` followed by a descriptive kebab-case name
+- Examples: `fix/asyncpg-event-loop`, `feat/mysql-adapter`, `chore/bump-deps`
+- Do NOT use the default `claude/` prefix
