@@ -50,6 +50,8 @@ class PostgreSQLRepository(SchemaRepositoryPort):
         """Parse connection string into psycopg2 parameters."""
         if conn_str.startswith("postgresql://"):
             conn_str = conn_str[len("postgresql://") :]
+        elif conn_str.startswith("postgres://"):
+            conn_str = conn_str[len("postgres://") :]
 
         # Parse user:password@host:port/database
         auth_host, database = conn_str.rsplit("/", 1)
