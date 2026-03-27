@@ -3,12 +3,13 @@
 </p>
 
 <p align="center">
+  <a href="https://pepy.tech/projects/nlp2sql"><img src="https://static.pepy.tech/personalized-badge/nlp2sql?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads" alt="PyPI Downloads"></a>
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.9+-blue.svg" alt="Python 3.9+"></a>
   <a href="https://github.com/psf/black"><img src="https://img.shields.io/badge/code%20style-black-000000.svg" alt="Code style: black"></a>
 </p>
 
-# nlp2sql
+# nlp2sql 
 
 **Enterprise-ready Natural Language to SQL converter with multi-provider support**
 
