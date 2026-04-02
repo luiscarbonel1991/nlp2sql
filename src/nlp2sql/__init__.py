@@ -20,7 +20,7 @@ from .ports.schema_repository import SchemaRepositoryPort
 from .schema.example_store import ExampleStore
 from .services.query_service import QueryGenerationService
 
-__version__ = "0.2.0rc10"
+__version__ = "0.2.0rc11"
 __author__ = "Luis Carbonel"
 __email__ = "devhighlevel@gmail.com"
 
