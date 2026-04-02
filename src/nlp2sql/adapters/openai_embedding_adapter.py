@@ -79,17 +79,19 @@ class OpenAIEmbeddingAdapter(EmbeddingProviderPort):
                 processed_texts.append(text)
 
         try:
-            response = await self.client.embeddings.create(model=self.model, input=processed_texts)
+            # OpenAI API limits input array to 2048 items per request
+            batch_size = 2000
+            all_embeddings: list[list[float]] = []
 
-            # Extract embeddings from response
-            embeddings = [item.embedding for item in response.data]
-            embeddings_array = np.array(embeddings)
+            for i in range(0, len(processed_texts), batch_size):
+                batch = processed_texts[i : i + batch_size]
+                response = await self.client.embeddings.create(model=self.model, input=batch)
+                all_embeddings.extend(item.embedding for item in response.data)
+
+            embeddings_array = np.array(all_embeddings)
 
             # Normalize embeddings for cosine similarity with FAISS IndexFlatIP
-            # This is critical: FAISS IndexFlatIP uses inner product which only works
-            # as cosine similarity when vectors are normalized to unit length
             norms = np.linalg.norm(embeddings_array, axis=1, keepdims=True)
-            # Avoid division by zero (though rare for real embeddings)
             norms = np.where(norms == 0, 1, norms)
             normalized_embeddings = embeddings_array / norms
 
@@ -97,6 +99,7 @@ class OpenAIEmbeddingAdapter(EmbeddingProviderPort):
                 "OpenAI embeddings generated and normalized",
                 model=self.model,
                 texts_count=len(processed_texts),
+                batches=((len(processed_texts) - 1) // batch_size) + 1,
                 dimension=normalized_embeddings.shape[1],
             )
 
