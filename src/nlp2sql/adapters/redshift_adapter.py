@@ -39,10 +39,16 @@ class RedshiftRepository(SchemaRepositoryPort):
     def __init__(self, connection_string: str, schema_name: str = "public"):
         self.connection_string = connection_string
         self.database_url = connection_string
-        self.schema_name = schema_name
+        self.schema_name = schema_name.lower() if schema_name else schema_name
         self._connection_params = self._parse_connection_string(connection_string)
         self._initialized = False
         self._cache_dir: Optional[Path] = None
+        # System view configuration (auto-detected at init)
+        self._table_view: str = "svv_tables"
+        self._column_view: str = "svv_columns"
+        self._schema_col: str = "table_schema"
+        self._db_filter: str = ""
+        self._db_filter_aliased: str = ""
 
     def _get_cache_dir(self) -> Path:
         """Get the cache directory for this database connection."""
@@ -106,7 +112,11 @@ class RedshiftRepository(SchemaRepositoryPort):
             return None
 
     def _save_tables_to_cache(self, tables: List[TableInfo], schema: str) -> None:
-        """Save tables to disk cache."""
+        """Save tables to disk cache. Skips caching if tables list is empty."""
+        if not tables:
+            logger.debug("Skipping cache save for empty tables list", schema=schema)
+            return
+
         cache_path = self._get_tables_cache_path(schema)
         try:
             cache_data = {
@@ -169,12 +179,12 @@ class RedshiftRepository(SchemaRepositoryPort):
         return psycopg2.connect(**self._connection_params)
 
     async def initialize(self) -> None:
-        """Initialize database connections."""
+        """Initialize database connections and detect available system views."""
         if self._initialized:
             return
 
         try:
-            # Test connection
+
             def test_connection():
                 conn = self._get_connection()
                 cursor = conn.cursor()
@@ -183,13 +193,78 @@ class RedshiftRepository(SchemaRepositoryPort):
                 conn.close()
 
             await asyncio.to_thread(test_connection)
+            await self._detect_system_views()
 
             self._initialized = True
-            logger.info("Redshift repository initialized")
+            logger.info("Redshift repository initialized", table_view=self._table_view)
 
+        except SchemaException:
+            raise
         except Exception as e:
             logger.error("Failed to initialize Redshift repository", error=str(e))
             raise SchemaException(f"Database initialization failed: {e!s}")
+
+    async def _detect_system_views(self) -> None:
+        """Auto-detect which system views are available for this connection.
+
+        Fallback chain: svv_tables → svv_all_tables → information_schema
+        """
+        probes = [
+            {
+                "table_view": "svv_tables",
+                "column_view": "svv_columns",
+                "schema_col": "table_schema",
+                "db_filter": "",
+                "db_filter_aliased": "",
+                "query": "SELECT COUNT(*) as cnt FROM svv_tables WHERE table_schema = %s",
+            },
+            {
+                "table_view": "svv_all_tables",
+                "column_view": "svv_all_columns",
+                "schema_col": "schema_name",
+                "db_filter": "AND database_name = current_database()",
+                "db_filter_aliased": "AND t.database_name = current_database()",
+                "query": (
+                    "SELECT COUNT(*) as cnt FROM svv_all_tables "
+                    "WHERE schema_name = %s AND database_name = current_database()"
+                ),
+            },
+            {
+                "table_view": "information_schema.tables",
+                "column_view": "information_schema.columns",
+                "schema_col": "table_schema",
+                "db_filter": "AND table_type IN ('BASE TABLE', 'VIEW')",
+                "db_filter_aliased": "AND t.table_type IN ('BASE TABLE', 'VIEW')",
+                "query": (
+                    "SELECT COUNT(*) as cnt FROM information_schema.tables "
+                    "WHERE table_schema = %s AND table_type IN ('BASE TABLE', 'VIEW')"
+                ),
+            },
+        ]
+
+        for probe in probes:
+            try:
+                row = await asyncio.to_thread(self._execute_query_one, probe["query"], (self.schema_name,))
+                if row and row["cnt"] > 0:
+                    self._table_view = probe["table_view"]
+                    self._column_view = probe["column_view"]
+                    self._schema_col = probe["schema_col"]
+                    self._db_filter = probe["db_filter"]
+                    self._db_filter_aliased = probe["db_filter_aliased"]
+                    logger.info(
+                        "Schema discovery source selected",
+                        view=probe["table_view"],
+                        schema=self.schema_name,
+                        tables=row["cnt"],
+                    )
+                    return
+            except Exception as e:
+                logger.debug("Probe failed", view=probe["table_view"], error=str(e))
+
+        logger.warning(
+            "All schema discovery probes returned 0 tables",
+            schema=self.schema_name,
+        )
 
     def _execute_query(self, query: str, params: tuple = None) -> List[Dict]:
         """Execute a query and return results as list of dicts."""
@@ -209,18 +284,10 @@ class RedshiftRepository(SchemaRepositoryPort):
         return results[0] if results else None
 
     async def get_tables(self, schema_name: Optional[str] = None, force_refresh: bool = False) -> List[TableInfo]:
-        """Get all tables in the schema using hybrid bulk query + disk cache.
+        """Get all tables in the schema using bulk query + disk cache.
 
-        Uses SVV_TABLES and SVV_COLUMNS (Redshift system views) for better
-        permission handling. See AWS docs:
-        https://docs.aws.amazon.com/redshift/latest/dg/cm_chap_system-tables.html
-
-        Args:
-            schema_name: Schema name to query (defaults to self.schema_name)
-            force_refresh: If True, bypass cache and fetch fresh data
-
-        Returns:
-            List of TableInfo objects
+        The system view source (svv_tables, svv_all_tables, or information_schema)
+        is auto-detected at initialization time.
         """
         if not self._initialized:
             await self.initialize()
@@ -242,15 +309,118 @@ class RedshiftRepository(SchemaRepositoryPort):
 
         return tables
 
-    async def _get_tables_bulk(self, schema: str) -> List[TableInfo]:
-        """Fetch all tables with columns and primary keys in a single bulk query.
+    def _process_bulk_rows(self, rows: List[Dict]) -> List[TableInfo]:
+        """Convert raw bulk query rows into TableInfo objects."""
+        tables_dict: Dict[str, Dict[str, Any]] = {}
+        for row in rows:
+            table_name = row["table_name"]
 
-        Uses Redshift SVV views for better permission handling.
+            if table_name not in tables_dict:
+                pk_cols = row.get("pk_columns")
+                if pk_cols:
+                    if isinstance(pk_cols, str):
+                        pk_cols = pk_cols.strip("{}").split(",") if pk_cols != "{}" else []
+                    elif isinstance(pk_cols, list):
+                        pk_cols = list(pk_cols)
+                    else:
+                        pk_cols = []
+                else:
+                    pk_cols = []
+
+                tables_dict[table_name] = {
+                    "name": table_name,
+                    "schema": row["table_schema"],
+                    "description": row.get("table_comment", ""),
+                    "columns": [],
+                    "primary_keys": pk_cols,
+                    "foreign_keys": [],
+                    "indexes": [],
+                    "_seen_columns": set(),
+                }
+
+            col_name = row.get("column_name")
+            if col_name and col_name not in tables_dict[table_name]["_seen_columns"]:
+                tables_dict[table_name]["_seen_columns"].add(col_name)
+                tables_dict[table_name]["columns"].append(
+                    {
+                        "name": col_name,
+                        "type": row.get("data_type", ""),
+                        "nullable": row.get("is_nullable") == "YES",
+                        "default": row.get("column_default"),
+                        "max_length": row.get("character_maximum_length"),
+                        "precision": row.get("numeric_precision"),
+                        "scale": row.get("numeric_scale"),
+                        "description": "",
+                    }
+                )
+
+        tables = []
+        for table_data in tables_dict.values():
+            del table_data["_seen_columns"]
+            tables.append(
+                TableInfo(
+                    name=table_data["name"],
+                    schema=table_data["schema"],
+                    columns=table_data["columns"],
+                    primary_keys=table_data["primary_keys"],
+                    foreign_keys=table_data["foreign_keys"],
+                    indexes=table_data["indexes"],
+                    row_count=0,
+                    size_bytes=0,
+                    description=table_data["description"],
+                    last_updated=datetime.now(),
+                )
+            )
+
+        logger.info("Tables processed from bulk query", count=len(tables))
+        return tables
+
+    async def _get_tables_bulk(self, schema: str) -> List[TableInfo]:
+        """Fetch all tables with columns in a single bulk query."""
+        bulk_query = f"""
+        SELECT
+            t.table_name,
+            t.{self._schema_col} as table_schema,
+            '' as table_comment,
+            c.column_name,
+            c.data_type,
+            c.is_nullable,
+            c.column_default,
+            c.character_maximum_length,
+            c.numeric_precision,
+            c.numeric_scale,
+            c.ordinal_position,
+            NULL as pk_columns
+        FROM {self._table_view} t
+        LEFT JOIN {self._column_view} c ON t.table_name = c.table_name
+            AND t.{self._schema_col} = c.{self._schema_col}
+        WHERE t.{self._schema_col} = %s {self._db_filter_aliased}
+        ORDER BY t.table_name, c.ordinal_position
         """
-        # Note: Redshift's information_schema views have limited support for
-        # constraints, so we skip primary key detection in the bulk query.
-        # Primary keys are not essential for SQL generation.
-        bulk_query = """
+
+        try:
+            start_time = time.time()
+            rows = await asyncio.to_thread(self._execute_query, bulk_query, (schema,))
+
+            elapsed_ms = round((time.time() - start_time) * 1000, 2)
+            logger.info("Bulk query completed", rows=len(rows), elapsed_ms=elapsed_ms)
+            return self._process_bulk_rows(rows)
+
+        except Exception as e:
+            if self._table_view != "information_schema.tables":
+                logger.warning(
+                    "Bulk query failed, retrying with information_schema",
+                    error=str(e),
+                    original_view=self._table_view,
+                )
+                return await self._get_tables_bulk_information_schema(schema)
+
+            logger.error("Bulk query failed", error=str(e))
+            raise SchemaException(f"Failed to get tables: {e!s}")
+
+    async def _get_tables_bulk_information_schema(self, schema: str) -> List[TableInfo]:
+        """Fallback bulk query using information_schema (no state mutation)."""
+        fallback_query = """
         SELECT
             t.table_name,
             t.table_schema,
@@ -264,92 +434,24 @@ class RedshiftRepository(SchemaRepositoryPort):
             c.numeric_scale,
             c.ordinal_position,
             NULL as pk_columns
-        FROM svv_tables t
-        LEFT JOIN svv_columns c ON t.table_name = c.table_name
+        FROM information_schema.tables t
+        LEFT JOIN information_schema.columns c ON t.table_name = c.table_name
             AND t.table_schema = c.table_schema
-        WHERE t.table_schema = %s
+        WHERE t.table_schema = %s AND t.table_type IN ('BASE TABLE', 'VIEW')
         ORDER BY t.table_name, c.ordinal_position
         """
-
         try:
             start_time = time.time()
-            rows = await asyncio.to_thread(self._execute_query, bulk_query, (schema,))
-
+            rows = await asyncio.to_thread(self._execute_query, fallback_query, (schema,))
             elapsed_ms = round((time.time() - start_time) * 1000, 2)
-            logger.info("Bulk query completed", rows=len(rows), elapsed_ms=elapsed_ms)
-
-            # Process rows and group by table
-            tables_dict: Dict[str, Dict[str, Any]] = {}
-            for row in rows:
-                table_name = row["table_name"]
-
-                if table_name not in tables_dict:
-                    # Parse pk_columns - Redshift may return string representation
-                    pk_cols = row.get("pk_columns")
-                    if pk_cols:
-                        if isinstance(pk_cols, str):
-                            # Handle string like '{col1,col2}'
-                            pk_cols = pk_cols.strip("{}").split(",") if pk_cols != "{}" else []
-                        elif isinstance(pk_cols, list):
-                            pk_cols = list(pk_cols)
-                        else:
-                            pk_cols = []
-                    else:
-                        pk_cols = []
-
-                    tables_dict[table_name] = {
-                        "name": table_name,
-                        "schema": row["table_schema"],
-                        "description": row.get("table_comment", ""),
-                        "columns": [],
-                        "primary_keys": pk_cols,
-                        "foreign_keys": [],
-                        "indexes": [],
-                        "_seen_columns": set(),
-                    }
-
-                # Add column (avoiding duplicates)
-                col_name = row.get("column_name")
-                if col_name and col_name not in tables_dict[table_name]["_seen_columns"]:
-                    tables_dict[table_name]["_seen_columns"].add(col_name)
-                    tables_dict[table_name]["columns"].append(
-                        {
-                            "name": col_name,
-                            "type": row.get("data_type", ""),
-                            "nullable": row.get("is_nullable") == "YES",
-                            "default": row.get("column_default"),
-                            "max_length": row.get("character_maximum_length"),
-                            "precision": row.get("numeric_precision"),
-                            "scale": row.get("numeric_scale"),
-                            "description": "",
-                        }
-                    )
-
-            # Convert to TableInfo objects
-            tables = []
-            for table_data in tables_dict.values():
-                del table_data["_seen_columns"]
-
-                tables.append(
-                    TableInfo(
-                        name=table_data["name"],
-                        schema=table_data["schema"],
-                        columns=table_data["columns"],
-                        primary_keys=table_data["primary_keys"],
-                        foreign_keys=table_data["foreign_keys"],
-                        indexes=table_data["indexes"],
-                        row_count=0,
-                        size_bytes=0,
-                        description=table_data["description"],
-                        last_updated=datetime.now(),
-                    )
-                )
-
-            logger.info("Tables processed from bulk query", count=len(tables))
-            return tables
-
+            logger.info(
+                "information_schema fallback completed",
+                rows=len(rows),
+                elapsed_ms=elapsed_ms,
+            )
+            return self._process_bulk_rows(rows)
         except Exception as e:
-            logger.error("Bulk query failed", error=str(e))
+            logger.error("information_schema fallback also failed", error=str(e))
             raise SchemaException(f"Failed to get tables: {e!s}")
 
     async def get_table_info(self, table_name: str, schema_name: Optional[str] = None) -> TableInfo:
@@ -359,14 +461,13 @@ class RedshiftRepository(SchemaRepositoryPort):
 
         schema = schema_name or self.schema_name
 
-        # Use SVV_TABLES for better Redshift compatibility
-        query = """
+        query = f"""
         SELECT
             table_name,
-            table_schema,
+            {self._schema_col} as table_schema,
             '' as table_comment
-        FROM svv_tables
-        WHERE table_name = %s AND table_schema = %s
+        FROM {self._table_view}
+        WHERE table_name = %s AND {self._schema_col} = %s {self._db_filter}
         """
 
         try:
@@ -388,15 +489,14 @@ class RedshiftRepository(SchemaRepositoryPort):
         if not self._initialized:
             await self.initialize()
 
-        # Use SVV_TABLES for better Redshift compatibility
-        query = """
+        query = f"""
         SELECT
             table_name,
-            table_schema,
+            {self._schema_col} as table_schema,
             '' as table_comment
-        FROM svv_tables
-        WHERE table_schema = %s
-        AND table_name ILIKE %s
+        FROM {self._table_view}
+        WHERE {self._schema_col} = %s
+        AND table_name ILIKE %s {self._db_filter}
         ORDER BY table_name
         """
 
@@ -427,14 +527,13 @@ class RedshiftRepository(SchemaRepositoryPort):
         if not self._initialized:
             await self.initialize()
 
-        # Use SVV_TABLES for better Redshift compatibility
-        query = """
+        query = f"""
         SELECT
             current_database() as database_name,
             version() as database_version,
             COUNT(*) as total_tables
-        FROM svv_tables
-        WHERE table_schema = %s
+        FROM {self._table_view}
+        WHERE {self._schema_col} = %s {self._db_filter}
         """
 
         try:
@@ -498,12 +597,8 @@ class RedshiftRepository(SchemaRepositoryPort):
         )
 
     async def _get_table_columns(self, table_name: str, schema: str) -> List[Dict[str, Any]]:
-        """Get column information for a table.
-
-        Uses SVV_COLUMNS (Redshift system view) for better permission handling.
-        See: https://docs.aws.amazon.com/redshift/latest/dg/r_SVV_COLUMNS.html
-        """
-        query = """
+        """Get column information for a table."""
+        query = f"""
         SELECT
             column_name,
             data_type,
@@ -512,8 +607,8 @@ class RedshiftRepository(SchemaRepositoryPort):
             character_maximum_length,
             numeric_precision,
             numeric_scale
-        FROM svv_columns
-        WHERE table_name = %s AND table_schema = %s
+        FROM {self._column_view}
+        WHERE table_name = %s AND {self._schema_col} = %s {self._db_filter}
         ORDER BY ordinal_position
         """
 
