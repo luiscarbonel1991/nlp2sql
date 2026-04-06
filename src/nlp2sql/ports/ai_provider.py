@@ -23,7 +23,7 @@ class QueryContext:
     question: str
     database_type: str  # postgres, mysql, etc.
     schema_context: str
-    examples: List[Dict[str, str]]
+    examples: List[Dict[str, Any]]
     max_tokens: int = 4096
     temperature: float = 0.1
     metadata: Optional[Dict[str, Any]] = None

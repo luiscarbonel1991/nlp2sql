@@ -1,168 +1,155 @@
 # nlp2sql Examples
 
-This directory contains organized examples demonstrating various nlp2sql capabilities.
+This directory complements the main documentation. The recommended public baseline for examples is:
 
-## Getting Started
+- the DSL: `connect()` plus `ask()`
+- the repository's local e-commerce schema
+- optional semantic context
+- optional few-shot examples
 
-Start here if you're new to nlp2sql:
+## Public Baseline
 
-### [`getting_started/`](getting_started/)
-- **`test_api_setup.py`** - Validate API keys and environment setup
-- **`basic_usage.py`** - Comprehensive demo of all features
-- **`simple_demo.py`** - Minimal example for beginners
+All public-facing examples should stay aligned with the local e-commerce domain used in tests and docs:
 
-```bash
-# Test your setup first
-python examples/getting_started/test_api_setup.py
+- `stores`
+- `marketing_channels`
+- `users`
+- `products`
+- `orders`
+- `order_items`
+- `daily_channel_metrics`
 
-# Then try the basic example
-python examples/getting_started/basic_usage.py
-```
+This keeps the examples portable and avoids leaking any private warehouse vocabulary.
 
-## Advanced Features
+## Recommended Learning Path
 
-Explore advanced capabilities:
-
-### [`advanced/`](advanced/)
-- **`test_multiple_providers.py`** - Compare OpenAI, Anthropic, and Gemini
-- **`test_simple_api.py`** - One-line API usage patterns
+## 1. Start the Local Database
 
 ```bash
-# Test multiple AI providers
-python examples/advanced/test_multiple_providers.py
+cd docker
+docker compose up -d postgres
 ```
 
-## Schema Management
-
-Learn schema handling strategies:
-
-### [`schema_management/`](schema_management/)
-- **`test_auto_schema.py`** - Automatic schema loading from database
-- **`test_schema_filters_comprehensive.py`** - Complete schema filtering demo
+Default URL:
 
 ```bash
-# Test automatic schema discovery
-python examples/schema_management/test_auto_schema.py
+export DATABASE_URL="postgresql://testuser:testpass@localhost:5432/testdb"
 ```
 
-## Database-Specific
-
-Real-world database integrations:
-
-### [`database_specific/`](database_specific/)
-- **`test_odoo_integration.py`** - Comprehensive Odoo PostgreSQL integration
+## 2. Set a Provider Key
 
 ```bash
-# Test with Odoo database
-python examples/database_specific/test_odoo_integration.py
+export OPENAI_API_KEY="your-openai-key"
 ```
 
-## Documentation
+## 3. Start with the DSL
 
-Educational examples and guides:
+```python
+import nlp2sql
+from nlp2sql import ProviderConfig
 
-### [`documentation/`](documentation/)
-- **`real_world_example.py`** - Complete real-world scenario
 
-## Web API Integration
+nlp = await nlp2sql.connect(
+    database_url,
+    provider=ProviderConfig(provider="openai", api_key="sk-..."),
+)
 
-Production-ready web applications:
+result = await nlp.ask("Show active users by region")
+print(result.sql)
+```
 
-### [`strands-fastapi-agent/`](strands-fastapi-agent/)
-- Complete FastAPI application with Strands Agents integration
-- Natural language database queries via REST API
-- Docker deployment with PostgreSQL
-- Swagger UI documentation included
-- Sub-10ms query performance
-- 25-table e-commerce schema
+## 4. Add Semantic Context
+
+Use semantic context when the same question could map to multiple tables or business meanings.
+
+```python
+from nlp2sql import SemanticContext
+
+result = await nlp.ask(
+    "Show revenue by source category for the flagship store",
+    semantic_context=SemanticContext(
+        domain="ecommerce_channel_performance",
+        canonical_tables=["daily_channel_metrics"],
+    ),
+)
+```
+
+## 5. Add Examples
+
+Examples should support the semantic layer, not replace it.
+
+```python
+examples = [
+    {
+        "question": "Show revenue by source category for the flagship store",
+        "sql": "SELECT ...",
+        "database_type": "postgres",
+    }
+]
+
+nlp = await nlp2sql.connect(
+    database_url,
+    provider=ProviderConfig(provider="openai", api_key="sk-..."),
+    examples=examples,
+)
+```
+
+## CLI Equivalents
+
+The same concepts are available from the CLI:
 
 ```bash
-# Quick start with Docker
-cd examples/strands-fastapi-agent
-docker-compose up -d --build
-
-# Test the API
-./test-docker-endpoints.sh
-
-# Access Swagger UI
-open http://localhost:8000/docs
+nlp2sql query \
+  --database-url "$DATABASE_URL" \
+  --question "Show revenue by source category for the flagship store" \
+  --validate \
+  --repair
 ```
 
-**Features:**
-- Strands AI agents with tool calling
-- Multiple API endpoints (direct tools + agent)
-- Comprehensive documentation (1500+ lines)
-- Production-ready Docker setup
-- Automated test suite
-
-## Environment Setup
-
-Before running examples, set up your environment:
+With semantic context and examples:
 
 ```bash
-# Required for OpenAI (default provider)
-export OPENAI_API_KEY=your-openai-key
-
-# Optional for multi-provider support
-export ANTHROPIC_API_KEY=your-anthropic-key
-export GOOGLE_API_KEY=your-google-key
-
-# Database connection (for database examples)
-export DATABASE_URL=postgresql://user:pass@localhost:5432/db
+nlp2sql query \
+  --database-url "$DATABASE_URL" \
+  --question "Show revenue by source category for the flagship store" \
+  --examples-file examples.json \
+  --semantic-context-file semantic-context.json \
+  --validate \
+  --repair \
+  --show-semantic-context \
+  --show-sql-intent-plan \
+  --show-selected-examples
 ```
 
-## Example Workflow
+## Example Categories
 
-1. **Setup & Validation**
-   ```bash
-   python examples/getting_started/test_api_setup.py
-   ```
+Use the subdirectories here as implementation references, but keep new public examples aligned with the DSL-first model and the local e-commerce domain.
 
-2. **Learn Basics**
-   ```bash
-   python examples/getting_started/simple_demo.py
-   python examples/getting_started/basic_usage.py
-   ```
+Useful categories include:
 
-3. **Explore Advanced Features**
-   ```bash
-   python examples/advanced/test_multiple_providers.py
-   ```
+- getting started
+- advanced provider comparison
+- schema management
+- API service integration
 
-4. **Database Integration**
-   ```bash
-   python examples/database_specific/test_odoo_integration.py
-   ```
+## Writing New Public Examples
 
-## Troubleshooting
+Prefer examples that:
 
-### Common Issues
+- use `connect()` and `ask()`
+- reference local e-commerce tables only
+- show semantic context explicitly when business meaning matters
+- demonstrate `validate` and `repair` when execution behavior is relevant
 
-**API Key Errors:**
-```bash
-# Run the setup test to diagnose
-python examples/getting_started/test_api_setup.py
-```
+Avoid examples that:
 
-**Database Connection:**
-```bash
-# Check your database URL format
-postgresql://username:password@host:port/database
-```
+- depend on private schema names
+- assume unreproducible external warehouse state
+- rely only on examples when semantic context is the real governing mechanism
 
-**Import Errors:**
-```bash
-# Install missing providers
-pip install nlp2sql[anthropic,gemini]
-# Or install all providers
-pip install nlp2sql[all-providers]
-```
+## Related Docs
 
-## Performance Tips
-
-1. **Use Pre-Initialized Services** for multiple queries
-2. **Apply Schema Filters** for large databases
-3. **Cache Service Instances** in production
-4. **Choose the Right Provider** for your use case
-
-See the [API Reference](../docs/API.md) for detailed usage patterns and [Configuration](../docs/CONFIGURATION.md) for environment setup.
+- [README](../README.md)
+- [API Reference](../docs/API.md)
+- [Architecture](../docs/ARCHITECTURE.md)
+- [Configuration](../docs/CONFIGURATION.md)

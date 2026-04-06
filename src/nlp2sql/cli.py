@@ -14,8 +14,14 @@ import structlog
 
 from . import create_and_initialize_service, create_query_service
 from .core.entities import DatabaseType
+from .core.runtime import ExecutionMode
 from .core.provider_config import ProviderConfig
 from .exceptions import NLP2SQLException, ProviderException
+from .utils.artifact_loader import (
+    create_example_store_from_payload,
+    load_examples_payload,
+    load_semantic_context,
+)
 
 
 def get_embeddings_dir() -> Path:
@@ -84,6 +90,45 @@ def validate_database_url(ctx, param, value):
         click.echo("   redshift://user:pass@cluster.region.redshift.amazonaws.com:5439/database", err=True)
         ctx.exit(1)
     return value
+
+
+def parse_schema_filters(schema_filters: str | None) -> dict | None:
+    """Parse schema filters JSON passed via CLI."""
+    if not schema_filters:
+        return None
+    try:
+        return json.loads(schema_filters)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid JSON in schema-filters: {exc.msg}.") from exc
+
+
+def resolve_execution_mode(validate: bool, repair: bool) -> str:
+    """Resolve CLI validate/repair flags into the public execution mode."""
+    if repair:
+        return ExecutionMode.GENERATE_VALIDATE_REPAIR.value
+    if validate:
+        return ExecutionMode.GENERATE_AND_VALIDATE.value
+    return ExecutionMode.GENERATE_ONLY.value
+
+
+def echo_runtime_metadata(
+    result: dict,
+    *,
+    show_semantic_context: bool,
+    show_sql_intent_plan: bool,
+    show_selected_examples: bool,
+) -> None:
+    """Print optional semantic/runtime metadata sections."""
+    metadata = result.get("metadata", {})
+    if show_semantic_context and metadata.get("semantic_context"):
+        click.echo("\nSemantic Context:")
+        click.echo(json.dumps(metadata["semantic_context"], indent=2))
+    if show_sql_intent_plan and metadata.get("sql_intent_plan"):
+        click.echo("\nSQL Intent Plan:")
+        click.echo(json.dumps(metadata["sql_intent_plan"], indent=2))
+    if show_selected_examples and metadata.get("selected_examples"):
+        click.echo("\nSelected Examples:")
+        click.echo(json.dumps(metadata["selected_examples"], indent=2))
 
 
 @click.group()
@@ -296,6 +341,15 @@ def inspect(
 @click.option("--temperature", type=float, default=0.1, help="Model temperature (0.0-1.0)")
 @click.option("--max-tokens", type=int, default=1000, help="Maximum tokens for response")
 @click.option("--schema-filters", help="JSON string with schema filters")
+@click.option("--semantic-context-file", type=click.Path(exists=True), help="Path to semantic context JSON/YAML")
+@click.option("--semantic-context-json", help="Inline semantic context JSON")
+@click.option("--examples-file", type=click.Path(exists=True), help="Path to few-shot examples JSON/YAML")
+@click.option("--examples-json", help="Inline few-shot examples JSON")
+@click.option("--show-semantic-context", is_flag=True, help="Print the semantic context used at runtime")
+@click.option("--show-sql-intent-plan", is_flag=True, help="Print the SQL intent plan built for the question")
+@click.option("--show-selected-examples", is_flag=True, help="Print metadata for selected few-shot examples")
+@click.option("--validate", "run_validation", is_flag=True, help="Execute generated SQL for validation")
+@click.option("--repair", is_flag=True, help="Retry with repair on execution or semantic failures")
 @click.option(
     "--embedding-provider",
     type=click.Choice(["auto", "local", "openai", "none"]),
@@ -315,6 +369,15 @@ def query(
     temperature: float,
     max_tokens: int,
     schema_filters: Optional[str],
+    semantic_context_file: Optional[str],
+    semantic_context_json: Optional[str],
+    examples_file: Optional[str],
+    examples_json: Optional[str],
+    show_semantic_context: bool,
+    show_sql_intent_plan: bool,
+    show_selected_examples: bool,
+    run_validation: bool,
+    repair: bool,
     embedding_provider: str,
 ):
     """Generate SQL from natural language question with advanced options."""
@@ -328,14 +391,7 @@ def query(
                 click.echo(f"🌡️  Temperature: {temperature}")
                 click.echo(f"📏 Max tokens: {max_tokens}")
 
-            # Parse schema filters if provided
-            filters = None
-            if schema_filters:
-                try:
-                    filters = json.loads(schema_filters)
-                except json.JSONDecodeError:
-                    click.echo("[ERROR] Invalid JSON in schema-filters", err=True)
-                    sys.exit(1)
+            filters = parse_schema_filters(schema_filters)
 
             # Get API key from parameter or environment
             final_api_key = api_key
@@ -366,6 +422,23 @@ def query(
             else:
                 embedding_provider_type = embedding_provider  # "local" or "openai"
 
+            semantic_context = load_semantic_context(
+                file_path=semantic_context_file,
+                inline_json=semantic_context_json,
+            )
+            examples_payload = load_examples_payload(
+                file_path=examples_file,
+                inline_json=examples_json,
+                database_type=database_type,
+            )
+            example_store = await create_example_store_from_payload(
+                examples=examples_payload,
+                database_url=database_url,
+                schema_name=schema,
+                embedding_provider_type=embedding_provider_type,
+                api_key=final_api_key,
+            )
+
             # Build unified provider config
             provider_config = ProviderConfig(
                 provider=provider,
@@ -383,6 +456,7 @@ def query(
                 schema_filters=filters,
                 schema_name=schema,
                 embedding_provider_type=embedding_provider_type,
+                example_store=example_store,
             )
 
             # Generate SQL
@@ -392,6 +466,8 @@ def query(
                 temperature=temperature,
                 max_tokens=max_tokens,
                 include_explanation=explain,
+                execution_mode=resolve_execution_mode(run_validation, repair),
+                semantic_context=semantic_context,
             )
 
             # Output results
@@ -410,6 +486,13 @@ def query(
                     click.echo("[OK] SQL validation: Passed")
                 else:
                     click.echo(f"[WARNING] SQL validation issues: {validation.get('issues', [])}")
+
+            echo_runtime_metadata(
+                result,
+                show_semantic_context=show_semantic_context,
+                show_sql_intent_plan=show_sql_intent_plan,
+                show_selected_examples=show_selected_examples,
+            )
 
         except ProviderException as e:
             click.echo(f"[ERROR] Provider Error: {e!s}", err=True)
@@ -727,34 +810,49 @@ def providers_test(provider):
 
 
 @cli.command()
-@click.option("--database-url", required=True, help="Database connection URL")
+@click.option("--database-url", required=True, callback=validate_database_url, help="Database connection URL")
+@click.option("--schema", default="public", help="Database schema name")
 @click.option("--questions", help="File with test questions (one per line)")
 @click.option("--providers", help="Comma-separated list of providers to test")
 @click.option("--iterations", type=int, default=3, help="Number of iterations per test")
 @click.option("--schema-filters", help="JSON string with schema filters")
+@click.option("--semantic-context-file", type=click.Path(exists=True), help="Path to semantic context JSON/YAML")
+@click.option("--semantic-context-json", help="Inline semantic context JSON")
+@click.option("--examples-file", type=click.Path(exists=True), help="Path to few-shot examples JSON/YAML")
+@click.option("--examples-json", help="Inline few-shot examples JSON")
+@click.option(
+    "--embedding-provider",
+    type=click.Choice(["auto", "local", "openai", "none"]),
+    default="auto",
+    help="Embedding provider for schema/examples: 'auto', 'local', 'openai', or 'none'",
+)
 @click.option("--output-file", type=click.Path(), help="Output file to save benchmark results (JSON format)")
 @click.pass_context
 def benchmark(
     ctx,
     database_url: str,
+    schema: str,
     questions: Optional[str],
     providers: Optional[str],
     iterations: int,
     schema_filters: Optional[str],
+    semantic_context_file: Optional[str],
+    semantic_context_json: Optional[str],
+    examples_file: Optional[str],
+    examples_json: Optional[str],
+    embedding_provider: str,
     output_file: Optional[str],
 ):
     """Benchmark different AI providers performance."""
     verbose = ctx.obj.get("verbose", False)
 
     async def _benchmark():
-        # Parse schema filters if provided
-        filters = None
-        if schema_filters:
-            try:
-                filters = json.loads(schema_filters)
-            except json.JSONDecodeError:
-                click.echo("[ERROR] Invalid JSON in schema-filters", err=True)
-                sys.exit(1)
+        filters = parse_schema_filters(schema_filters)
+        database_type = detect_database_type(database_url)
+        semantic_context = load_semantic_context(
+            file_path=semantic_context_file,
+            inline_json=semantic_context_json,
+        )
 
         # Default test questions
         default_questions = [
@@ -819,15 +917,48 @@ def benchmark(
             api_key = os.getenv(env_var)
 
             try:
+                if embedding_provider == "none":
+                    embedding_provider_type = None
+                elif embedding_provider == "auto":
+                    embedding_provider_type = "local"
+                else:
+                    embedding_provider_type = embedding_provider
+
+                examples_payload = load_examples_payload(
+                    file_path=examples_file,
+                    inline_json=examples_json,
+                    database_type=database_type,
+                )
+                example_store = await create_example_store_from_payload(
+                    examples=examples_payload,
+                    database_url=database_url,
+                    schema_name=schema,
+                    embedding_provider_type=embedding_provider_type,
+                    api_key=api_key,
+                )
+                provider_config = ProviderConfig(
+                    provider=provider,
+                    api_key=api_key,
+                )
                 service = await create_and_initialize_service(
-                    database_url=database_url, ai_provider=provider, api_key=api_key, schema_filters=filters
+                    database_url=database_url,
+                    provider_config=provider_config,
+                    database_type=database_type,
+                    schema_filters=filters,
+                    schema_name=schema,
+                    embedding_provider_type=embedding_provider_type,
+                    example_store=example_store,
                 )
 
                 for question in test_questions:
                     for iteration in range(iterations):
                         try:
                             start_time = time.time()
-                            result = await service.generate_sql(question=question, database_type=DatabaseType.POSTGRES)
+                            result = await service.generate_sql(
+                                question=question,
+                                database_type=database_type,
+                                semantic_context=semantic_context,
+                            )
                             end_time = time.time()
 
                             provider_results["total_time"] += end_time - start_time

@@ -1,319 +1,366 @@
 # Architecture
 
-nlp2sql follows Clean Architecture (Hexagonal/Ports & Adapters) principles, enabling multi-provider support and maintainability at enterprise scale.
+`nlp2sql` follows a hexagonal architecture: the public DSL and CLI sit at the edge, the core domain stays pure, and adapters implement provider- or infrastructure-specific behavior.
 
-## Component Diagram
+The important shift in the current architecture is that SQL generation is no longer treated as just:
+
+`question -> schema -> SQL`
+
+It is now modeled as:
+
+`question -> semantic resolution -> schema/examples retrieval -> SQL intent plan -> prompt assembly -> SQL -> semantic/execution validation`
+
+## Runtime Overview
+
+```mermaid
+flowchart TD
+    userCode[User code or CLI] --> dsl[connect() / ask()]
+    dsl --> qgs[QueryGenerationService]
+    qgs --> analysis[Query analysis]
+    analysis --> semantic[SemanticResolutionService]
+    semantic --> schema[Schema retrieval]
+    semantic --> examples[Example selection]
+    schema --> intent[SqlIntentPlanningService]
+    examples --> intent
+    intent --> prompt[PromptAssemblyService]
+    prompt --> provider[AIProviderPort adapter]
+    provider --> semval[SemanticValidationService]
+    semval --> exec[Optional execution validation and repair]
+    exec --> result[QueryResult metadata]
+```
+
+## Public Surfaces
+
+The recommended entry point is the DSL:
+
+- `await nlp2sql.connect(...)`
+- `await nlp.ask(...)`
+
+Other entry points still exist for advanced wiring:
+
+- `create_and_initialize_service(...)`
+- `create_query_service(...)`
+- `generate_sql_from_db(...)`
+
+The CLI maps onto the same runtime concepts through `nlp2sql query`, `inspect`, `benchmark`, and cache commands.
+
+## Layers
+
+### Core Domain
+
+The core layer contains the stable business-agnostic abstractions:
+
+- `ProviderConfig`
+- `QueryResult`
+- `SemanticContext`
+- `SqlIntentPlan`
+- `SemanticValidationResult`
+- SQL safety and keyword utilities
+
+These objects are designed so a service can pass semantic business meaning without hardcoding any specific private warehouse.
+
+### Ports
+
+Ports define the boundaries between orchestration and infrastructure:
+
+| Port | Purpose |
+|------|---------|
+| `AIProviderPort` | Generate and validate SQL through a model provider |
+| `SchemaRepositoryPort` | Read table and column metadata from PostgreSQL or Redshift |
+| `EmbeddingProviderPort` | Produce embeddings for schema and example retrieval |
+| `ExampleRepositoryPort` | Retrieve few-shot examples |
+| `SemanticResolverPort` | Resolve business context for a question |
+| `SemanticValidatorPort` | Validate generated SQL against business rules |
+| `QueryValidatorPort` | Detect column-level query issues |
+| `QuerySafetyPort` | Enforce readonly and safety rules |
+| `CachePort` | External cache for reusable results |
+
+### Adapters
+
+Adapters implement those ports:
+
+| Area | Adapters |
+|------|----------|
+| AI providers | OpenAI, Anthropic, Gemini |
+| Databases | PostgreSQL, Redshift |
+| Embeddings | local sentence-transformers, OpenAI embeddings |
+| Examples | `ExampleStore` and any custom repository implementation |
+| Semantic resolution | no-op, dictionary-backed, file-backed |
+| Semantic validation | no-op and custom validator implementations |
+| Query validation | regex-based validator today, swappable later |
+
+### Application Services
+
+The orchestration layer is centered on `QueryGenerationService`, which now composes several focused services:
+
+| Service | Responsibility |
+|---------|----------------|
+| `QueryGenerationService` | End-to-end orchestration |
+| `SemanticResolutionService` | Resolve and merge semantic context |
+| `SchemaManager` | Retrieve and compress schema context |
+| `ExampleSelectionService` | Find and rerank few-shot examples |
+| `SqlIntentPlanningService` | Build a structured plan before prompting |
+| `PromptAssemblyService` | Assemble the final `QueryContext` |
+| `SemanticValidationService` | Detect semantically wrong but syntactically valid SQL |
+
+## End-to-End Query Flow
+
+```mermaid
+sequenceDiagram
+    participant U as User or CLI
+    participant D as DSL Client
+    participant Q as QueryGenerationService
+    participant SR as SemanticResolutionService
+    participant SM as SchemaManager
+    participant ES as ExampleSelectionService
+    participant IP as SqlIntentPlanningService
+    participant PA as PromptAssemblyService
+    participant AI as AI Adapter
+    participant SV as SemanticValidationService
+    participant EV as Execution/Repair
+
+    U->>D: ask(question, semantic_context=?, validate=?, repair=?)
+    D->>Q: generate_sql(...)
+    Q->>Q: query analysis
+    Q->>SR: resolve semantic context
+    SR-->>Q: SemanticContext
+    Q->>SM: retrieve schema context
+    Q->>ES: select examples
+    SM-->>Q: relevant schema
+    ES-->>Q: selected examples
+    Q->>IP: build SqlIntentPlan
+    IP-->>Q: structured plan
+    Q->>PA: assemble prompt context
+    PA-->>Q: QueryContext
+    Q->>AI: generate_query(QueryContext)
+    AI-->>Q: SQL response
+    Q->>SV: validate semantic correctness
+    SV-->>Q: semantic issues or pass
+    Q->>EV: optional execution validation and repair
+    EV-->>Q: final SQL and validation state
+    Q-->>D: QueryResult
+    D-->>U: SQL + metadata
+```
+
+## Detailed Pipeline
+
+### 1. Query Analysis
+
+The pipeline begins by extracting lightweight intent hints from the question, such as candidate metrics, dimensions, filters, or time expressions. This step gives later services a normalized starting point even when no examples or semantic context are provided.
+
+### 2. Semantic Resolution
+
+Semantic resolution is optional but first-class.
+
+Possible inputs:
+
+- no semantic context at all
+- a per-client `semantic_context`
+- a per-request `semantic_context`
+- a `semantic_resolver` hook
+- a file- or dict-backed semantic resolver used by the CLI
+
+The output is a `SemanticContext` that may contain:
+
+- canonical tables
+- supporting tables
+- required filters
+- entity mappings
+- metric definitions
+- dimension definitions
+- rules
+- canonical query patterns
+
+This step is what lets business meaning steer the rest of the pipeline without baking private conventions into the library.
+
+### 3. Schema Retrieval
+
+`SchemaManager` retrieves relevant schema using:
+
+- schema filters
+- disk-backed schema metadata
+- dense retrieval with embeddings
+- sparse retrieval with TF-IDF
+- score reuse during context compression
+
+This is the main defense against very large schemas.
+
+### 4. Example Selection
+
+Few-shot examples are optional. If present, they are treated as a separate retrieval artifact, not as a replacement for schema retrieval.
+
+Selection can be influenced by:
+
+- question similarity
+- semantic context
+- canonical table overlap
+- filter overlap
+
+This keeps examples aligned with the resolved business intent instead of only the raw question text.
+
+### 5. SQL Intent Planning
+
+Before building the final prompt, the system creates a `SqlIntentPlan`.
+
+The plan captures:
+
+- domain
+- fact table
+- supporting tables
+- dimensions
+- metrics
+- filters
+- time range hints
+- grouping hints
+- ordering hints
+
+This is the bridge between semantic meaning and SQL generation. It narrows the solution space for the model and makes the resulting metadata easier to inspect.
+
+### 6. Prompt Assembly
+
+`PromptAssemblyService` creates a `QueryContext` for the AI provider. That context includes:
+
+- question
+- compressed schema context
+- selected examples
+- semantic context metadata
+- SQL intent plan metadata
+
+The provider adapters then render this information into provider-specific prompts.
+
+### 7. Generation
+
+The AI provider generates SQL using the assembled context. Providers are interchangeable because they all sit behind `AIProviderPort`.
+
+### 8. Semantic Validation
+
+After generation, the system can validate the SQL against business rules. This catches failures that would otherwise slip through syntax-only validation, for example:
+
+- missing required filters
+- missing required dimensions
+- use of disallowed tables
+- failure to honor a canonical table choice
+
+### 9. Optional Execution and Repair
+
+If execution is enabled:
+
+- the query may be executed in readonly mode
+- execution failures can trigger repair
+- semantic failures can also trigger repair
+
+This is how the library supports `generate_only`, `generate_and_validate`, and `generate_validate_repair`.
+
+## Component Map
 
 ```mermaid
 graph TB
-    subgraph "Public API"
-        DSL["nlp2sql.connect() → NLP2SQL.ask()"]
-        API["create_and_initialize_service()<br>generate_sql_from_db()"]
+    subgraph Public
+        DSL[NLP2SQL DSL]
+        CLI[CLI]
     end
 
-    subgraph "Core (Pure Python)"
-        PC[ProviderConfig]
-        QR[QueryResult]
-        SS[sql_safety / sql_keywords]
-    end
-
-    subgraph "Service Layer"
+    subgraph Application
         QGS[QueryGenerationService]
+        SRSem[SemanticResolutionService]
+        SMSchema[SchemaManager]
+        EX[ExampleSelectionService]
+        IP[SqlIntentPlanningService]
+        PA[PromptAssemblyService]
+        SV[SemanticValidationService]
     end
 
-    subgraph "Schema Management"
-        SM[SchemaManager]
-        SA[SchemaAnalyzer<br>- relevance scoring<br>- compression]
-        SEM[SchemaEmbeddingManager<br>- FAISS index<br>- TF-IDF search]
-    end
-
-    subgraph "Ports (Interfaces)"
+    subgraph Ports
         AIP[AIProviderPort]
         SRP[SchemaRepositoryPort]
-        EP[EmbeddingProviderPort]
         ERP[ExampleRepositoryPort]
+        EMB[EmbeddingProviderPort]
+        SEMR[SemanticResolverPort]
+        SEMV[SemanticValidatorPort]
         QVP[QueryValidatorPort]
         QSP[QuerySafetyPort]
     end
 
-    subgraph "AI Adapters"
-        OA[OpenAI Adapter]
-        AA[Anthropic Adapter]
-        GA[Gemini Adapter]
-    end
-
-    subgraph "Database Adapters"
-        PG[PostgreSQL Repository]
-        RS[Redshift Repository]
-    end
-
-    subgraph "Embedding Adapters"
-        LE[Local Embeddings<br>sentence-transformers]
-        OE[OpenAI Embeddings]
-    end
-
-    subgraph "Other Adapters"
-        ES[ExampleStore<br>FAISS-backed]
-        RQV[RegexQueryValidator]
+    subgraph Adapters
+        OA[OpenAI]
+        AA[Anthropic]
+        GA[Gemini]
+        PG[PostgreSQL]
+        RS[Redshift]
+        ES[ExampleStore]
+        DSR[Dict/File Semantic Resolver]
+        NSV[NoOp or Custom Semantic Validator]
     end
 
     DSL --> QGS
-    API --> QGS
-    DSL -.-> PC
-    DSL -.-> QR
-    QGS --> SM
+    CLI --> QGS
+    QGS --> SRSem
+    QGS --> SMSchema
+    QGS --> EX
+    QGS --> IP
+    QGS --> PA
+    QGS --> SV
     QGS --> AIP
-    QGS --> ERP
     QGS --> QVP
-    SM --> SA
-    SM --> SEM
-    SM --> SRP
-    SEM --> EP
+    QGS --> QSP
+    SRSem --> SEMR
+    SV --> SEMV
+    SMSchema --> SRP
+    SMSchema --> EMB
+    EX --> ERP
+    EX --> EMB
     AIP --> OA
     AIP --> AA
     AIP --> GA
     SRP --> PG
     SRP --> RS
-    EP --> LE
-    EP --> OE
     ERP --> ES
-    QVP --> RQV
-    PG -.-> SS
-    RS -.-> SS
+    SEMR --> DSR
+    SEMV --> NSV
 ```
 
-## Component Descriptions
+## Caching and Persistence
 
-### Public API
+The architecture uses several cache layers:
 
-Entry points for the library:
+| Layer | Purpose | Typical Storage |
+|-------|---------|-----------------|
+| schema embedding cache | reuse schema retrieval indexes | disk |
+| example embedding cache | reuse example search indexes | disk |
+| repository schema cache | avoid repeated catalog scans | disk or memory |
+| query result cache | reuse final query results | external cache port |
+| in-process relevance caches | avoid repeated scoring inside a run | memory |
 
-| Function | Purpose |
-|----------|---------|
-| `nlp2sql.connect()` | **Recommended.** DSL entry point: returns `NLP2SQL` client with `.ask()`, `.validate()`, `.explain()` |
-| `create_and_initialize_service` | Lower-level: returns `QueryGenerationService` for advanced wiring |
-| `create_query_service` | Full manual control; caller must call `initialize()` manually |
-| `generate_sql_from_db` | One-shot convenience: creates everything per call |
-
-### Service Layer
-
-**QueryGenerationService** (`services/query_service.py`) orchestrates the full pipeline:
-
-1. Check query cache
-2. Get optimal schema context via `SchemaManager`
-3. Find relevant examples via `ExampleRepositoryPort` (if configured)
-4. Build `QueryContext` and call `AIProvider.generate_query()`
-5. Validate columns via `QueryValidatorPort` (retry once if errors found)
-6. Optionally optimize via `QueryOptimizerPort`
-7. Validate SQL via `AIProvider.validate_query()`
-8. Cache valid results
-
-### Schema Management
-
-| Component | File | Responsibility |
-|-----------|------|----------------|
-| **SchemaManager** | `schema/manager.py` | Coordinates filtering, relevance search, and context building |
-| **SchemaAnalyzer** | `schema/analyzer.py` | Scores table/column relevance (text + semantic), compresses schema within token limits |
-| **SchemaEmbeddingManager** | `schema/embedding_manager.py` | Maintains FAISS vector index + TF-IDF sparse index for hybrid search |
-
-### Ports (Interfaces)
-
-Abstract contracts in `ports/` that define layer boundaries:
-
-| Port | File | Methods |
-|------|------|---------|
-| **AIProviderPort** | `ports/ai_provider.py` | `generate_query()`, `validate_query()` |
-| **SchemaRepositoryPort** | `ports/schema_repository.py` | `get_tables()`, `get_table_info()`, `get_related_tables()` |
-| **EmbeddingProviderPort** | `ports/embedding_provider.py` | `encode()`, `get_embedding_dimension()` |
-| **ExampleRepositoryPort** | `ports/example_repository.py` | `add_examples()`, `search_similar()`, `clear()`, `get_stats()` |
-| **QueryValidatorPort** | `ports/query_validator.py` | `validate_columns()` |
-| **QuerySafetyPort** | `ports/query_safety.py` | `validate()`, `apply_row_limit()` |
-| **SchemaStrategyPort** | `ports/schema_strategy.py` | `build_context()`, `score_relevance()`, `chunk_schema()` |
-| **CachePort** | `ports/cache.py` | `get()`, `set()`, `clear()` |
-| **QueryOptimizerPort** | `ports/query_optimizer.py` | `optimize()` |
-
-### Adapters
-
-Concrete implementations of ports:
-
-| Layer | Adapters | Files |
-|-------|----------|-------|
-| AI Providers | OpenAI GPT, Anthropic Claude, Google Gemini | `adapters/openai_adapter.py`, `anthropic_adapter.py`, `gemini_adapter.py` |
-| Databases | PostgreSQL, Amazon Redshift | `adapters/postgres_repository.py`, `redshift_adapter.py` |
-| Embeddings | Local (sentence-transformers), OpenAI | `adapters/local_embedding_adapter.py`, `openai_embedding_adapter.py` |
-| Examples | FAISS-backed ExampleStore | `schema/example_store.py` (implements `ExampleRepositoryPort`) |
-| Validation | Regex-based column validator | `adapters/regex_query_validator.py` (implements `QueryValidatorPort`) |
-
-## Detailed Query Flow
-
-```mermaid
-sequenceDiagram
-    participant User
-    participant QGS as QueryGenerationService
-    participant SM as SchemaManager
-    participant SEM as SchemaEmbeddingManager
-    participant SA as SchemaAnalyzer
-    participant Repo as SchemaRepository
-    participant AI as AIProvider
-
-    User->>QGS: generate_sql(question)
-    QGS->>QGS: Check query cache
-    QGS->>SM: get_optimal_schema_context(question)
-
-    SM->>SM: _find_relevant_tables(question)
-    SM->>SEM: search_similar_with_embedding(query)
-    SEM->>SEM: FAISS dense + TF-IDF sparse (50/50 hybrid)
-    SEM-->>SM: (results, query_embedding)
-
-    SM->>SEM: get_table_embeddings(table_names)
-    SEM->>SEM: Reconstruct from FAISS index (zero API calls)
-    SEM-->>SM: precomputed_element_embeddings
-
-    SM->>SA: score_relevance_batch(precomputed embeddings)
-    SA->>SA: Text scoring + semantic scoring (zero API calls)
-    SA-->>SM: scored tables
-
-    SM->>Repo: get_table_info(per table)
-    Repo-->>SM: TableInfo with columns, keys, indexes
-
-    Note over SM: Attaches relevance_score to each table dict
-
-    SM->>SA: build_context(tables with relevance_score)
-    SA->>SA: Reuses existing scores (zero API calls)
-    SA-->>SM: schema context string
-
-    SM-->>QGS: schema_context
-
-    QGS->>AI: generate_query(QueryContext)
-    AI-->>QGS: SQL + confidence + explanation
-    QGS->>AI: validate_query(sql, schema_context)
-    AI-->>QGS: validation result
-    QGS-->>User: {sql, confidence, explanation, validation}
-```
-
-### Step-by-step with file references
-
-1. **`generate_sql()`** (`services/query_service.py`) -- checks query cache, then calls `SchemaManager.get_optimal_schema_context()`
-2. **`get_optimal_schema_context()`** (`schema/manager.py`) -- checks schema cache, then calls `_find_relevant_tables()`
-3. **`_find_relevant_tables()`** (`schema/manager.py`) -- two strategies:
-   - **Strategy 1**: `SchemaEmbeddingManager.search_similar_with_embedding()` -- FAISS + TF-IDF hybrid search returns candidate tables + the query embedding
-   - **Strategy 2**: `SchemaAnalyzer.score_relevance_batch()` -- batch scores token-matched tables using precomputed query + element embeddings (reconstructed from FAISS via `get_table_embeddings()`)
-4. **`get_table_info()`** (`ports/schema_repository.py`) -- fetches full table metadata; manager attaches `relevance_score` to each table dict
-5. **`build_context()`** (`schema/analyzer.py`) -- builds schema context string within token limits; reuses pre-attached `relevance_score` (no re-scoring, zero additional embedding calls)
-6. **`generate_query()`** (`ports/ai_provider.py`) -- AI provider generates SQL from question + schema context
-7. **`validate_query()`** (`ports/ai_provider.py`) -- validates SQL syntax and safety
-
-## Schema Relevance Pipeline
-
-The pipeline in `_find_relevant_tables()` (`schema/manager.py`) uses two complementary strategies to find the most relevant tables for a query:
-
-### Strategy 1: Hybrid FAISS + TF-IDF Search
-
-`SchemaEmbeddingManager._search_similar_core()` (`schema/embedding_manager.py`) combines:
-
-- **Dense search (FAISS)**: Semantic similarity via vector embeddings (`IndexFlatIP` inner product). Captures meaning (e.g., "revenue" matches "sales_amount").
-- **Sparse search (TF-IDF)**: Exact keyword matching via `TfidfVectorizer` with unigram+bigram features. Captures exact names (e.g., "organizations" matches `organization` table).
-- **Hybrid score**: `0.5 * dense_score + 0.5 * sparse_score`. Equal weighting ensures both semantic meaning and exact keyword matches contribute.
-
-This returns candidate tables + the query embedding (for reuse downstream).
-
-### Strategy 2: Batch Scoring with Precomputed Embeddings
-
-`SchemaAnalyzer.score_relevance_batch()` (`schema/analyzer.py`) refines candidates:
-
-1. **Text-based scoring** (fast, no API calls): exact name match, normalized singular/plural matching, token overlap, column-name matching
-2. **Semantic scoring** (only for elements with text score < 0.8): uses precomputed embeddings passed from the manager, avoiding new API calls
-3. The manager passes both the `query_embedding` from Strategy 1 and `element_embeddings` reconstructed from the FAISS index via `get_table_embeddings()`
-
-### Score Reuse in build_context
-
-`SchemaManager.get_optimal_schema_context()` attaches the final `relevance_score` to each table dict before calling `SchemaAnalyzer.build_context()`. The analyzer checks for this key and skips re-scoring when present. This eliminates ~10-15 embedding API calls per query that would otherwise happen in the per-table `score_relevance()` path.
-
-**Net result**: ~1 embedding API call per query (for the initial FAISS search), down from ~15-18 without these optimizations.
-
-## Caching Layers
-
-The system has multiple caching layers:
-
-| Layer | Scope | Storage | TTL |
-|-------|-------|---------|-----|
-| **Query result cache** | Full SQL response | `CachePort` (external) | Indefinite (valid results) |
-| **Schema context cache** | Built schema string | `CachePort` (external) | Per query+db+tokens key |
-| **Table relevance cache** | Relevant tables list | In-memory dict | Per `SchemaManager` instance |
-| **All-tables cache** | Filtered table list | In-memory dict (`_schema_cache`) | Until `refresh_schema()` |
-| **FAISS + TF-IDF index** | Schema embeddings | Disk (pickle + FAISS) | Until `NLP2SQL_SCHEMA_CACHE_TTL_HOURS` expires |
-| **Query embedding cache** | Per-query embeddings | In-memory dict | Cleared per `_find_relevant_tables()` call |
-| **Repository disk cache** | Schema metadata (Redshift) | Pickle file | `NLP2SQL_SCHEMA_CACHE_TTL_HOURS` |
+The key architectural rule is that caches accelerate the pipeline but do not redefine it. Semantic context, example retrieval, and SQL planning remain explicit steps whether caches are warm or cold.
 
 ## Design Decisions
 
-| Decision | Rationale |
-|----------|-----------|
-| **Ports & Adapters** | Swap AI/DB/embedding providers without touching core logic. Adding a new provider means implementing one port interface. |
-| **FAISS + TF-IDF hybrid (50/50)** | Semantic embeddings alone miss exact keyword matches (e.g., "count organizations" should find `organization` table). TF-IDF catches these. Equal weighting balances both signals. |
-| **Disk-cached FAISS index** | Avoids re-embedding 600+ schema elements on every run. Isolated per database+schema via MD5 hash of `{database_url}:{schema_name}`. |
-| **Precomputed embeddings in batch scoring** | `_find_relevant_tables` reuses the query embedding from FAISS search and reconstructs table embeddings from the index. Result: ~1 embedding API call per query instead of ~15. |
-| **relevance_score passthrough to build_context** | Manager already scored tables during `_find_relevant_tables`; analyzer reuses those scores in `build_context` instead of re-computing them (zero redundant API calls). |
-| **Repository disk cache (Redshift)** | Redshift's `SVV_TABLES`/`SVV_COLUMNS` queries are expensive. Bulk query + pickle cache avoids repeated system catalog scans. |
-| **Graceful embedding degradation** | System works without embeddings (text-based matching only). If `sentence-transformers` is not installed, logs a warning and continues. |
-| **Schema filters applied before indexing** | Filters reduce the number of elements indexed in FAISS, making search faster and more focused. |
-| **DSL `connect()` + `ask()`** | Pythonic API inspired by httpx/redis-py. Auto-detects database type, auto-creates embeddings, accepts plain dicts for examples. Wraps `QueryGenerationService` without replacing it. |
-| **ProviderConfig** | Single object for AI provider settings (provider, api_key, model, temperature, max_tokens). Eliminates scattered params across factory functions. |
-| **QueryResult** | Typed dataclass instead of raw dict. `.sql`, `.confidence`, `.is_valid` instead of `result["sql"]`, `result["validation"]["is_valid"]`. |
-| **SQL safety in core** | `is_safe_query()` and `DANGEROUS_SQL_PATTERNS` moved from adapters to `core/sql_safety.py`. Eliminates duplication between PostgreSQL and Redshift adapters. |
-| **QueryValidatorPort** | Column validation logic (90 lines of regex) extracted from service to `adapters/regex_query_validator.py`. Enables future `sqlglot`-based implementation. |
-| **ExampleRepositoryPort** | Few-shot examples behind a port interface. `ExampleStore` (FAISS) is one implementation; users can provide DB-backed or API-backed stores. |
+| Decision | Why it matters |
+|----------|----------------|
+| DSL-first public API | Most users want `connect()` and `ask()`, not low-level service construction |
+| Semantic context as a first-class entity | Business meaning can be injected without forking the library |
+| Intent planning before prompting | Keeps SQL generation structured and inspectable |
+| Examples behind a port | Examples can come from files, memory, databases, or external systems |
+| Semantic validation after generation | Catches wrong SQL that still parses and executes |
+| Ports and adapters | Lets teams swap providers and infrastructure without rewriting orchestration |
+| Public examples tied to local e-commerce schema | Keeps docs safe, portable, and reproducible |
 
-## Directory Structure
+## Public Example Domain
 
-```
-src/nlp2sql/
-├── client.py       # DSL: connect() + NLP2SQL class (recommended entry point)
-├── __init__.py     # Public API: exports, factory functions
-├── core/           # Pure Python, no external dependencies
-│   ├── entities.py         # Query, SQLQuery, DatabaseType
-│   ├── provider_config.py  # ProviderConfig (AI provider settings)
-│   ├── result.py           # QueryResult (typed result from ask())
-│   ├── database_prompts.py # SQL dialect hints for AI providers
-│   ├── sql_safety.py       # is_safe_query(), apply_row_limit(), DANGEROUS_SQL_PATTERNS
-│   └── sql_keywords.py     # SQL_KEYWORDS frozenset (shared by validators)
-├── ports/          # Interfaces/abstractions
-│   ├── ai_provider.py       # AIProviderPort, QueryContext, QueryResponse
-│   ├── schema_repository.py # SchemaRepositoryPort, TableInfo
-│   ├── embedding_provider.py # EmbeddingProviderPort
-│   ├── example_repository.py # ExampleRepositoryPort (few-shot examples)
-│   ├── query_validator.py   # QueryValidatorPort (column validation)
-│   ├── query_safety.py      # QuerySafetyPort (SQL safety checks)
-│   ├── schema_strategy.py   # SchemaStrategyPort, SchemaContext, SchemaChunk
-│   ├── cache.py             # CachePort
-│   └── query_optimizer.py   # QueryOptimizerPort
-├── adapters/       # External implementations
-│   ├── openai_adapter.py           # OpenAI GPT
-│   ├── anthropic_adapter.py        # Anthropic Claude
-│   ├── gemini_adapter.py           # Google Gemini
-│   ├── postgres_repository.py      # PostgreSQL
-│   ├── redshift_adapter.py         # Amazon Redshift (with disk cache)
-│   ├── local_embedding_adapter.py  # sentence-transformers
-│   ├── openai_embedding_adapter.py # OpenAI embeddings
-│   └── regex_query_validator.py    # Regex-based column validation
-├── services/       # Application services
-│   └── query_service.py    # QueryGenerationService (orchestrator)
-├── schema/         # Schema management
-│   ├── manager.py           # SchemaManager (coordinates strategies)
-│   ├── analyzer.py          # SchemaAnalyzer (scoring, compression)
-│   ├── embedding_manager.py # SchemaEmbeddingManager (FAISS + TF-IDF)
-│   └── example_store.py     # ExampleStore (implements ExampleRepositoryPort)
-├── config/         # Configuration
-│   └── settings.py          # Pydantic Settings (centralized defaults)
-├── utils/          # Shared utilities
-│   └── storage.py           # get_data_directory() (disk persistence)
-├── exceptions/     # Custom exception hierarchy
-└── factories.py    # RepositoryFactory
-```
+When the docs or tests refer to business concepts, they refer to the repository's local e-commerce schema, such as:
 
-## Related Documentation
+- `stores`
+- `marketing_channels`
+- `daily_channel_metrics`
+- `orders`
+- `order_items`
 
-- [API Reference](API.md) - Python API and CLI
-- [Configuration](CONFIGURATION.md) - Environment variables and design rationale
-- [Enterprise Guide](ENTERPRISE.md) - Large-scale deployment
-- [Redshift Support](Redshift.md) - Amazon Redshift setup
+This keeps the public architecture documentation grounded in a real domain without relying on private warehouse names.
+
+## Related Docs
+
+- [README](../README.md)
+- [API Reference](API.md)
+- [Configuration](CONFIGURATION.md)
+- [Enterprise Guide](ENTERPRISE.md)
+- [Redshift Support](Redshift.md)

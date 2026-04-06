@@ -16,11 +16,17 @@ from typing import Any, Optional
 
 import structlog
 
-from .core.entities import DatabaseType
+from .core.entities import DatabaseType, SemanticContext
 from .core.provider_config import ProviderConfig
 from .core.result import QueryResult
+from .core.runtime import ExecutionHooks, ExecutionMode, SemanticHooks
 from .ports.embedding_provider import EmbeddingProviderPort
+from .ports.error_classifier import ErrorClassifierPort
 from .ports.example_repository import ExampleRepositoryPort
+from .ports.query_execution import QueryExecutionPort
+from .ports.repair_policy import RepairPolicyPort
+from .ports.semantic_resolver import SemanticResolverPort
+from .ports.semantic_validator import SemanticValidatorPort
 from .services.query_service import QueryGenerationService
 
 logger = structlog.get_logger()
@@ -37,9 +43,11 @@ class NLP2SQL:
         self,
         service: QueryGenerationService,
         database_type: DatabaseType,
+        semantic_context: SemanticContext | None = None,
     ) -> None:
         self._service = service
         self._database_type = database_type
+        self._semantic_context = semantic_context
 
     # ------------------------------------------------------------------
     # DSL methods
@@ -50,6 +58,11 @@ class NLP2SQL:
         question: str,
         *,
         explain: bool = True,
+        execution_mode: ExecutionMode | str | None = None,
+        validate: bool = False,
+        repair: bool = False,
+        timeout_seconds: int = 30,
+        semantic_context: SemanticContext | None = None,
     ) -> QueryResult:
         """Convert a natural language question to SQL.
 
@@ -64,8 +77,26 @@ class NLP2SQL:
             question=question,
             database_type=self._database_type,
             include_explanation=explain,
+            execution_mode=self._resolve_execution_mode(execution_mode, validate=validate, repair=repair),
+            timeout_seconds=timeout_seconds,
+            semantic_context=semantic_context or self._semantic_context,
         )
         return QueryResult.from_dict(raw)
+
+    def _resolve_execution_mode(
+        self,
+        execution_mode: ExecutionMode | str | None,
+        *,
+        validate: bool,
+        repair: bool,
+    ) -> str:
+        if execution_mode is not None:
+            return execution_mode.value if isinstance(execution_mode, ExecutionMode) else execution_mode
+        if repair:
+            return ExecutionMode.GENERATE_VALIDATE_REPAIR.value
+        if validate:
+            return ExecutionMode.GENERATE_AND_VALIDATE.value
+        return ExecutionMode.GENERATE_ONLY.value
 
     async def validate(self, sql: str) -> dict[str, Any]:
         """Validate a SQL query against the loaded schema."""
@@ -102,6 +133,14 @@ async def connect(
     embedding_provider: Optional[EmbeddingProviderPort] = None,
     embedding_provider_type: Optional[str] = None,
     examples: Optional[ExampleRepositoryPort | list[dict[str, Any]]] = None,
+    hooks: ExecutionHooks | None = None,
+    semantic_hooks: SemanticHooks | None = None,
+    execution_port: Optional[QueryExecutionPort] = None,
+    error_classifier: Optional[ErrorClassifierPort] = None,
+    repair_policy: Optional[RepairPolicyPort] = None,
+    semantic_resolver: Optional[SemanticResolverPort] = None,
+    semantic_validator: Optional[SemanticValidatorPort] = None,
+    semantic_context: SemanticContext | None = None,
 ) -> NLP2SQL:
     """Connect to a database and return a ready-to-use NLP2SQL client.
 
@@ -119,6 +158,8 @@ async def connect(
             - A list of dicts ``[{"question": ..., "sql": ..., "database_type": ...}]``
               (auto-creates an ExampleStore with OpenAI embeddings)
             - A pre-built ``ExampleRepositoryPort`` instance
+        hooks: Grouped execution hooks for validation/repair in the public DSL.
+        semantic_hooks: Grouped semantic hooks for business-aware retrieval and validation.
 
     Returns:
         An initialized ``NLP2SQL`` client ready for ``ask()`` calls.
@@ -176,6 +217,15 @@ async def connect(
     if embedding_provider is None and embedding_provider_type is None and provider is not None:
         embedding_provider_type = provider.provider
 
+    if hooks is not None:
+        execution_port = execution_port or hooks.execution_port
+        error_classifier = error_classifier or hooks.error_classifier
+        repair_policy = repair_policy or hooks.repair_policy
+    if semantic_hooks is not None:
+        semantic_resolver = semantic_resolver or semantic_hooks.semantic_resolver
+        semantic_validator = semantic_validator or semantic_hooks.semantic_validator
+        semantic_context = semantic_context or semantic_hooks.semantic_context
+
     service = await create_and_initialize_service(
         database_url=database_url,
         database_type=database_type,
@@ -185,6 +235,11 @@ async def connect(
         embedding_provider_type=embedding_provider_type,
         example_store=example_store,
         provider_config=provider,
+        execution_port=execution_port,
+        error_classifier=error_classifier,
+        repair_policy=repair_policy,
+        semantic_resolver=semantic_resolver,
+        semantic_validator=semantic_validator,
     )
 
-    return NLP2SQL(service=service, database_type=database_type)
+    return NLP2SQL(service=service, database_type=database_type, semantic_context=semantic_context)

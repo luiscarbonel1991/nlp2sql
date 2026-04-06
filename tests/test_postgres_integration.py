@@ -34,7 +34,56 @@ class TestPostgresRepository:
         assert users_table is not None
 
         column_names = {c["name"].lower() for c in users_table.columns}
-        expected = {"id", "email", "first_name", "last_name", "city", "country", "is_active"}
+        expected = {
+            "id",
+            "email",
+            "first_name",
+            "last_name",
+            "city",
+            "country",
+            "region",
+            "customer_segment",
+            "preferred_store_id",
+            "is_active",
+        }
+        assert expected.issubset(column_names), f"Missing columns: {expected - column_names}"
+
+    async def test_store_and_channel_dimensions_exist(self, postgres_available):
+        repo = PostgreSQLRepository(postgres_available)
+        await repo.initialize()
+
+        tables = await repo.get_tables()
+        stores_table = next((t for t in tables if t.name.lower() == "stores"), None)
+        channels_table = next((t for t in tables if t.name.lower() == "marketing_channels"), None)
+
+        assert stores_table is not None
+        assert channels_table is not None
+
+        store_columns = {c["name"].lower() for c in stores_table.columns}
+        channel_columns = {c["name"].lower() for c in channels_table.columns}
+
+        assert {"code", "domain", "region", "country", "currency"}.issubset(store_columns)
+        assert {"channel_name", "source_category", "traffic_type", "is_paid"}.issubset(channel_columns)
+
+    async def test_daily_channel_metrics_columns_exist(self, postgres_available):
+        repo = PostgreSQLRepository(postgres_available)
+        await repo.initialize()
+
+        tables = await repo.get_tables()
+        metrics_table = next((t for t in tables if t.name.lower() == "daily_channel_metrics"), None)
+        assert metrics_table is not None
+
+        column_names = {c["name"].lower() for c in metrics_table.columns}
+        expected = {
+            "metric_date",
+            "store_id",
+            "channel_id",
+            "sessions",
+            "add_to_cart_sessions",
+            "checkout_sessions",
+            "orders_count",
+            "revenue",
+        }
         assert expected.issubset(column_names), f"Missing columns: {expected - column_names}"
 
     async def test_returns_only_tables_not_views(self, postgres_available):
@@ -45,6 +94,7 @@ class TestPostgresRepository:
         names = {t.name.lower() for t in tables}
         assert EXPECTED_TABLES.issubset(names)
         assert "order_summaries" not in names  # views are excluded
+        assert "store_channel_sales" not in names  # views are excluded
 
     async def test_safe_query_check(self, postgres_available):
         safe, _ = is_safe_query("SELECT COUNT(*) FROM users")
