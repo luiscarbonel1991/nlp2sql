@@ -7,8 +7,16 @@ import pytest
 import nlp2sql as lib
 from nlp2sql import ProviderConfig
 from nlp2sql.client import NLP2SQL
-from nlp2sql.core.entities import DatabaseType
+from nlp2sql.core.entities import (
+    DatabaseType,
+    DimensionDefinition,
+    DomainRule,
+    MetricDefinition,
+    SemanticContext,
+    SemanticEntityMapping,
+)
 from nlp2sql.core.result import QueryResult
+from nlp2sql.ports.ai_provider import QueryContext, QueryResponse
 from nlp2sql.schema.example_store import ExampleStore
 from nlp2sql.services.query_service import QueryGenerationService
 
@@ -33,7 +41,111 @@ _TEST_EXAMPLES = [
         ),
         "database_type": "postgres",
     },
+    {
+        "question": "Show daily revenue by source category for the flagship North America store",
+        "sql": (
+            "SELECT d.metric_date, mc.source_category, SUM(d.orders_count) AS orders_count, "
+            "SUM(d.revenue) AS revenue "
+            "FROM daily_channel_metrics d "
+            "JOIN stores s ON d.store_id = s.id "
+            "JOIN marketing_channels mc ON d.channel_id = mc.id "
+            "WHERE s.code = 'na_flagship' AND s.region = 'North America' "
+            "GROUP BY d.metric_date, mc.source_category"
+        ),
+        "database_type": "postgres",
+        "metadata": {"tables": ["daily_channel_metrics", "stores", "marketing_channels"]},
+    },
 ]
+
+
+@pytest.fixture(autouse=True)
+def isolate_local_indexes(tmp_path, monkeypatch):
+    """Keep schema/example indexes isolated per test to avoid cache collisions."""
+    monkeypatch.setenv("NLP2SQL_EMBEDDINGS_DIR", str(tmp_path / "embeddings"))
+    monkeypatch.setenv("NLP2SQL_EXAMPLES_DIR", str(tmp_path / "examples"))
+
+
+def _build_channel_performance_semantic_context() -> SemanticContext:
+    return SemanticContext(
+        domain="ecommerce_channel_performance",
+        canonical_tables=["daily_channel_metrics"],
+        required_filters=["s.code = 'na_flagship'", "s.region = 'North America'"],
+        disallowed_tables=["orders"],
+        prompt_hints=[
+            "Prefer the aggregated daily channel metrics fact table for source-category performance questions."
+        ],
+        entity_mappings=[
+            SemanticEntityMapping(
+                source_term="North America flagship store",
+                target="store_scope",
+                resolved_value="na_flagship / North America",
+                filter_expression="s.code = 'na_flagship' AND s.region = 'North America'",
+            )
+        ],
+        metric_definitions=[
+            MetricDefinition(name="revenue", description="Revenue aggregated by day and source category."),
+            MetricDefinition(name="orders_count", description="Order count aggregated by day and source category."),
+            MetricDefinition(
+                name="conversion_rate",
+                expression="SUM(d.orders_count)::float / NULLIF(SUM(d.sessions), 0)",
+                description="Orders divided by sessions on the daily channel metrics fact table.",
+            ),
+        ],
+        dimension_definitions=[
+            DimensionDefinition(name="metric_date", description="Daily grain for channel performance."),
+            DimensionDefinition(name="source_category", description="Channel grouping dimension."),
+        ],
+        rules=[
+            DomainRule(
+                name="preserve_source_breakdown",
+                description="Keep source_category when the user asks for a source breakdown.",
+                required_dimensions=["source_category"],
+                preferred_tables=["daily_channel_metrics"],
+            )
+        ],
+    )
+
+
+class SemanticAwareMockAIProvider(MockAIProvider):
+    """Mock provider that reacts to semantic planning metadata."""
+
+    async def generate_query(self, context: QueryContext) -> QueryResponse:
+        metadata = context.metadata or {}
+        semantic_context = metadata.get("semantic_context", {})
+        sql_intent_plan = metadata.get("sql_intent_plan", {})
+
+        if (
+            semantic_context.get("domain") == "ecommerce_channel_performance"
+            and sql_intent_plan.get("fact_table") == "daily_channel_metrics"
+            and "source_category" in sql_intent_plan.get("dimensions", [])
+        ):
+            return QueryResponse(
+                sql=(
+                    "SELECT d.metric_date, mc.source_category, "
+                    "SUM(d.orders_count) AS orders_count, SUM(d.revenue) AS revenue "
+                    "FROM daily_channel_metrics d "
+                    "JOIN stores s ON d.store_id = s.id "
+                    "JOIN marketing_channels mc ON d.channel_id = mc.id "
+                    "WHERE s.code = 'na_flagship' AND s.region = 'North America' "
+                    "GROUP BY d.metric_date, mc.source_category "
+                    "ORDER BY d.metric_date, revenue DESC"
+                ),
+                explanation="Use aggregated daily channel metrics for source-category ecommerce performance.",
+                confidence=0.99,
+                tokens_used=120,
+                provider="mock-semantic",
+            )
+
+        return QueryResponse(
+            sql=(
+                "SELECT DATE(order_date) AS order_day, COUNT(*) AS orders_count, SUM(total_amount) AS revenue "
+                "FROM orders GROUP BY DATE(order_date) ORDER BY order_day"
+            ),
+            explanation="Fallback to transactional orders table without semantic business guidance.",
+            confidence=0.7,
+            tokens_used=80,
+            provider="mock-semantic",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -138,6 +250,65 @@ class TestAskDSL:
         assert isinstance(result, QueryResult)
         assert result.sql
 
+    async def test_ask_with_in_memory_semantic_context(self, postgres_available, mock_embedding_provider):
+        nlp = await lib.connect(
+            postgres_available,
+            provider=ProviderConfig(provider="openai", api_key="fake"),
+            embedding_provider=mock_embedding_provider,
+            examples=_TEST_EXAMPLES,
+        )
+        nlp._service.ai_provider = SemanticAwareMockAIProvider()
+
+        result = await nlp.ask(
+            "Show daily revenue and order count by source category for the North America flagship store",
+            semantic_context=_build_channel_performance_semantic_context(),
+        )
+
+        assert isinstance(result, QueryResult)
+        assert "daily_channel_metrics" in result.sql
+        assert "source_category" in result.sql
+        assert result.metadata["sql_intent_plan"]["fact_table"] == "daily_channel_metrics"
+        assert "source_category" in result.metadata["sql_intent_plan"]["dimensions"]
+
+        execution = await nlp._service.schema_repository.execute_query(result.sql)
+        assert execution["row_count"] > 0
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+class TestSemanticRegressionScenario:
+    """Reproduce a wrong-choice path and prove semantic guidance fixes it."""
+
+    async def test_semantic_context_shifts_from_orders_to_daily_channel_metrics(
+        self,
+        postgres_available,
+        mock_embedding_provider,
+    ):
+        nlp = await lib.connect(
+            postgres_available,
+            provider=ProviderConfig(provider="openai", api_key="fake"),
+            embedding_provider=mock_embedding_provider,
+            examples=_TEST_EXAMPLES,
+        )
+        nlp._service.ai_provider = SemanticAwareMockAIProvider()
+        question = "Show daily revenue and order count by source category for the North America flagship store"
+
+        baseline = await nlp.ask(question)
+        assert "FROM orders" in baseline.sql
+        baseline_execution = await nlp._service.schema_repository.execute_query(baseline.sql)
+        assert baseline_execution["row_count"] > 0
+
+        enriched = await nlp.ask(
+            question,
+            semantic_context=_build_channel_performance_semantic_context(),
+        )
+        assert "FROM daily_channel_metrics" in enriched.sql
+        assert enriched.metadata["sql_intent_plan"]["fact_table"] == "daily_channel_metrics"
+        assert "source_category" in enriched.metadata["sql_intent_plan"]["group_by"]
+
+        enriched_execution = await nlp._service.schema_repository.execute_query(enriched.sql)
+        assert enriched_execution["row_count"] > 0
+
 
 @pytest.mark.integration
 @pytest.mark.asyncio
@@ -179,8 +350,8 @@ class TestEndToEndWithRealAI:
     def require_api_key(self, tmp_path, monkeypatch):
         if not os.getenv("OPENAI_API_KEY"):
             pytest.skip("OPENAI_API_KEY not set")
-        # Isolate FAISS indexes so mock-dimension caches don't clash
-        monkeypatch.setenv("NLP2SQL_DATA_DIR", str(tmp_path))
+        monkeypatch.setenv("NLP2SQL_EMBEDDINGS_DIR", str(tmp_path / "embeddings"))
+        monkeypatch.setenv("NLP2SQL_EXAMPLES_DIR", str(tmp_path / "examples"))
 
     async def test_generate_valid_sql(self, postgres_available):
         nlp = await lib.connect(

@@ -1,21 +1,29 @@
 # Configuration Reference
 
-This document is the single source of truth for all nlp2sql configuration options.
+This document explains how to configure `nlp2sql` for the DSL, CLI, tests, and production services.
+
+## Core Concepts
+
+Configuration falls into four buckets:
+
+- provider credentials
+- database and schema scope
+- retrieval and cache behavior
+- runtime guidance for semantic context, examples, and execution modes
 
 ## Environment Variables
 
-### AI Provider API Keys
+### Provider Credentials
 
-At least one AI provider API key is required.
+At least one provider key is required.
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `OPENAI_API_KEY` | One of three | OpenAI API key for GPT-4 models |
-| `ANTHROPIC_API_KEY` | One of three | Anthropic API key for Claude models |
-| `GOOGLE_API_KEY` | One of three | Google API key for Gemini models |
+| Variable | Description |
+|----------|-------------|
+| `OPENAI_API_KEY` | OpenAI provider key |
+| `ANTHROPIC_API_KEY` | Anthropic provider key |
+| `GOOGLE_API_KEY` | Gemini provider key |
 
 ```bash
-# Set at least one provider key
 export OPENAI_API_KEY="sk-..."
 export ANTHROPIC_API_KEY="sk-ant-..."
 export GOOGLE_API_KEY="AI..."
@@ -23,153 +31,239 @@ export GOOGLE_API_KEY="AI..."
 
 ### Database Connection
 
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `DATABASE_URL` | No | - | Default database connection URL |
+| Variable | Description |
+|----------|-------------|
+| `DATABASE_URL` | Default connection URL used by scripts or tools |
 
 Supported formats:
-```bash
-# PostgreSQL
-export DATABASE_URL="postgresql://user:pass@localhost:5432/dbname"
 
-# Amazon Redshift
-export DATABASE_URL="redshift://user:pass@cluster.region.redshift.amazonaws.com:5439/dbname"
+```bash
+export DATABASE_URL="postgresql://testuser:testpass@localhost:5432/testdb"
+export DATABASE_URL="redshift://user:pass@cluster.region.redshift.amazonaws.com:5439/analytics"
 ```
 
-### Schema Management
+### Retrieval and Cache Settings
 
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `NLP2SQL_MAX_SCHEMA_TOKENS` | No | `8000` | Maximum tokens for schema context |
-| `NLP2SQL_SCHEMA_CACHE_TTL_HOURS` | No | `24` | Schema cache time-to-live in hours |
-| `NLP2SQL_EMBEDDINGS_DIR` | No | `./embeddings` | Directory for embedding cache storage |
-| `NLP2SQL_EMBEDDING_MODEL` | No | `all-MiniLM-L6-v2` | Local embedding model name |
-| `NLP2SQL_EMBEDDING_PROVIDER` | No | `local` | Embedding provider: `local` or `openai` |
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `NLP2SQL_MAX_SCHEMA_TOKENS` | `8000` | Maximum schema tokens sent to the model |
+| `NLP2SQL_SCHEMA_CACHE_TTL_HOURS` | `24` | Refresh window for schema caches |
+| `NLP2SQL_EMBEDDINGS_DIR` | `./embeddings` | Disk location for schema embedding caches |
+| `NLP2SQL_EXAMPLES_DIR` | implementation default | Disk location for example indexes |
+| `NLP2SQL_EMBEDDING_MODEL` | `all-MiniLM-L6-v2` | Default local embedding model |
+| `NLP2SQL_EMBEDDING_PROVIDER` | `local` | Default embedding provider |
 
 ```bash
-# Schema management settings
 export NLP2SQL_MAX_SCHEMA_TOKENS=8000
 export NLP2SQL_SCHEMA_CACHE_TTL_HOURS=24
-export NLP2SQL_EMBEDDINGS_DIR=/path/to/embeddings
+export NLP2SQL_EMBEDDINGS_DIR=/data/nlp2sql/embeddings
+export NLP2SQL_EXAMPLES_DIR=/data/nlp2sql/examples
 export NLP2SQL_EMBEDDING_MODEL=all-MiniLM-L6-v2
 export NLP2SQL_EMBEDDING_PROVIDER=local
 ```
 
-**Design rationale for key variables:**
+### Practical Notes
 
-- **`NLP2SQL_MAX_SCHEMA_TOKENS`** -- Limits the schema context sent to the AI provider. Higher values give the AI more schema information (better accuracy for complex joins) but cost more tokens. The default 8000 covers ~20-30 tables with full column definitions. For large schemas with many relevant tables, increase to 12000-16000.
-- **`NLP2SQL_SCHEMA_CACHE_TTL_HOURS`** -- Controls when the FAISS index and schema metadata are refreshed from the database. The 24h default balances freshness against the cost of re-querying system catalogs (especially expensive for Redshift's `SVV_TABLES`/`SVV_COLUMNS`). Set lower in development or when schema changes frequently.
-- **`NLP2SQL_EMBEDDINGS_DIR`** -- Where FAISS index files and TF-IDF metadata are stored on disk. Each database+schema combination gets its own subdirectory (MD5 hash of `{database_url}:{schema_name}`). Must be writable. In containerized environments (e.g., Claude Desktop MCP), the system falls back to `/tmp/nlp2sql_embeddings` if the default `./embeddings` is read-only.
-- **`NLP2SQL_EMBEDDING_MODEL`** -- The `sentence-transformers` model for local embeddings. `all-MiniLM-L6-v2` (384 dimensions) is a good balance of speed and quality. Changing this after an index is built requires clearing the cache (`nlp2sql cache clear --embeddings`) since dimensions must match.
+- `NLP2SQL_MAX_SCHEMA_TOKENS` controls how much schema detail can fit into the prompt after retrieval and compression.
+- `NLP2SQL_SCHEMA_CACHE_TTL_HOURS` affects when schema metadata and indexes are refreshed from the database.
+- `NLP2SQL_EMBEDDINGS_DIR` and `NLP2SQL_EXAMPLES_DIR` should point to persistent writable storage in long-lived deployments.
+- changing the embedding provider or model for an existing cache usually requires `nlp2sql cache clear --embeddings`
 
 ### General Settings
 
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `NLP2SQL_LOG_LEVEL` | No | `INFO` | Logging level: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
-| `NLP2SQL_CACHE_ENABLED` | No | `true` | Enable/disable query result caching |
-| `NLP2SQL_ENV` | No | - | Environment: `development`, `production` |
-| `TOKENIZERS_PARALLELISM` | No | - | Set to `false` to suppress tokenizer warnings |
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `NLP2SQL_LOG_LEVEL` | `INFO` | Logging verbosity |
+| `NLP2SQL_CACHE_ENABLED` | `true` | Enable or disable query-result caching |
+| `NLP2SQL_ENV` | unset | Optional environment label |
+| `TOKENIZERS_PARALLELISM` | unset | Set to `false` to reduce tokenizer warnings |
 
-```bash
-# General settings
-export NLP2SQL_LOG_LEVEL=INFO
-export NLP2SQL_CACHE_ENABLED=true
-export NLP2SQL_ENV=production
-export TOKENIZERS_PARALLELISM=false
-```
+## Semantic Context Guidance
 
-## Schema Filters
+Semantic context is not configured by environment variable. It is passed through the API or CLI and should be chosen intentionally per integration.
 
-Schema filters reduce the database schema to relevant tables for better performance and accuracy.
+### Use In-Memory Semantic Context When
 
-**Important:** Filters are applied *before* FAISS indexing (`SchemaManager._apply_schema_filters()` in `schema/manager.py`). Fewer elements indexed means faster semantic search and a more focused index. For enterprise databases (1000+ tables), well-chosen filters can reduce indexing time from minutes to seconds.
-
-### Filter Options
-
-| Filter | Type | Description |
-|--------|------|-------------|
-| `include_schemas` | `list[str]` | Only include these schemas |
-| `exclude_schemas` | `list[str]` | Exclude these schemas |
-| `include_tables` | `list[str]` | Only include these tables |
-| `exclude_tables` | `list[str]` | Exclude these tables |
-| `exclude_system_tables` | `bool` | Exclude PostgreSQL system tables |
-
-### Python Usage
+- you are integrating `nlp2sql` into an application or service
+- the semantic context is assembled from runtime state
+- you want the most idiomatic DSL usage
 
 ```python
-schema_filters = {
-    "include_schemas": ["sales", "finance"],
-    "exclude_schemas": ["archive", "temp"],
-    "include_tables": ["customers", "orders", "products"],
-    "exclude_tables": ["audit_logs", "migration_history"],
-    "exclude_system_tables": True
-}
-
-service = await create_and_initialize_service(
-    database_url="postgresql://localhost/db",
-    api_key=api_key,
-    schema_filters=schema_filters
+result = await nlp.ask(
+    "Show revenue by source category for the flagship store",
+    semantic_context=my_semantic_context,
 )
 ```
 
-### CLI Usage
+### Use File-Based Semantic Context When
+
+- you are testing from the CLI
+- you want versioned artifacts for experiments
+- you need a quick reproducible benchmark setup
 
 ```bash
 nlp2sql query \
-  --database-url postgresql://localhost/db \
-  --question "Show sales data" \
-  --schema-filters '{"include_schemas": ["sales"], "exclude_system_tables": true}'
+  --database-url "$DATABASE_URL" \
+  --question "Show revenue by source category for the flagship store" \
+  --semantic-context-file semantic-context.json
 ```
 
-### Filter Strategy by Database Size
+Both approaches end up producing the same runtime `SemanticContext`.
 
-| Database Size | Tables | Recommended Filters |
-|---------------|--------|---------------------|
-| Small | < 100 | No filtering needed |
-| Medium | 100-500 | `exclude_system_tables: true` |
-| Large | 500-1000 | Add `exclude_tables` for verbose tables |
-| Enterprise | 1000+ | Use `include_tables` for core entities (15-25 tables) |
+## Few-Shot Example Guidance
 
-## Provider Comparison
+Examples are also a runtime input, not a global environment setting.
 
-| Provider | Context Size | Cost/1K tokens | Best For |
-|----------|-------------|----------------|----------|
-| OpenAI GPT-4 | 128K | $0.030 | Complex reasoning |
-| Anthropic Claude | 200K | $0.015 | Large schemas |
-| Google Gemini | 1M | $0.001 | High volume, cost efficiency |
+### Python
 
-## Docker Test Databases
-
-For development and testing, use the included Docker Compose setup:
-
-```bash
-cd docker && docker-compose up -d
+```python
+nlp = await nlp2sql.connect(
+    database_url,
+    provider=provider_config,
+    examples=my_examples,
+)
 ```
 
-| Database | URL | Description |
-|----------|-----|-------------|
-| Simple | `postgresql://testuser:testpass@localhost:5432/testdb` | Small test database |
-| Enterprise | `postgresql://demo:demo123@localhost:5433/enterprise` | Large enterprise schema |
-| Redshift (LocalStack) | `redshift://testuser:testpass123@localhost:5439/testdb` | Redshift emulation |
-
-## Production Configuration Example
+### CLI
 
 ```bash
-# Production environment
+nlp2sql query \
+  --database-url "$DATABASE_URL" \
+  --question "Show revenue by source category for the flagship store" \
+  --examples-file examples.json
+```
+
+### How Examples Are Loaded
+
+When examples are provided:
+
+1. the library normalizes the payload
+2. embeddings are created using the configured embedding provider
+3. an example index is created or reused on disk
+4. relevant examples are selected at query time
+
+Because example indexes are embedding-provider specific, switching between `openai` and `local` without clearing the old index can produce a dimension mismatch.
+
+## Cache Behavior in Tests and Real Usage
+
+### In Tests
+
+Integration tests often isolate cache directories so runs do not interfere with each other. This is especially useful when:
+
+- mixing mock and real embedding providers
+- switching between local and OpenAI embeddings
+- running tests in parallel
+
+Typical pattern:
+
+```bash
+export NLP2SQL_EMBEDDINGS_DIR=/tmp/test-embeddings
+export NLP2SQL_EXAMPLES_DIR=/tmp/test-examples
+```
+
+### In Services
+
+Use stable persistent directories so schema and example indexes survive restarts:
+
+```bash
+export NLP2SQL_EMBEDDINGS_DIR=/var/lib/nlp2sql/embeddings
+export NLP2SQL_EXAMPLES_DIR=/var/lib/nlp2sql/examples
+```
+
+### In CI
+
+Use disposable cache directories unless you are explicitly testing warm-cache behavior.
+
+## Execution Mode Guidance
+
+The runtime has three practical execution modes.
+
+| Mode | When to use it |
+|------|----------------|
+| `generate_only` | fast generation, prompt iteration, or no execution port available |
+| `generate_and_validate` | safe validation of generated SQL against a readonly execution target |
+| `generate_validate_repair` | production-like usage where repair is worth the extra latency |
+
+### Python
+
+```python
+await nlp.ask("Count active users by region")
+await nlp.ask("Count active users by region", validate=True)
+await nlp.ask("Count active users by region", validate=True, repair=True)
+```
+
+### CLI
+
+```bash
+nlp2sql query --database-url "$DATABASE_URL" --question "Count active users by region"
+nlp2sql query --database-url "$DATABASE_URL" --question "Count active users by region" --validate
+nlp2sql query --database-url "$DATABASE_URL" --question "Count active users by region" --validate --repair
+```
+
+### What Changes Between Modes
+
+- `generate_only` returns the first generated SQL
+- `generate_and_validate` can surface execution validation metadata
+- `generate_validate_repair` can retry after semantic or runtime failures
+
+## Schema Filters
+
+Schema filters reduce retrieval scope before indexing and prompting.
+
+| Filter | Type | Description |
+|--------|------|-------------|
+| `include_schemas` | `list[str]` | Include only these schemas |
+| `exclude_schemas` | `list[str]` | Exclude these schemas |
+| `include_tables` | `list[str]` | Include only these tables |
+| `exclude_tables` | `list[str]` | Exclude these tables |
+| `exclude_system_tables` | `bool` | Exclude system relations |
+
+### Example
+
+```python
+schema_filters = {
+    "include_tables": ["stores", "marketing_channels", "daily_channel_metrics"],
+    "exclude_system_tables": True,
+}
+```
+
+Filters are applied before indexing, which keeps retrieval focused and lowers token usage.
+
+## Local Public Example Domain
+
+The repository ships a public e-commerce domain for documentation and integration tests.
+
+Start it with:
+
+```bash
+cd docker
+docker compose up -d postgres
+```
+
+Connection URL:
+
+```bash
+postgresql://testuser:testpass@localhost:5432/testdb
+```
+
+This is the recommended baseline for public experimentation.
+
+## Example Production Baseline
+
+```bash
 export NLP2SQL_ENV=production
 export NLP2SQL_LOG_LEVEL=INFO
 export NLP2SQL_CACHE_ENABLED=true
 export NLP2SQL_MAX_SCHEMA_TOKENS=8000
 export NLP2SQL_SCHEMA_CACHE_TTL_HOURS=24
-
-# AI Provider (choose one or more for fallback)
-export OPENAI_API_KEY="sk-prod-..."
-export ANTHROPIC_API_KEY="sk-ant-prod-..."
-
-# Database
-export DATABASE_URL="postgresql://prod-user:prod-pass@prod-host:5432/production"
-
-# Embedding storage (persistent volume in production)
 export NLP2SQL_EMBEDDINGS_DIR=/data/nlp2sql/embeddings
+export NLP2SQL_EXAMPLES_DIR=/data/nlp2sql/examples
+export OPENAI_API_KEY="sk-prod-..."
+export DATABASE_URL="postgresql://readonly-user:readonly-pass@warehouse-host:5432/analytics"
 ```
+
+## Related Docs
+
+- [README](../README.md)
+- [API Reference](API.md)
+- [Architecture](ARCHITECTURE.md)

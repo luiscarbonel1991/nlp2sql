@@ -12,6 +12,7 @@ from ..config.settings import settings
 from ..exceptions import ProviderException, TokenLimitException
 from ..ports.ai_provider import AIProviderPort, AIProviderType, QueryContext, QueryResponse
 from ..utils.helpers import first_not_none
+from ..utils.semantic_prompt import format_semantic_context_lines, format_sql_intent_plan_lines
 
 logger = structlog.get_logger()
 
@@ -159,10 +160,34 @@ class OpenAIAdapter(AIProviderPort):
     def _build_prompt(self, context: QueryContext) -> str:
         """Build prompt for query generation."""
         prompt_parts = []
+        metadata = context.metadata or {}
 
         # Add context
         prompt_parts.append(f"Database Type: {context.database_type}")
         prompt_parts.append(f"Question: {context.question}")
+
+        intent_context = metadata.get("intent_context")
+        if isinstance(intent_context, dict):
+            prompt_parts.append("Intent Context:")
+            prompt_parts.append(f"- Intent: {intent_context.get('intent', 'unknown')}")
+            if intent_context.get("metrics"):
+                prompt_parts.append(f"- Metrics: {', '.join(intent_context['metrics'])}")
+            if intent_context.get("dimensions"):
+                prompt_parts.append(f"- Dimensions: {', '.join(intent_context['dimensions'])}")
+            if intent_context.get("time_grains"):
+                prompt_parts.append(f"- Time grains: {', '.join(intent_context['time_grains'])}")
+            if intent_context.get("filters"):
+                prompt_parts.append(f"- Filters: {', '.join(intent_context['filters'])}")
+            if intent_context.get("expected_operations"):
+                prompt_parts.append(f"- Expected operations: {', '.join(intent_context['expected_operations'])}")
+
+        semantic_context = metadata.get("semantic_context")
+        if isinstance(semantic_context, dict) and semantic_context:
+            prompt_parts.extend(format_semantic_context_lines(semantic_context))
+
+        sql_intent_plan = metadata.get("sql_intent_plan")
+        if isinstance(sql_intent_plan, dict) and sql_intent_plan:
+            prompt_parts.extend(format_sql_intent_plan_lines(sql_intent_plan))
 
         # Add schema context
         if context.schema_context:
@@ -171,10 +196,15 @@ class OpenAIAdapter(AIProviderPort):
         # Add examples
         if context.examples:
             prompt_parts.append("Examples:")
-            for i, example in enumerate(context.examples[:3], 1):
+            for i, example in enumerate(context.examples[: settings.max_prompt_examples], 1):
                 prompt_parts.append(f"Example {i}:")
                 prompt_parts.append(f"Question: {example['question']}")
                 prompt_parts.append(f"SQL: {example['sql']}")
+                example_metadata = example.get("metadata", {})
+                if isinstance(example_metadata, dict):
+                    tables = example_metadata.get("tables")
+                    if tables:
+                        prompt_parts.append(f"Tables: {', '.join(tables)}")
                 prompt_parts.append("")
 
         # Add instructions

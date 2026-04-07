@@ -1,26 +1,52 @@
 """nlp2sql - Natural Language to SQL converter with multiple AI providers."""
 
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 from .adapters.openai_adapter import OpenAIAdapter
 from .adapters.postgres_repository import PostgreSQLRepository
 from .adapters.redshift_adapter import RedshiftRepository
+from .adapters.default_error_classifier import DefaultErrorClassifier
+from .adapters.default_repair_policy import DefaultRepairPolicy
+from .adapters.dict_semantic_resolver import DictSemanticResolver
+from .adapters.file_semantic_resolver import FileSemanticResolver
+from .adapters.noop_semantic_resolver import NoOpSemanticResolver
+from .adapters.noop_semantic_validator import NoOpSemanticValidator
+from .adapters.schema_repository_execution_adapter import SchemaRepositoryExecutionAdapter
 from .config.settings import settings
 from .client import NLP2SQL, connect
-from .core.entities import DatabaseType, Query, SQLQuery
+from .core.entities import (
+    CanonicalQueryPattern,
+    DatabaseType,
+    DimensionDefinition,
+    DomainRule,
+    MetricDefinition,
+    Query,
+    SQLQuery,
+    SemanticContext,
+    SemanticEntityMapping,
+    SemanticIssue,
+    SemanticValidationResult,
+    SqlIntentPlan,
+)
 from .core.provider_config import ProviderConfig
 from .core.result import QueryResult
+from .core.runtime import ExecutionHooks, ExecutionMode, SemanticHooks
 from .exceptions import *
 from .factories import RepositoryFactory
 from .ports.embedding_provider import EmbeddingProviderPort
 from .ports.example_repository import ExampleRepositoryPort
+from .ports.error_classifier import ErrorClassifierPort
+from .ports.query_execution import QueryExecutionPort
 from .ports.query_safety import QuerySafetyPort
 from .ports.query_validator import QueryValidatorPort
+from .ports.repair_policy import RepairPolicyPort
 from .ports.schema_repository import SchemaRepositoryPort
+from .ports.semantic_resolver import SemanticResolverPort
+from .ports.semantic_validator import SemanticValidatorPort
 from .schema.example_store import ExampleStore
 from .services.query_service import QueryGenerationService
 
-__version__ = "0.2.0rc12"
+__version__ = "0.2.0rc13"
 __author__ = "Luis Carbonel"
 __email__ = "devhighlevel@gmail.com"
 
@@ -29,6 +55,9 @@ __all__ = [
     "connect",
     "NLP2SQL",
     "QueryResult",
+    "ExecutionHooks",
+    "ExecutionMode",
+    "SemanticHooks",
     # Main service (advanced)
     "QueryGenerationService",
     # Legacy helpers (still work, prefer connect())
@@ -48,14 +77,35 @@ __all__ = [
     "ProviderConfig",
     "Query",
     "SQLQuery",
+    "SemanticContext",
+    "SemanticEntityMapping",
+    "MetricDefinition",
+    "DimensionDefinition",
+    "DomainRule",
+    "CanonicalQueryPattern",
+    "SqlIntentPlan",
+    "SemanticIssue",
+    "SemanticValidationResult",
     # Embedding Provider
     "EmbeddingProviderPort",
     # Example Repository
     "ExampleRepositoryPort",
     "ExampleStore",
+    "QueryExecutionPort",
+    "ErrorClassifierPort",
+    "RepairPolicyPort",
+    "SemanticResolverPort",
+    "SemanticValidatorPort",
     # Query Safety & Validation
     "QuerySafetyPort",
     "QueryValidatorPort",
+    "SchemaRepositoryExecutionAdapter",
+    "DefaultErrorClassifier",
+    "DefaultRepairPolicy",
+    "NoOpSemanticResolver",
+    "NoOpSemanticValidator",
+    "DictSemanticResolver",
+    "FileSemanticResolver",
     # Configuration
     "settings",
     # Exceptions
@@ -157,11 +207,16 @@ def create_query_service(
     api_key: Optional[str] = None,
     model: Optional[str] = None,
     database_type: DatabaseType = DatabaseType.POSTGRES,
-    schema_filters: Optional[Dict[str, Any]] = None,
-    embedding_provider: Optional[EmbeddingProviderPort] = None,
+    schema_filters: dict[str, Any] | None = None,
+    embedding_provider: EmbeddingProviderPort | None = None,
     embedding_provider_type: Optional[str] = None,
     schema_name: str = "public",
-    example_store: Optional[ExampleRepositoryPort] = None,
+    example_store: ExampleRepositoryPort | None = None,
+    execution_port: QueryExecutionPort | None = None,
+    error_classifier: ErrorClassifierPort | None = None,
+    repair_policy: RepairPolicyPort | None = None,
+    semantic_resolver: SemanticResolverPort | None = None,
+    semantic_validator: SemanticValidatorPort | None = None,
     *,
     provider_config: Optional[ProviderConfig] = None,
 ) -> QueryGenerationService:
@@ -217,7 +272,7 @@ def create_query_service(
         _max_tokens = None
 
     # Build adapter kwargs — only pass non-None values so adapters use their own defaults
-    adapter_kwargs: Dict[str, Any] = {"api_key": _api_key}
+    adapter_kwargs: dict[str, Any] = {"api_key": _api_key}
     if _model is not None:
         adapter_kwargs["model"] = _model
     if _temperature is not None:
@@ -276,7 +331,14 @@ def create_query_service(
     query_validator = RegexQueryValidator()
 
     # Create service
-    service = QueryGenerationService(
+    if execution_port is None:
+        execution_port = SchemaRepositoryExecutionAdapter(repository)
+    if error_classifier is None:
+        error_classifier = DefaultErrorClassifier()
+    if repair_policy is None:
+        repair_policy = DefaultRepairPolicy(max_attempts=settings.retry_attempts)
+
+    return QueryGenerationService(
         ai_provider=provider,
         schema_repository=repository,
         schema_filters=schema_filters,
@@ -284,9 +346,12 @@ def create_query_service(
         schema_name=schema_name,
         example_store=example_store,
         query_validator=query_validator,
+        execution_port=execution_port,
+        error_classifier=error_classifier,
+        repair_policy=repair_policy,
+        semantic_resolver=semantic_resolver,
+        semantic_validator=semantic_validator,
     )
-
-    return service
 
 
 async def create_and_initialize_service(
@@ -295,11 +360,16 @@ async def create_and_initialize_service(
     api_key: Optional[str] = None,
     model: Optional[str] = None,
     database_type: DatabaseType = DatabaseType.POSTGRES,
-    schema_filters: Optional[Dict[str, Any]] = None,
-    embedding_provider: Optional[EmbeddingProviderPort] = None,
+    schema_filters: dict[str, Any] | None = None,
+    embedding_provider: EmbeddingProviderPort | None = None,
     embedding_provider_type: Optional[str] = None,
     schema_name: str = "public",
-    example_store: Optional[ExampleRepositoryPort] = None,
+    example_store: ExampleRepositoryPort | None = None,
+    execution_port: QueryExecutionPort | None = None,
+    error_classifier: ErrorClassifierPort | None = None,
+    repair_policy: RepairPolicyPort | None = None,
+    semantic_resolver: SemanticResolverPort | None = None,
+    semantic_validator: SemanticValidatorPort | None = None,
     *,
     provider_config: Optional[ProviderConfig] = None,
 ) -> QueryGenerationService:
@@ -346,6 +416,11 @@ async def create_and_initialize_service(
         embedding_provider_type,
         schema_name,
         example_store,
+        execution_port,
+        error_classifier,
+        repair_policy,
+        semantic_resolver,
+        semantic_validator,
         provider_config=provider_config,
     )
     await service.initialize(database_type)
@@ -359,11 +434,16 @@ async def generate_sql_from_db(
     api_key: Optional[str] = None,
     model: Optional[str] = None,
     database_type: DatabaseType = DatabaseType.POSTGRES,
-    schema_filters: Optional[Dict[str, Any]] = None,
-    embedding_provider: Optional[EmbeddingProviderPort] = None,
+    schema_filters: dict[str, Any] | None = None,
+    embedding_provider: EmbeddingProviderPort | None = None,
     embedding_provider_type: Optional[str] = None,
     schema_name: str = "public",
-    example_store: Optional[ExampleRepositoryPort] = None,
+    example_store: ExampleRepositoryPort | None = None,
+    execution_port: QueryExecutionPort | None = None,
+    error_classifier: ErrorClassifierPort | None = None,
+    repair_policy: RepairPolicyPort | None = None,
+    semantic_resolver: SemanticResolverPort | None = None,
+    semantic_validator: SemanticValidatorPort | None = None,
     *,
     provider_config: Optional[ProviderConfig] = None,
     **kwargs,
@@ -414,6 +494,11 @@ async def generate_sql_from_db(
         embedding_provider_type,
         schema_name,
         example_store,
+        execution_port,
+        error_classifier,
+        repair_policy,
+        semantic_resolver,
+        semantic_validator,
         provider_config=provider_config,
     )
     return await service.generate_sql(question=question, database_type=database_type, **kwargs)

@@ -44,6 +44,9 @@ class TestGetDatabaseHint:
         assert "LISTAGG" in hint
         assert "DISTINCT ON" in hint
         assert "generate_series" in hint
+        assert "QUALIFY" in hint
+        assert "NOW()" in hint
+        assert "INTERVAL" in hint
 
     def test_unknown_type_returns_empty_string(self):
         assert get_database_hint("unknown_db") == ""

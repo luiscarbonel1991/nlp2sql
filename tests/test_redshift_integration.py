@@ -125,8 +125,8 @@ class TestRedshiftSystemViewDetection:
 
     def test_schema_name_normalized_to_lowercase(self):
         """Schema name should be lowercased on init."""
-        repo = RedshiftRepository("redshift://u:p@h:5439/db", schema_name="DWH_Antares")
-        assert repo.schema_name == "dwh_antares"
+        repo = RedshiftRepository("redshift://u:p@h:5439/db", schema_name="ANALYTICS")
+        assert repo.schema_name == "analytics"
 
     def test_process_bulk_rows_empty(self):
         """Empty rows should produce empty table list."""

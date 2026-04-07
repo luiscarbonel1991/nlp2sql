@@ -29,7 +29,7 @@ class Settings(BaseSettings):
 
     # General settings
     app_name: str = "nlp2sql"
-    version: str = "0.2.0rc8"
+    version: str = "0.2.0rc13"
     debug: bool = Field(default=False, validation_alias="NLP2SQL_DEBUG")
     log_level: LogLevel = Field(default=LogLevel.INFO, validation_alias="NLP2SQL_LOG_LEVEL")
 
@@ -63,6 +63,7 @@ class Settings(BaseSettings):
     default_temperature: float = Field(default=0.1, validation_alias="NLP2SQL_TEMPERATURE")
     default_max_tokens: int = Field(default=2000, validation_alias="NLP2SQL_MAX_TOKENS")
     max_examples: int = Field(default=5, validation_alias="NLP2SQL_MAX_EXAMPLES")
+    max_prompt_examples: int = Field(default=3, validation_alias="NLP2SQL_MAX_PROMPT_EXAMPLES")
     retry_attempts: int = Field(default=3, validation_alias="NLP2SQL_RETRY_ATTEMPTS")
     retry_delay_seconds: float = Field(default=1.0, validation_alias="NLP2SQL_RETRY_DELAY")
 

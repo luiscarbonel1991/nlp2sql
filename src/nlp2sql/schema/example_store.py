@@ -1,10 +1,13 @@
 """Example store for managing and retrieving query examples using vector similarity."""
 
+from __future__ import annotations
+
 import hashlib
 import pickle
+import re
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import faiss
 import numpy as np
@@ -30,8 +33,8 @@ class ExampleStore(ExampleRepositoryPort):
     def __init__(
         self,
         embedding_provider: EmbeddingProviderPort,
-        index_path: Optional[Path] = None,
-        database_url: Optional[str] = None,
+        index_path: Path | None = None,
+        database_url: str | None = None,
         schema_name: str = "public",
     ):
         """
@@ -120,7 +123,7 @@ class ExampleStore(ExampleRepositoryPort):
                 dimension=self.embedding_dim,
             )
 
-    async def add_examples(self, examples: List[Dict[str, Any]]) -> None:
+    async def add_examples(self, examples: list[dict[str, Any]]) -> None:
         """
         Add examples to the store.
 
@@ -129,19 +132,20 @@ class ExampleStore(ExampleRepositoryPort):
                 {"question": str, "sql": str, "database_type": str, "metadata": dict}
         """
         new_examples = []
-        questions = []
+        embedding_texts = []
 
         for example in examples:
             # Create unique key based on question and SQL
             example_key = self._create_example_key(example)
 
             if example_key not in self.example_to_id:
-                questions.append(example["question"])
-                new_examples.append(example)
+                enriched_example = self._enrich_example(example)
+                embedding_texts.append(self._create_example_embedding_text(enriched_example))
+                new_examples.append(enriched_example)
 
                 # Store mapping
                 self.id_to_example[self._next_id] = {
-                    "example": example,
+                    "example": enriched_example,
                     "key": example_key,
                     "indexed_at": datetime.now().isoformat(),
                 }
@@ -149,8 +153,8 @@ class ExampleStore(ExampleRepositoryPort):
                 self._next_id += 1
 
         if new_examples:
-            # Create embeddings for questions
-            embeddings = await self.embedding_provider.encode(questions)
+            # Create embeddings for rich example descriptions
+            embeddings = await self.embedding_provider.encode(embedding_texts)
 
             # Add to FAISS index
             self.index.add(np.array(embeddings, dtype=np.float32))
@@ -168,9 +172,9 @@ class ExampleStore(ExampleRepositoryPort):
         self,
         question: str,
         top_k: int = 5,
-        database_type: Optional[str] = None,
+        database_type: str | None = None,
         min_score: float = 0.3,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Search for similar examples.
 
@@ -210,18 +214,53 @@ class ExampleStore(ExampleRepositoryPort):
             if score < min_score:
                 continue
 
-            results.append(example)
+            results.append({**example, "similarity_score": float(score)})
 
             if len(results) >= top_k:
                 break
 
         return results
 
-    def _create_example_key(self, example: Dict[str, Any]) -> str:
+    def _create_example_key(self, example: dict[str, Any]) -> str:
         """Create unique key for example."""
         # Use hash of question + SQL to avoid duplicates
         content = f"{example['question']}|{example['sql']}"
         return hashlib.md5(content.encode()).hexdigest()
+
+    def _enrich_example(self, example: dict[str, Any]) -> dict[str, Any]:
+        """Normalize metadata so downstream selectors can rely on it."""
+        metadata = dict(example.get("metadata", {}))
+        metadata.setdefault("tables", self._extract_sql_tables(example.get("sql", "")))
+        return {**example, "metadata": metadata}
+
+    def _create_example_embedding_text(self, example: dict[str, Any]) -> str:
+        """Create richer text used to index examples semantically."""
+        metadata = example.get("metadata", {})
+        tables = metadata.get("tables", [])
+        metrics = metadata.get("metrics", [])
+        dimensions = metadata.get("dimensions", [])
+        intent = metadata.get("intent")
+
+        parts = [f"Question: {example['question']}", f"SQL: {example['sql']}"]
+        if tables:
+            parts.append(f"Tables: {', '.join(tables)}")
+        if metrics:
+            parts.append(f"Metrics: {', '.join(metrics)}")
+        if dimensions:
+            parts.append(f"Dimensions: {', '.join(dimensions)}")
+        if intent:
+            parts.append(f"Intent: {intent}")
+
+        return " | ".join(parts)
+
+    def _extract_sql_tables(self, sql: str) -> list[str]:
+        matches = re.findall(r"\b(?:from|join)\s+([a-zA-Z0-9_.\"]+)", sql, flags=re.IGNORECASE)
+        tables: list[str] = []
+        for match in matches:
+            table_name = match.strip('"').split(".")[-1]
+            if table_name not in tables:
+                tables.append(table_name)
+        return tables
 
     async def _save_index(self) -> None:
         """Save FAISS index and metadata with provider tracking."""
@@ -261,7 +300,7 @@ class ExampleStore(ExampleRepositoryPort):
 
         logger.info("Cleared example store")
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Get statistics about the example store."""
         return {
             "total_examples": len(self.id_to_example),

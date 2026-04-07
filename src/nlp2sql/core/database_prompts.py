@@ -31,7 +31,9 @@ DATABASE_SQL_HINTS: dict[str, str] = {
         "7) generate_series() is not supported - use CTEs or date tables for sequences. "
         "8) No ARRAY types or ARRAY_AGG - use SUPER type for semi-structured data. "
         "9) Use APPROXIMATE COUNT(DISTINCT col) for large cardinality counts. "
-        "10) Avoid SELECT * - only select needed columns for columnar storage efficiency."
+        "10) Prefer QUALIFY with ROW_NUMBER() when filtering window-function results. "
+        "11) Avoid SELECT * - only select needed columns for columnar storage efficiency. "
+        "12) Do not use unsupported PostgreSQL idioms such as NOW(), STRING_AGG, or INTERVAL literals."
     ),
 }
 
