@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:${POSTGRES_VERSION:-16}
+    image: pgvector/pgvector:pg${POSTGRES_VERSION:-16}
     container_name: ${SIMPLE_CONTAINER_NAME:-nlp2sql-postgres}
     environment:
       POSTGRES_USER: ${SIMPLE_DB_USER:-testuser}
