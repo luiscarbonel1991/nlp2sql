@@ -124,10 +124,23 @@ async def _postgres_is_reachable(url: str) -> bool:
         return False
 
 
+def require_integration() -> bool:
+    """Whether integration prerequisites must be present rather than skipped.
+
+    When ``NLP2SQL_REQUIRE_INTEGRATION`` is truthy (set in CI), integration
+    fixtures must FAIL instead of skip when their backend is unreachable, so a
+    misconfigured service container goes red rather than green-via-skip.
+    """
+    return os.getenv("NLP2SQL_REQUIRE_INTEGRATION", "").strip().lower() in ("1", "true", "yes")
+
+
 @pytest_asyncio.fixture
 async def postgres_available(postgres_url: str) -> str:
-    """Skip the test if Docker postgres is not running."""
+    """Skip (or, in CI, fail) the test if Docker postgres is not running."""
     reachable = await _postgres_is_reachable(postgres_url)
     if not reachable:
-        pytest.skip(f"PostgreSQL not reachable at {postgres_url}")
+        message = f"PostgreSQL not reachable at {postgres_url}"
+        if require_integration():
+            pytest.fail(f"{message} (NLP2SQL_REQUIRE_INTEGRATION set — refusing to skip)")
+        pytest.skip(message)
     return postgres_url

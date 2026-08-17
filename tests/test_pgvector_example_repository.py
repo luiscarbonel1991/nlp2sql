@@ -18,6 +18,8 @@ import pytest_asyncio
 
 from nlp2sql.exceptions import SchemaException
 
+from conftest import require_integration
+
 pgvector = pytest.importorskip("pgvector.psycopg2")
 
 from nlp2sql.adapters.pgvector_example_repository import PgvectorExampleRepository  # noqa: E402
@@ -44,10 +46,13 @@ def _pgvector_extension_installed(url: str) -> bool:
 
 @pytest_asyncio.fixture
 async def pgvector_available(postgres_available: str) -> str:
-    """Skip unless both Postgres and the ``vector`` extension are reachable."""
+    """Skip (or, in CI, fail) unless both Postgres and the ``vector`` extension are reachable."""
     installed = await asyncio.to_thread(_pgvector_extension_installed, postgres_available)
     if not installed:
-        pytest.skip("pgvector extension not available on the test database")
+        message = "pgvector extension not available on the test database"
+        if require_integration():
+            pytest.fail(f"{message} (NLP2SQL_REQUIRE_INTEGRATION set — refusing to skip)")
+        pytest.skip(message)
     return postgres_available
 
 

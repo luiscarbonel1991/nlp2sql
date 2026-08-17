@@ -176,6 +176,7 @@ query_cache.db
 !README.md
 !CONTRIBUTING.md
 !SECURITY.md
+!CHANGELOG.md
 !docs/*.md
 !**/README.md
 !.github/**/*.md
