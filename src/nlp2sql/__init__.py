@@ -46,7 +46,7 @@ from .ports.semantic_validator import SemanticValidatorPort
 from .schema.example_store import ExampleStore
 from .services.query_service import QueryGenerationService
 
-__version__ = "0.2.0rc13"
+__version__ = "0.2.0rc14"
 __author__ = "Luis Carbonel"
 __email__ = "devhighlevel@gmail.com"
 

@@ -22,6 +22,8 @@ pre-1.0.
 
 ## [Unreleased]
 
+## [0.2.0rc14] - 2026-09-16
+
 ### Added
 - `PgvectorExampleRepository`: a Postgres + `pgvector` implementation of
   `ExampleRepositoryPort`, an alternative to the on-disk FAISS `ExampleStore`
