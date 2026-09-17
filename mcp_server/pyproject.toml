@@ -1,6 +1,6 @@
 [project]
 name = "nlp2sql-mcp"
-version = "0.1.0"
+version = "0.2.0rc14"
 description = "MCP server for nlp2sql - Natural Language to SQL conversion"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -21,4 +21,4 @@ build-backend = "hatchling.build"
 [tool.mcp]
 name = "nlp2sql"
 description = "Convert natural language queries to SQL using multiple AI providers"
-version = "0.1.0"
+version = "0.2.0rc14"
