@@ -8,6 +8,7 @@ import structlog
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from ..config.settings import settings
+from ..core.provider_config import ProviderConfig
 from ..exceptions import ProviderException, TokenLimitException
 from ..ports.ai_provider import AIProviderPort, AIProviderType, QueryContext, QueryResponse
 from ..utils.helpers import first_not_none
@@ -15,11 +16,35 @@ from ..utils.semantic_prompt import format_semantic_context_lines, format_sql_in
 
 logger = structlog.get_logger()
 
+# Maximum input tokens per model. Legacy rows are kept so users who pin an
+# older (or retired) model keep an accurate budget.
+CONTEXT_LIMITS: Dict[str, int] = {
+    "claude-sonnet-5": 1_000_000,
+    "claude-sonnet-4-20250514": 200_000,
+    "claude-opus-4-20250514": 200_000,
+    "claude-3-7-sonnet-20250219": 200_000,
+    "claude-3-5-sonnet-20241022": 200_000,
+    "claude-3-5-haiku-20241022": 200_000,
+    "claude-3-opus-20240229": 200_000,
+    "claude-3-sonnet-20240229": 200_000,
+    "claude-3-haiku-20240307": 200_000,
+    "claude-2.1": 200_000,
+    "claude-2.0": 100_000,
+}
+# Every Claude model since 2.1 has at least a 200K window.
+DEFAULT_CONTEXT_LIMIT = 200_000
+
 
 class AnthropicAdapter(AIProviderPort):
-    """Anthropic Claude adapter for natural language to SQL generation."""
+    """Anthropic Claude adapter for natural language to SQL generation.
 
-    DEFAULT_MODEL = "claude-sonnet-4-20250514"
+    Sampling parameters (``temperature``, ``top_p``, ``top_k``) are never sent:
+    Claude 4.7+ models reject non-default values with HTTP 400 and the
+    ``anthropic`` SDK removes the keywords in 1.0. A ``temperature`` passed to
+    the constructor is kept for backward compatibility but not forwarded.
+    """
+
+    DEFAULT_MODEL = ProviderConfig.DEFAULT_MODELS["anthropic"]
     DEFAULT_MAX_TOKENS = 2000
     DEFAULT_TEMPERATURE = 0.1
 
@@ -37,6 +62,15 @@ class AnthropicAdapter(AIProviderPort):
         self.model = model or self.DEFAULT_MODEL
         self.max_tokens = first_not_none(max_tokens, self.DEFAULT_MAX_TOKENS)
         self.temperature = first_not_none(temperature, self.DEFAULT_TEMPERATURE)
+        self._max_context_size = self._resolve_context_limit(self.model)
+
+        if temperature is not None:
+            # INFO, not WARNING: the CLI always forwards its --temperature default.
+            logger.info(
+                "Anthropic adapter does not forward temperature (rejected by Claude 4.7+ models)",
+                model=self.model,
+                temperature=temperature,
+            )
 
         self.client = anthropic.AsyncAnthropic(api_key=self.api_key)
 
@@ -45,12 +79,35 @@ class AnthropicAdapter(AIProviderPort):
             provider="anthropic",
             model=self.model,
             max_tokens=self.max_tokens,
-            temperature=self.temperature,
+            context_limit=self._max_context_size,
         )
 
     @property
     def provider_type(self) -> AIProviderType:
         return AIProviderType.ANTHROPIC
+
+    @staticmethod
+    def _resolve_context_limit(model: str) -> int:
+        """Exact match, then longest model-family prefix, then a logged fallback."""
+        if model in CONTEXT_LIMITS:
+            return CONTEXT_LIMITS[model]
+        matches = [key for key in CONTEXT_LIMITS if model.startswith(key)]
+        if matches:
+            family = max(matches, key=len)
+            logger.debug(
+                "Resolved context limit by model family",
+                model=model,
+                family=family,
+                context_limit=CONTEXT_LIMITS[family],
+            )
+            return CONTEXT_LIMITS[family]
+        logger.warning(
+            "Unknown Anthropic model; using fallback context limit",
+            model=model,
+            context_limit=DEFAULT_CONTEXT_LIMIT,
+            hint="pin a model listed in anthropic_adapter.CONTEXT_LIMITS or add it",
+        )
+        return DEFAULT_CONTEXT_LIMIT
 
     def get_token_count(self, text: str) -> int:
         """Estimate token count for Claude models."""
@@ -59,22 +116,10 @@ class AnthropicAdapter(AIProviderPort):
         return len(text) // 4
 
     def get_max_context_size(self) -> int:
-        """Get maximum context size for the model."""
-        context_limits = {
-            "claude-sonnet-4-20250514": 200000,
-            "claude-opus-4-20250514": 200000,
-            "claude-3-7-sonnet-20250219": 200000,
-            "claude-3-5-sonnet-20241022": 200000,
-            "claude-3-5-haiku-20241022": 200000,
-            "claude-3-opus-20240229": 200000,
-            "claude-3-sonnet-20240229": 200000,
-            "claude-3-haiku-20240307": 200000,
-            "claude-2.1": 200000,
-            "claude-2.0": 100000,
-        }
-        return context_limits.get(self.model, 100000)
+        """Get maximum input context size for the model."""
+        return self._max_context_size
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10), reraise=True)
     async def generate_query(self, context: QueryContext) -> QueryResponse:
         """Generate SQL query using Claude."""
         try:
@@ -88,11 +133,10 @@ class AnthropicAdapter(AIProviderPort):
             # Create messages
             messages = [{"role": "user", "content": prompt}]
 
-            # Call Claude API
+            # Call Claude API (no sampling parameters: see class docstring)
             response = await self.client.messages.create(
                 model=self.model,
                 max_tokens=context.max_tokens,
-                temperature=context.temperature,
                 system=system_prompt,
                 messages=messages,
             )
@@ -310,7 +354,6 @@ Check for:
             message = await self.client.messages.create(
                 model=self.model,
                 max_tokens=1000,
-                temperature=0,
                 system="You are a SQL validation expert. Analyze the given SQL query and provide validation results in JSON format only.",
                 messages=[{"role": "user", "content": validation_prompt}],
             )

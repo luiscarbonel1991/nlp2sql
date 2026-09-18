@@ -58,7 +58,7 @@ def demo_basic_functionality():
     try:
         adapter = OpenAIAdapter(
             api_key="demo-key",  # Demo key
-            model="gpt-4-turbo-preview",
+            model="gpt-5.6-luna",
             temperature=0.1,
         )
 

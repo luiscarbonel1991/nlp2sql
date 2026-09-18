@@ -336,7 +336,11 @@ def inspect(
     help="AI provider to use (default: openai)",
 )
 @click.option("--api-key", help="API key (or use environment variables)")
-@click.option("--model", default=None, help="AI model name (e.g., gpt-4o, claude-sonnet-4-20250514)")
+@click.option(
+    "--model",
+    default=None,
+    help="AI model name (default depends on provider; e.g., gpt-5.6-terra, claude-sonnet-5, gemini-3.1-flash-lite)",
+)
 @click.option("--explain", is_flag=True, help="Include detailed explanation")
 @click.option("--temperature", type=float, default=0.1, help="Model temperature (0.0-1.0)")
 @click.option("--max-tokens", type=int, default=1000, help="Maximum tokens for response")
@@ -719,27 +723,28 @@ def providers_list():
     click.echo("AI: Available AI Providers")
     click.echo("=" * 30)
 
+    default_models = ProviderConfig.DEFAULT_MODELS
     providers_info = [
         {
             "name": "OpenAI",
             "provider": "openai",
             "env_var": "OPENAI_API_KEY",
-            "models": "GPT-4, GPT-3.5",
-            "context": "128K tokens",
+            "models": f"default: {default_models['openai']}",
+            "context": "1.05M tokens (922K input)",
         },
         {
             "name": "Anthropic",
             "provider": "anthropic",
             "env_var": "ANTHROPIC_API_KEY",
-            "models": "Claude-3",
-            "context": "200K tokens",
+            "models": f"default: {default_models['anthropic']}",
+            "context": "1M tokens",
         },
         {
             "name": "Google",
             "provider": "gemini",
             "env_var": "GOOGLE_API_KEY",
-            "models": "Gemini Pro",
-            "context": "30K tokens",
+            "models": f"default: {default_models['gemini']}",
+            "context": "1M tokens",
         },
     ]
 

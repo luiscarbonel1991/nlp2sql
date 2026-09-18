@@ -111,13 +111,13 @@ class TestProviderConfig:
     def test_resolved_model_default(self):
         """resolved_model returns provider default when model is None."""
         config = ProviderConfig(provider="openai")
-        assert config.resolved_model == "gpt-4o-mini"
+        assert config.resolved_model == ProviderConfig.DEFAULT_MODELS["openai"]
 
         config = ProviderConfig(provider="anthropic")
-        assert config.resolved_model == "claude-sonnet-4-20250514"
+        assert config.resolved_model == ProviderConfig.DEFAULT_MODELS["anthropic"]
 
         config = ProviderConfig(provider="gemini")
-        assert config.resolved_model == "gemini-2.0-flash"
+        assert config.resolved_model == ProviderConfig.DEFAULT_MODELS["gemini"]
 
     def test_temperature_zero_is_preserved(self):
         """0.0 is a valid temperature, must not be treated as None."""
@@ -179,9 +179,12 @@ class TestAdapterConfigResolution:
         from nlp2sql.adapters.openai_adapter import OpenAIAdapter
 
         adapter = OpenAIAdapter(api_key="sk-test")
-        assert adapter.model == "gpt-4o-mini"
+        assert adapter.model == ProviderConfig.DEFAULT_MODELS["openai"]
         assert adapter.temperature == 0.1
         assert adapter.max_tokens == 2000
+        assert adapter.reasoning_effort == "low"
+        # tiktoken has no entry for gpt-5.6-*; the adapter must map the family to o200k_base
+        assert adapter.encoding.name == "o200k_base"
 
     def test_openai_temperature_zero_preserved(self):
         """temperature=0.0 must not fall through to default."""
@@ -194,23 +197,23 @@ class TestAdapterConfigResolution:
         """Anthropic adapter accepts model kwarg."""
         from nlp2sql.adapters.anthropic_adapter import AnthropicAdapter
 
-        adapter = AnthropicAdapter(api_key="sk-test", model="claude-opus-4-20250514")
-        assert adapter.model == "claude-opus-4-20250514"
+        adapter = AnthropicAdapter(api_key="sk-test", model="claude-opus-5")
+        assert adapter.model == "claude-opus-5"
 
     def test_anthropic_defaults(self):
         """Anthropic adapter uses correct defaults."""
         from nlp2sql.adapters.anthropic_adapter import AnthropicAdapter
 
         adapter = AnthropicAdapter(api_key="sk-test")
-        assert adapter.model == "claude-sonnet-4-20250514"
+        assert adapter.model == ProviderConfig.DEFAULT_MODELS["anthropic"]
 
     @patch("nlp2sql.adapters.gemini_adapter.genai")
     def test_gemini_with_model(self, mock_genai):
         """Gemini adapter accepts model kwarg."""
         from nlp2sql.adapters.gemini_adapter import GeminiAdapter
 
-        adapter = GeminiAdapter(api_key="test-key", model="gemini-1.5-pro")
-        assert adapter.model_name == "gemini-1.5-pro"
+        adapter = GeminiAdapter(api_key="test-key", model="gemini-2.5-pro")
+        assert adapter.model_name == "gemini-2.5-pro"
 
     @patch("nlp2sql.adapters.gemini_adapter.genai")
     def test_gemini_defaults(self, mock_genai):
@@ -218,7 +221,7 @@ class TestAdapterConfigResolution:
         from nlp2sql.adapters.gemini_adapter import GeminiAdapter
 
         adapter = GeminiAdapter(api_key="test-key")
-        assert adapter.model_name == "gemini-2.0-flash"
+        assert adapter.model_name == ProviderConfig.DEFAULT_MODELS["gemini"]
 
 
 class TestSettingsBuildProviderConfig:
@@ -229,7 +232,7 @@ class TestSettingsBuildProviderConfig:
 
         config = settings.build_provider_config("openai")
         assert isinstance(config, ProviderConfig)
-        assert config.model == "gpt-4o-mini"
+        assert config.model == ProviderConfig.DEFAULT_MODELS["openai"]
         assert config.temperature == 0.1
         assert config.max_tokens == 2000
 
@@ -237,7 +240,7 @@ class TestSettingsBuildProviderConfig:
         from nlp2sql.config.settings import settings
 
         config = settings.build_provider_config("anthropic")
-        assert config.model == "claude-sonnet-4-20250514"
+        assert config.model == ProviderConfig.DEFAULT_MODELS["anthropic"]
 
     def test_unknown_provider_raises(self):
         """Unknown provider raises ValueError from ProviderConfig validation."""
