@@ -227,8 +227,8 @@ def create_query_service(
         database_url: Database connection URL
         ai_provider: AI provider to use ('openai', 'anthropic', 'gemini', etc.)
         api_key: API key for the AI provider
-        model: Optional model name for the AI provider (e.g., 'gpt-4o', 'claude-sonnet-4-20250514',
-            'gemini-2.0-flash'). If None, uses the provider's default model.
+        model: Optional model name for the AI provider (e.g., 'gpt-5.6-luna', 'claude-sonnet-5',
+            'gemini-3.6-flash'). If None, uses the provider's default model.
         database_type: Type of database
         schema_filters: Optional filters to limit schema scope
         embedding_provider: Optional embedding provider instance
@@ -383,7 +383,7 @@ async def create_and_initialize_service(
         database_url: Database connection URL
         ai_provider: AI provider to use ('openai', 'anthropic', 'gemini', etc.)
         api_key: API key for the AI provider
-        model: Optional model name for the AI provider (e.g., 'gpt-4o', 'claude-sonnet-4-20250514').
+        model: Optional model name for the AI provider (e.g., 'gpt-5.6-luna', 'claude-sonnet-5').
             If None, uses the provider's default model.
         database_type: Type of database
         schema_filters: Optional filters to limit schema scope
@@ -401,7 +401,7 @@ async def create_and_initialize_service(
             "postgresql://user:pass@localhost/db",
             ai_provider="anthropic",
             api_key="your-api-key",
-            model="claude-sonnet-4-20250514"
+            model="claude-sonnet-5"
         )
         result = await service.generate_sql("Show all users")
     """
@@ -459,7 +459,7 @@ async def generate_sql_from_db(
         question: Natural language question
         ai_provider: AI provider to use (default: 'openai')
         api_key: API key for the AI provider
-        model: Optional model name for the AI provider (e.g., 'gpt-4o-mini').
+        model: Optional model name for the AI provider (e.g., 'gpt-5.6-luna').
             If None, uses the provider's default model.
         database_type: Type of database (default: POSTGRES)
         schema_filters: Optional filters to limit schema scope
@@ -480,7 +480,7 @@ async def generate_sql_from_db(
             "Show me all active users",
             ai_provider="openai",
             api_key="your-api-key",
-            model="gpt-4o-mini"
+            model="gpt-5.6-luna"
         )
     """
     service = await create_and_initialize_service(

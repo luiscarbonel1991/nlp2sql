@@ -106,22 +106,25 @@ class Settings(BaseSettings):
 
     def get_provider_config(self, provider: str) -> Dict[str, Any]:
         """Get configuration for specific provider."""
+        from ..core.provider_config import ProviderConfig
+
+        default_models = ProviderConfig.DEFAULT_MODELS
         configs = {
             "openai": {
                 "api_key": self.openai_api_key,
-                "model": "gpt-4o-mini",
+                "model": default_models["openai"],
                 "max_tokens": self.default_max_tokens,
                 "temperature": self.default_temperature,
             },
             "anthropic": {
                 "api_key": self.anthropic_api_key,
-                "model": "claude-sonnet-4-20250514",
+                "model": default_models["anthropic"],
                 "max_tokens": self.default_max_tokens,
                 "temperature": self.default_temperature,
             },
             "gemini": {
                 "api_key": self.google_api_key,
-                "model": "gemini-2.0-flash",
+                "model": default_models["gemini"],
                 "max_tokens": self.default_max_tokens,
                 "temperature": self.default_temperature,
             },

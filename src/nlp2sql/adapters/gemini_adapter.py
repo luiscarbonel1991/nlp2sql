@@ -1,4 +1,11 @@
-"""Google Gemini adapter for query generation."""
+"""Google Gemini adapter for query generation.
+
+Uses the legacy ``google-generativeai`` SDK, which is end-of-life and hardwired
+to the ``v1beta`` API version (it cannot pin ``v1``) and cannot configure or
+observe Gemini 3.x thinking. Thinking tokens count against
+``max_output_tokens``, so a too-small response budget surfaces as an empty
+candidate; the adapter reports that as an actionable error.
+"""
 
 import asyncio
 import json
@@ -9,6 +16,7 @@ import structlog
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from ..config.settings import settings
+from ..core.provider_config import ProviderConfig
 from ..exceptions import ProviderException, TokenLimitException
 from ..ports.ai_provider import AIProviderPort, AIProviderType, QueryContext, QueryResponse
 from ..utils.helpers import first_not_none
@@ -16,11 +24,31 @@ from ..utils.semantic_prompt import format_semantic_context_lines, format_sql_in
 
 logger = structlog.get_logger()
 
+# Maximum input tokens per model. Legacy rows are kept so users who pin an
+# older (or retired) model keep an accurate budget.
+CONTEXT_LIMITS: Dict[str, int] = {
+    "gemini-3.6-flash": 1_048_576,
+    "gemini-3.1-flash-lite": 1_048_576,
+    "gemini-2.5-pro": 1_048_576,
+    "gemini-2.5-flash": 1_048_576,
+    "gemini-2.0-flash": 1_048_576,
+    "gemini-2.0-pro": 1_048_576,
+    "gemini-1.5-pro": 1_048_576,
+    "gemini-1.5-flash": 1_048_576,
+    "gemini-pro": 30_720,
+    "gemini-pro-vision": 16_384,
+}
+# Every documented Gemini model since 1.5 has at least a 1M input window.
+GEMINI_FAMILY_CONTEXT_LIMIT = 1_048_576
+# Conservative floor for non-Gemini names served through the same API (gemma,
+# tuned models). The previous 30,720 fallback was wrong for every Gemini model.
+DEFAULT_CONTEXT_LIMIT = 32_768
+
 
 class GeminiAdapter(AIProviderPort):
     """Google Gemini adapter for natural language to SQL generation."""
 
-    DEFAULT_MODEL = "gemini-2.0-flash"
+    DEFAULT_MODEL = ProviderConfig.DEFAULT_MODELS["gemini"]
     DEFAULT_MAX_TOKENS = 2000
     DEFAULT_TEMPERATURE = 0.1
 
@@ -43,6 +71,7 @@ class GeminiAdapter(AIProviderPort):
         genai.configure(api_key=self.api_key)
         self.model_name = resolved_model
         self.model = genai.GenerativeModel(resolved_model)
+        self._max_context_size = self._resolve_context_limit(resolved_model)
 
         logger.debug(
             "Provider configured",
@@ -50,11 +79,38 @@ class GeminiAdapter(AIProviderPort):
             model=self.model_name,
             max_tokens=self.max_tokens,
             temperature=self.temperature,
+            context_limit=self._max_context_size,
         )
 
     @property
     def provider_type(self) -> AIProviderType:
         return AIProviderType.GEMINI
+
+    @staticmethod
+    def _normalize_model_name(model_name: str) -> str:
+        """The SDK accepts both ``gemini-x`` and ``models/gemini-x``; look up the bare name."""
+        return model_name[len("models/") :] if model_name.startswith("models/") else model_name
+
+    @classmethod
+    def _resolve_context_limit(cls, model_name: str) -> int:
+        """Exact match, then the Gemini family limit, then a logged fallback."""
+        name = cls._normalize_model_name(model_name)
+        if name in CONTEXT_LIMITS:
+            return CONTEXT_LIMITS[name]
+        if name.startswith("gemini-"):
+            logger.debug(
+                "Resolved context limit by model family",
+                model=model_name,
+                context_limit=GEMINI_FAMILY_CONTEXT_LIMIT,
+            )
+            return GEMINI_FAMILY_CONTEXT_LIMIT
+        logger.warning(
+            "Unknown Gemini model; using fallback context limit",
+            model=model_name,
+            context_limit=DEFAULT_CONTEXT_LIMIT,
+            hint="pin a model listed in gemini_adapter.CONTEXT_LIMITS or add it",
+        )
+        return DEFAULT_CONTEXT_LIMIT
 
     def get_token_count(self, text: str) -> int:
         """Estimate token count for Gemini models."""
@@ -66,18 +122,33 @@ class GeminiAdapter(AIProviderPort):
             return len(text) // 4
 
     def get_max_context_size(self) -> int:
-        """Get maximum context size for the model."""
-        context_limits = {
-            "gemini-2.0-flash": 1048576,
-            "gemini-2.0-pro": 1048576,
-            "gemini-1.5-pro": 1048576,
-            "gemini-1.5-flash": 1048576,
-            "gemini-pro": 30720,
-            "gemini-pro-vision": 16384,
-        }
-        return context_limits.get(self.model_name, 30720)
+        """Get maximum input context size for the model."""
+        return self._max_context_size
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+    @staticmethod
+    def _extract_text(response: Any) -> str:
+        """Return the first candidate's text, or raise an actionable error.
+
+        ``response.text`` raises a bare ``ValueError`` when the candidate has no
+        parts, which happens when thinking tokens exhaust ``max_output_tokens``
+        or a safety filter fires.
+        """
+        candidates = getattr(response, "candidates", None) or []
+        if not candidates:
+            raise ProviderException("Gemini returned no response candidates")
+        candidate = candidates[0]
+        content = getattr(candidate, "content", None)
+        parts = getattr(content, "parts", None) or []
+        if not parts:
+            finish_reason = getattr(candidate, "finish_reason", None)
+            finish_name = getattr(finish_reason, "name", finish_reason)
+            raise ProviderException(
+                f"Gemini returned no content (finish_reason={finish_name}); "
+                "raise max_tokens (thinking tokens count against the output budget)"
+            )
+        return str(response.text).strip()
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10), reraise=True)
     async def generate_query(self, context: QueryContext) -> QueryResponse:
         """Generate SQL query using Gemini."""
         try:
@@ -100,9 +171,14 @@ class GeminiAdapter(AIProviderPort):
             # Parse response
             result = self._parse_response(response)
 
-            # Estimate token usage (Gemini doesn't provide exact counts in all cases)
-            prompt_tokens = self.get_token_count(full_prompt)
-            output_tokens = self.get_token_count(response.text)
+            # Prefer the exact usage reported by the API; fall back to estimates.
+            usage = getattr(response, "usage_metadata", None)
+            prompt_tokens = getattr(usage, "prompt_token_count", None) if usage is not None else None
+            output_tokens = getattr(usage, "candidates_token_count", None) if usage is not None else None
+            if prompt_tokens is None:
+                prompt_tokens = self.get_token_count(full_prompt)
+            if output_tokens is None:
+                output_tokens = self.get_token_count(result.get("_raw_response", ""))
 
             # Create QueryResponse
             metadata = {
@@ -224,10 +300,7 @@ Ensure the JSON is properly formatted with no syntax errors. Escape any quotes i
     def _parse_response(self, response) -> Dict[str, Any]:
         """Parse Gemini response."""
         try:
-            if not response.candidates:
-                raise ProviderException("No response candidates generated")
-
-            raw_content = response.text.strip()
+            raw_content = self._extract_text(response)
             content = raw_content
 
             # Log the raw response for debugging
@@ -254,6 +327,8 @@ Ensure the JSON is properly formatted with no syntax errors. Escape any quotes i
 
             return result
 
+        except ProviderException:
+            raise
         except json.JSONDecodeError as e:
             # Log the problematic content
             logger.error("JSON parsing failed", content=content, error=str(e))
@@ -312,7 +387,7 @@ Check for:
             )
 
             # Parse response
-            content = response.text.strip()
+            content = self._extract_text(response)
             if content.startswith("```json"):
                 content = content.replace("```json", "").replace("```", "").strip()
             elif content.startswith("```"):

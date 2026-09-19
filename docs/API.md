@@ -91,7 +91,7 @@ from nlp2sql import ProviderConfig
 config = ProviderConfig(
     provider="openai",
     api_key="sk-...",
-    model="gpt-4o",
+    model="gpt-5.6-terra",
     temperature=0.0,
     max_tokens=4000,
 )

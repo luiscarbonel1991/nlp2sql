@@ -22,7 +22,7 @@ async def test_multiple_ai_providers():
     # Test configuration for each provider
     providers = [
         {
-            "name": "OpenAI GPT-4",
+            "name": "OpenAI",
             "provider": "openai",
             "api_key": os.getenv("OPENAI_API_KEY"),
             "env_var": "OPENAI_API_KEY",
@@ -126,7 +126,7 @@ async def demo_provider_selection():
     use_cases = [
         {
             "use_case": "High accuracy complex queries",
-            "recommended": "OpenAI GPT-4",
+            "recommended": "OpenAI",
             "reason": "Most sophisticated reasoning",
         },
         {
@@ -137,7 +137,7 @@ async def demo_provider_selection():
         {
             "use_case": "Long context/large schemas",
             "recommended": "Anthropic Claude",
-            "reason": "200K token context window",
+            "reason": "1M token context window",
         },
         {
             "use_case": "Privacy-sensitive data",
@@ -152,15 +152,15 @@ async def demo_provider_selection():
         print(f"   Reason: {case['reason']}")
         print()
 
-    print("Cost Comparison (approx):")
-    print("   OpenAI GPT-4: $0.03/1K tokens")
-    print("   Anthropic Claude: $0.015/1K tokens")
-    print("   Google Gemini: $0.001/1K tokens")
+    print("Cost Comparison (approx, per 1M tokens in/out, default models):")
+    print("   OpenAI gpt-5.6-luna: $0.20 / $1.20")
+    print("   Anthropic claude-sonnet-5: $2 / $10")
+    print("   Google gemini-3.6-flash: $0.75 / $3.75")
     print()
-    print("Context Limits:")
-    print("   OpenAI GPT-4 Turbo: 128K tokens")
-    print("   Anthropic Claude: 200K tokens")
-    print("   Google Gemini Pro: 30K tokens")
+    print("Context Limits (default models):")
+    print("   OpenAI gpt-5.6-luna: 1.05M tokens (922K input)")
+    print("   Anthropic claude-sonnet-5: 1M tokens")
+    print("   Google gemini-3.6-flash: 1M tokens")
 
 
 if __name__ == "__main__":

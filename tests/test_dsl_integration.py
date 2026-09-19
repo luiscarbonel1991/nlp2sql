@@ -389,7 +389,7 @@ class TestEndToEndWithRealAI:
             provider=ProviderConfig(
                 provider="openai",
                 api_key=os.getenv("OPENAI_API_KEY"),
-                model="gpt-4o-mini",
+                model="gpt-5.6-terra",
                 temperature=0.0,
             ),
         )

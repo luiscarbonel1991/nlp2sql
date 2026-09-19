@@ -28,10 +28,13 @@ class ProviderConfig:
 
     SUPPORTED_PROVIDERS: ClassVar[frozenset[str]] = frozenset({"openai", "anthropic", "gemini"})
 
+    # Single source of truth for provider defaults: the adapters' DEFAULT_MODEL
+    # and Settings.get_provider_config() read from this map. Values are pinned
+    # snapshot IDs, not floating aliases.
     DEFAULT_MODELS: ClassVar[dict[str, str]] = {
-        "openai": "gpt-4o-mini",
-        "anthropic": "claude-sonnet-4-20250514",
-        "gemini": "gemini-2.0-flash",
+        "openai": "gpt-5.6-luna",
+        "anthropic": "claude-sonnet-5",
+        "gemini": "gemini-3.6-flash",
     }
 
     def __post_init__(self) -> None:
