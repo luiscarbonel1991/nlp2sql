@@ -22,6 +22,8 @@ pre-1.0.
 
 ## [Unreleased]
 
+## [0.2.0rc15] - 2026-09-18
+
 ### Changed
 - Default chat models refreshed to current, non-retired IDs. **User-visible: cost,
   latency and SQL style change for anyone who does not pin `model`.**
