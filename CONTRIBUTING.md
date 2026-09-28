@@ -233,6 +233,22 @@ Brief description of changes and why they're needed.
 4. **Documentation review** for user-facing changes
 5. **Merge** after approval
 
+## Releasing (maintainers)
+
+Packages are published only from a release tag. Both publish workflows refuse to run from a branch and check that the tag name is `v` followed by the `version` in `pyproject.toml`, so the latest commit on `main` never goes to PyPI by accident.
+
+1. **Bump the version** in every copy and move the `CHANGELOG.md` entries from `[Unreleased]` to a new `## [X.Y.Z] - YYYY-MM-DD` section. The copies are `pyproject.toml`, `src/nlp2sql/__init__.py`, `src/nlp2sql/config/settings.py`, `mcp_server/pyproject.toml` (`[project]` and `[tool.mcp]`), `mcp_server/__init__.py` and `uv.lock` (run `uv lock`). `tests/test_version_consistency.py` fails if any of them is out of sync.
+2. **Push the bump to `main` before creating the release.** The new tag points to whatever `main` is at that moment. To check a tag name against the current version, run `python .github/scripts/verify_release_tag.py vX.Y.Z`.
+3. **Create the GitHub Release** with a new tag `vX.Y.Z` targeting `main`. Publishing the release runs "Publish Python Package to Test PyPI" on that tag automatically.
+4. **Run the integration tests locally** on the tagged commit, with the test databases running (see [Development Setup](#development-setup)).
+5. **Publish to PyPI**: in **Actions**, open **Publish Python Package to PyPI**, click **Run workflow**, pick the tag under **Use workflow from** (Tags tab) and type `PRODUCTION`. From the command line:
+
+   ```bash
+   gh workflow run publish-pypi.yml --ref vX.Y.Z -f confirm_production=PRODUCTION
+   ```
+
+The PyPI workflow stops before building if the run is not on a tag, if the tag has no published GitHub Release, or if the tag does not match the package version. Only its final job, which runs no project code, can request a PyPI token.
+
 ## Enterprise Contribution Guidelines
 
 ### Performance Considerations
