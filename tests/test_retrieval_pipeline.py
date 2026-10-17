@@ -336,6 +336,61 @@ class TestSemanticValidationService:
         assert result.is_valid is False
         assert any(issue.category == "missing_required_dimension" for issue in result.issues)
 
+    @pytest.mark.asyncio
+    async def test_plan_fact_table_mismatch_is_a_warning_without_a_semantic_layer(self):
+        # rc15 field test: correct SQL was marked invalid because the heuristic plan picked
+        # "users" (a word in the question) as the fact table.
+        service = SemanticValidationService()
+        semantic_context = SemanticContext()
+        sql_intent_plan = SqlIntentPlanningService().build(
+            retrieval_plan=QueryAnalysisService().analyze("How many users have placed orders?"),
+            semantic_context=semantic_context,
+            relevant_tables=[("users", 0.9), ("orders", 0.8)],
+            examples=[],
+        )
+        assert sql_intent_plan.fact_table == "users"
+
+        result = await service.validate(
+            "SELECT COUNT(DISTINCT user_id) AS buyers FROM orders",
+            semantic_context,
+            sql_intent_plan,
+        )
+
+        assert result.is_valid is True
+        assert result.issues == []
+        assert any("suggested users as the main table" in warning for warning in result.warnings)
+
+    @pytest.mark.asyncio
+    async def test_canonical_table_mismatch_is_still_an_error(self):
+        service = SemanticValidationService()
+        semantic_context = SemanticContext(canonical_tables=["users"])
+
+        result = await service.validate("SELECT COUNT(DISTINCT user_id) FROM orders", semantic_context, None)
+
+        assert result.is_valid is False
+        assert [issue.category for issue in result.issues] == ["semantic_table_mismatch"]
+
+    @pytest.mark.asyncio
+    async def test_plan_dimensions_are_warnings_without_rules(self):
+        service = SemanticValidationService()
+        semantic_context = SemanticContext()
+        sql_intent_plan = SqlIntentPlanningService().build(
+            retrieval_plan=QueryAnalysisService().analyze("Revenue by source category per day"),
+            semantic_context=semantic_context,
+            relevant_tables=[("categories", 0.9), ("store_channel_sales", 0.8)],
+            examples=[],
+        )
+
+        result = await service.validate(
+            "SELECT metric_date, source_category, SUM(revenue) FROM store_channel_sales "
+            "GROUP BY metric_date, source_category",
+            semantic_context,
+            sql_intent_plan,
+        )
+
+        assert result.is_valid is True
+        assert result.issues == []
+
 
 class TestRepairLoop:
     """Tests for execution-aware repair without a real database."""
