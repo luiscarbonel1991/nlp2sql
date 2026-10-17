@@ -1,0 +1,58 @@
+[
+  {
+    "question": "How many users are there?",
+    "sql": "SELECT COUNT(*) AS user_count FROM users;"
+  },
+  {
+    "question": "How many users have placed orders?",
+    "sql": "SELECT COUNT(DISTINCT user_id) AS buyers FROM orders;"
+  },
+  {
+    "question": "What is the average review rating for each product?",
+    "sql": "SELECT p.name, AVG(r.rating) AS avg_rating FROM reviews r JOIN products p ON p.id = r.product_id GROUP BY p.name;"
+  },
+  {
+    "question": "Total revenue by store region",
+    "sql": "SELECT s.region, SUM(o.total_amount) AS revenue FROM orders o JOIN stores s ON s.id = o.store_id GROUP BY s.region;"
+  },
+  {
+    "question": "Top 5 products by units sold",
+    "sql": "SELECT p.name, SUM(oi.quantity) AS units FROM order_items oi JOIN products p ON p.id = oi.product_id GROUP BY p.name ORDER BY units DESC LIMIT 5;"
+  },
+  {
+    "question": "Monthly revenue in 2024",
+    "sql": "SELECT date_trunc('month', order_date) AS month, SUM(total_amount) AS revenue FROM orders WHERE order_date >= '2024-01-01' AND order_date < '2025-01-01' GROUP BY 1 ORDER BY 1;"
+  },
+  {
+    "question": "Which marketing channels are paid?",
+    "sql": "SELECT channel_name FROM marketing_channels WHERE is_paid;"
+  },
+  {
+    "question": "Conversion rate from sessions to orders by channel",
+    "sql": "SELECT mc.channel_name, SUM(d.orders_count)::numeric / NULLIF(SUM(d.sessions), 0) AS conversion_rate FROM daily_channel_metrics d JOIN marketing_channels mc ON mc.id = d.channel_id GROUP BY mc.channel_name;"
+  },
+  {
+    "question": "How many orders were cancelled?",
+    "sql": "SELECT COUNT(*) AS cancelled_orders FROM orders WHERE status = 'cancelled';"
+  },
+  {
+    "question": "Average order value per customer segment",
+    "sql": "SELECT u.customer_segment, AVG(o.total_amount) AS avg_order_value FROM orders o JOIN users u ON u.id = o.user_id GROUP BY u.customer_segment;"
+  },
+  {
+    "question": "Number of active products per category",
+    "sql": "SELECT c.name, COUNT(*) AS active_products FROM products p JOIN categories c ON c.id = p.category_id WHERE p.is_active GROUP BY c.name;"
+  },
+  {
+    "question": "List the stores in Europe",
+    "sql": "SELECT name FROM stores WHERE region = 'Europe';"
+  },
+  {
+    "question": "Which customers wrote verified reviews?",
+    "sql": "SELECT DISTINCT u.email FROM reviews r JOIN users u ON u.id = r.user_id WHERE r.is_verified;"
+  },
+  {
+    "question": "Revenue by source category per day",
+    "sql": "SELECT metric_date, source_category, SUM(revenue) AS revenue FROM store_channel_sales GROUP BY metric_date, source_category ORDER BY metric_date;"
+  }
+]

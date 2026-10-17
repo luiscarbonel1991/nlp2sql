@@ -144,3 +144,23 @@ async def postgres_available(postgres_url: str) -> str:
             pytest.fail(f"{message} (NLP2SQL_REQUIRE_INTEGRATION set — refusing to skip)")
         pytest.skip(message)
     return postgres_url
+
+
+@pytest.fixture
+def fake_openai(monkeypatch: pytest.MonkeyPatch):
+    """Point the real OpenAI SDK at a local fake API (see tests/fakes/fake_openai.py)."""
+    from fakes.fake_openai import FakeOpenAI
+
+    fake = FakeOpenAI().start()
+    monkeypatch.setenv("OPENAI_BASE_URL", fake.base_url)
+    yield fake
+    fake.stop()
+
+
+@pytest.fixture
+def isolated_caches(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    """Keep schema indexes, table caches and example indexes out of the working tree."""
+    monkeypatch.setenv("NLP2SQL_EMBEDDINGS_DIR", str(tmp_path / "embeddings"))
+    monkeypatch.setenv("NLP2SQL_EXAMPLES_DIR", str(tmp_path / "examples"))
+    monkeypatch.chdir(tmp_path)
+    return tmp_path
