@@ -123,6 +123,39 @@ class NLP2SQL:
 # ------------------------------------------------------------------
 
 
+def _resolve_embedding_provider(
+    provider: Optional[ProviderConfig],
+    embedding_provider: Optional[EmbeddingProviderPort],
+    embedding_provider_type: Optional[str],
+) -> Optional[EmbeddingProviderPort]:
+    """Pick the embedding provider ``connect()`` uses for schema search and examples.
+
+    An explicit instance or type always wins. Otherwise OpenAI chat reuses its API key
+    for OpenAI embeddings, and any other setup uses local embeddings when
+    sentence-transformers is installed, or no embeddings when it is not. The chat
+    provider name is never used as an embedding type: Anthropic and Gemini have no
+    embedding adapter.
+    """
+    from . import create_embedding_provider
+
+    if embedding_provider is not None:
+        return embedding_provider
+
+    openai_key = provider.api_key if provider is not None and provider.provider == "openai" else None
+    if embedding_provider_type is not None:
+        return create_embedding_provider(
+            provider=embedding_provider_type,
+            api_key=openai_key if embedding_provider_type == "openai" else None,
+        )
+    if provider is not None and provider.provider == "openai":
+        return create_embedding_provider(provider="openai", api_key=openai_key)
+    try:
+        return create_embedding_provider(provider="local")
+    except ImportError:
+        # create_and_initialize_service logs that table matching falls back to text search
+        return None
+
+
 async def connect(
     database_url: str,
     *,
@@ -154,9 +187,13 @@ async def connect(
         schema_filters: Optional filters (include_schemas, exclude_tables, etc.)
         embedding_provider: Pre-built embedding provider instance.
         embedding_provider_type: Embedding provider to auto-create (``"local"`` or ``"openai"``).
+            If neither this nor ``embedding_provider`` is given, OpenAI chat uses OpenAI
+            embeddings with the same API key; other providers use local embeddings when
+            ``nlp2sql[embeddings-local]`` is installed, or no embeddings otherwise.
         examples: Few-shot examples. Can be:
             - A list of dicts ``[{"question": ..., "sql": ..., "database_type": ...}]``
-              (auto-creates an ExampleStore with OpenAI embeddings)
+              (auto-creates an ExampleStore with the same embedding provider; ignored with a
+              warning when no embedding provider is available)
             - A pre-built ``ExampleRepositoryPort`` instance
         hooks: Grouped execution hooks for validation/repair in the public DSL.
         semantic_hooks: Grouped semantic hooks for business-aware retrieval and validation.
@@ -177,7 +214,7 @@ async def connect(
         result = await nlp.ask("Total sales by store last month")
         print(result.sql)
     """
-    from . import create_and_initialize_service, create_embedding_provider
+    from . import create_and_initialize_service
     from .schema.example_store import ExampleStore
 
     # Auto-detect database type from URL if not provided
@@ -187,35 +224,29 @@ async def connect(
         else:
             database_type = DatabaseType.POSTGRES
 
+    # One embedding provider serves both schema search and few-shot examples
+    embedding_provider = _resolve_embedding_provider(provider, embedding_provider, embedding_provider_type)
+
     # Auto-create ExampleStore from a plain list of dicts
     example_store: Optional[ExampleRepositoryPort] = None
     if isinstance(examples, list):
-        # Determine embedding provider: reuse explicit one, or auto-create from ProviderConfig
-        emb = embedding_provider
-        if emb is None:
-            emb_type = embedding_provider_type or (provider.provider if provider else None)
-            if emb_type:
-                try:
-                    api_key = provider.api_key if provider else None
-                    emb = create_embedding_provider(provider=emb_type, api_key=api_key)
-                except Exception as e:
-                    logger.warning("Could not auto-create embedding provider for examples", error=str(e))
-
-        if emb is not None:
+        if embedding_provider is not None:
             example_store = ExampleStore(
-                embedding_provider=emb,
+                embedding_provider=embedding_provider,
                 database_url=database_url,
                 schema_name=schema,
             )
             await example_store.add_examples(examples)
             logger.info("Examples loaded via connect()", count=len(examples))
+        else:
+            logger.warning(
+                "Few-shot examples ignored: no embedding provider is available. "
+                "Install nlp2sql[embeddings-local] or pass embedding_provider_type='openai'.",
+                count=len(examples),
+            )
     elif examples is not None:
         # Already an ExampleRepositoryPort instance
         example_store = examples
-
-    # Auto-infer embedding_provider_type from provider if not set
-    if embedding_provider is None and embedding_provider_type is None and provider is not None:
-        embedding_provider_type = provider.provider
 
     if hooks is not None:
         execution_port = execution_port or hooks.execution_port
@@ -232,7 +263,6 @@ async def connect(
         schema_name=schema,
         schema_filters=schema_filters,
         embedding_provider=embedding_provider,
-        embedding_provider_type=embedding_provider_type,
         example_store=example_store,
         provider_config=provider,
         execution_port=execution_port,
