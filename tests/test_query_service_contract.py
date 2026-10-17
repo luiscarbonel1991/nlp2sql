@@ -46,3 +46,42 @@ class TestSchemaBudget:
 
         context = service.ai_provider.generate_query.await_args.args[0]
         assert context.max_tokens == 300
+
+
+class TestValidity:
+    """is_valid must reflect read-only safety and execution, not only the LLM judge."""
+
+    @pytest.mark.asyncio
+    async def test_write_query_is_invalid_in_generate_only(self):
+        service = _service(sql="DELETE FROM users WHERE is_active = false")
+
+        result = await service.generate_sql("Remove inactive users", DatabaseType.POSTGRES)
+
+        assert result["validation"]["is_valid"] is False
+        assert any("Not a read-only query" in error for error in result["validation"]["errors"])
+
+    @pytest.mark.asyncio
+    async def test_failed_execution_makes_the_result_invalid(self):
+        service = _service()
+        service.execution_port = MagicMock()
+        service.execution_port.execute_readonly = AsyncMock(side_effect=RuntimeError('relation "users" does not exist'))
+
+        result = await service.generate_sql(
+            "How many users are there?", DatabaseType.POSTGRES, execution_mode="generate_and_validate"
+        )
+
+        assert result["metadata"]["execution_validation"]["success"] is False
+        assert result["validation"]["is_valid"] is False
+        assert any("Execution failed" in error for error in result["validation"]["errors"])
+
+    @pytest.mark.asyncio
+    async def test_successful_execution_keeps_the_result_valid(self):
+        service = _service()
+        service.execution_port = MagicMock()
+        service.execution_port.execute_readonly = AsyncMock(return_value={"row_count": 1, "execution_time_ms": 2.0})
+
+        result = await service.generate_sql(
+            "How many users are there?", DatabaseType.POSTGRES, execution_mode="generate_and_validate"
+        )
+
+        assert result["validation"]["is_valid"] is True

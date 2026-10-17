@@ -22,6 +22,25 @@ DANGEROUS_SQL_PATTERNS = [
     r"\bVACUUM\b",
 ]
 
+# Functions that run SQL on another connection or have effects outside the transaction.
+# Checked on the query without string literals, so keywords inside data never match.
+DANGEROUS_SQL_FUNCTIONS = [
+    "dblink",
+    "dblink_exec",
+    "dblink_send_query",
+    "pg_terminate_backend",
+    "pg_cancel_backend",
+    "pg_reload_conf",
+    "pg_read_file",
+    "pg_read_binary_file",
+    "lo_import",
+    "lo_export",
+    "set_config",
+    "setval",
+    "nextval",
+    "pg_sleep",
+]
+
 ALLOWED_QUERY_PREFIXES = ("SELECT", "WITH", "EXPLAIN")
 
 MAX_QUERY_ROWS = 1000
@@ -43,15 +62,21 @@ def is_safe_query(sql: str) -> tuple[bool, str]:
     if not any(sql_upper.startswith(prefix) for prefix in ALLOWED_QUERY_PREFIXES):
         return False, "Only SELECT, WITH, or EXPLAIN queries are allowed"
 
-    # Check for dangerous patterns
-    for pattern in DANGEROUS_SQL_PATTERNS:
-        if re.search(pattern, sql_upper, re.IGNORECASE):
-            return False, "Query contains prohibited operation"
-
-    # Check for multiple statements (SQL injection protection)
-    # Remove string literals before checking for semicolons
+    # Remove string literals and quoted identifiers so data like 'Gift Set' or
+    # 'please DELETE my account' does not look like a command
     sql_no_strings = re.sub(r"'(?:[^']|'')*'", "", sql)
     sql_no_strings = re.sub(r'"(?:[^"]|"")*"', "", sql_no_strings)
+
+    # Check for dangerous patterns
+    for pattern in DANGEROUS_SQL_PATTERNS:
+        if re.search(pattern, sql_no_strings, re.IGNORECASE):
+            return False, "Query contains prohibited operation"
+
+    for function in DANGEROUS_SQL_FUNCTIONS:
+        if re.search(rf"\b{function}\s*\(", sql_no_strings, re.IGNORECASE):
+            return False, f"Query calls prohibited function {function}()"
+
+    # Check for multiple statements (SQL injection protection)
     if ";" in sql_no_strings.rstrip(";"):
         return False, "Multiple SQL statements are not allowed"
 
