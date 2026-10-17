@@ -161,10 +161,11 @@ class QueryGenerationService:
                 database_type,
                 self.max_examples * 2,
             )
+            # The schema budget is its own setting; max_tokens only caps the response.
             schema_context = await self.schema_manager.get_optimal_schema_context(
                 retrieval_plan.retrieval_query,
                 database_type,
-                max_tokens or settings.max_schema_tokens,
+                settings.max_schema_tokens,
             )
             examples = await self._find_relevant_examples(
                 question,
