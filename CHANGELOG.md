@@ -30,6 +30,38 @@ pre-1.0.
 - CI: runs on `ubuntu-24.04` with the Node 24 versions of `actions/checkout` and
   `actions/setup-python`, and fails when any copy of the package version is out
   of sync with `pyproject.toml`.
+- CI: a `clean-install` job installs the built wheel in a fresh environment
+  without the lock file, and the integration lane runs the README Quick Start
+  and a false-invalid regression set against a local fake of the OpenAI API.
+
+### Fixed
+- `import nlp2sql` failed on a plain `pip install nlp2sql` since 0.2.0rc13
+  (`No module named 'yaml'`): `pyyaml` is now a declared dependency.
+- `connect()` raised `Unknown embedding provider` with
+  `ProviderConfig(provider="anthropic")` or `"gemini"`, and with OpenAI failed
+  unless `OPENAI_API_KEY` was exported, because the `ProviderConfig` key never
+  reached the embedding adapter. Without an explicit embedding provider,
+  OpenAI chat now uses OpenAI embeddings with the same key; other providers use
+  local embeddings when `nlp2sql[embeddings-local]` is installed and no
+  embeddings otherwise. Few-shot examples share that provider, and are skipped
+  with a warning when there is none.
+- Correct queries came back with `is_valid=False` when they did not use the
+  table the heuristic intent plan guessed from the question (4 of 14 in a
+  sample of realistic questions), even with no semantic layer. Plan-derived
+  expectations are now warnings; rules from a semantic layer are still errors.
+- `is_valid` was `True` for queries that write (`DELETE ...` in the default
+  `generate_only` mode) and for queries whose execution failed. Both are now
+  invalid, with the reason in the validation errors.
+- The read-only check rejected valid queries with keywords inside string
+  literals (`WHERE name = 'Gift Set'`), and allowed functions with side effects
+  such as `pg_terminate_backend`, `set_config`, `nextval` or `dblink`. It now
+  ignores literals and rejects those functions.
+- `generate_sql(max_tokens=...)` and the CLI `--max-tokens` (default 1000) also
+  capped the schema context sent to the model; the schema budget is now always
+  `NLP2SQL_MAX_SCHEMA_TOKENS`.
+- `nlp2sql setup` crashed when configuring a database (it called the
+  nonexistent `click.choice`), and offered MySQL and SQLite, which have no
+  adapter. It now offers PostgreSQL and Redshift.
 
 ## [0.2.0rc15] - 2026-09-18
 

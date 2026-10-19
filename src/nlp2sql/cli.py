@@ -602,29 +602,17 @@ def _setup_database():
     click.echo("\n[STATS] Database Configuration")
     click.echo("-" * 30)
 
-    db_type = click.choice(["postgresql", "mysql", "sqlite"], prompt="Select database type")
+    # Only the databases nlp2sql has adapters for
+    db_type = click.prompt("Select database type", type=click.Choice(["postgresql", "redshift"]), default="postgresql")
+    default_port = "5432" if db_type == "postgresql" else "5439"
 
-    if db_type == "postgresql":
-        host = click.prompt("Host", default="localhost")
-        port = click.prompt("Port", default="5432")
-        username = click.prompt("Username")
-        password = click.prompt("Password", hide_input=True)
-        database = click.prompt("Database name")
+    host = click.prompt("Host", default="localhost")
+    port = click.prompt("Port", default=default_port)
+    username = click.prompt("Username")
+    password = click.prompt("Password", hide_input=True)
+    database = click.prompt("Database name")
 
-        db_url = f"postgresql://{username}:{password}@{host}:{port}/{database}"
-
-    elif db_type == "mysql":
-        host = click.prompt("Host", default="localhost")
-        port = click.prompt("Port", default="3306")
-        username = click.prompt("Username")
-        password = click.prompt("Password", hide_input=True)
-        database = click.prompt("Database name")
-
-        db_url = f"mysql://{username}:{password}@{host}:{port}/{database}"
-
-    else:  # sqlite
-        db_path = click.prompt("Database file path")
-        db_url = f"sqlite:///{db_path}"
+    db_url = f"{db_type}://{username}:{password}@{host}:{port}/{database}"
 
     click.echo(f"\nNote: Connection string: {db_url}")
     click.echo("Hint: Save this to your environment:")

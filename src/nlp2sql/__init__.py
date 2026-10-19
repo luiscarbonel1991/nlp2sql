@@ -303,9 +303,10 @@ def create_query_service(
     if embedding_provider is None:
         if embedding_provider_type is not None:
             # Explicit provider requested - raise error if dependencies missing
+            # Reuse the chat key (from api_key or provider_config) only when chat is also OpenAI
             embedding_provider = create_embedding_provider(
                 provider=embedding_provider_type,
-                api_key=api_key if embedding_provider_type == "openai" else None,
+                api_key=_api_key if embedding_provider_type == "openai" and _provider_name == "openai" else None,
             )
         else:
             # No explicit provider - try local silently, fallback to None if deps missing

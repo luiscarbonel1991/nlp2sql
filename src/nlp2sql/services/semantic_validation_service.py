@@ -51,9 +51,10 @@ class SemanticValidationService:
         normalized_sql = self._normalize(sql)
         tables_used = self._extract_tables(sql)
 
+        # Business rules from the semantic layer are errors. Expectations that only come from
+        # the heuristic intent plan are warnings: the plan guesses its fact table and dimensions
+        # from question keywords, so a correct query that disagrees with it must stay valid.
         expected_tables = semantic_context.canonical_tables or []
-        if sql_intent_plan and sql_intent_plan.fact_table and not expected_tables:
-            expected_tables = [sql_intent_plan.fact_table]
         if expected_tables and not set(expected_tables) & set(tables_used):
             issues.append(
                 SemanticIssue(
@@ -61,6 +62,16 @@ class SemanticValidationService:
                     message=f"Expected one of the canonical tables {expected_tables}, but SQL used {tables_used or ['none']}.",
                     metadata={"expected_tables": expected_tables, "tables_used": tables_used},
                 )
+            )
+        elif (
+            not expected_tables
+            and sql_intent_plan
+            and sql_intent_plan.fact_table
+            and sql_intent_plan.fact_table not in tables_used
+        ):
+            warnings.append(
+                f"Structured plan suggested {sql_intent_plan.fact_table} as the main table, "
+                f"but SQL used {tables_used or ['none']}."
             )
 
         disallowed_tables = self._unique_ordered(
@@ -102,14 +113,7 @@ class SemanticValidationService:
             )
 
         required_dimensions = self._unique_ordered(
-            [
-                *[rule_dimension for rule in semantic_context.rules for rule_dimension in rule.required_dimensions],
-                *(
-                    sql_intent_plan.group_by
-                    if sql_intent_plan is not None
-                    else []
-                ),
-            ]
+            [rule_dimension for rule in semantic_context.rules for rule_dimension in rule.required_dimensions]
         )
         missing_dimensions = [
             required_dimension
@@ -123,6 +127,16 @@ class SemanticValidationService:
                     message=f"SQL is missing required business dimensions: {', '.join(missing_dimensions)}.",
                     metadata={"dimensions": missing_dimensions},
                 )
+            )
+
+        planned_dimensions = [
+            dimension
+            for dimension in (sql_intent_plan.group_by if sql_intent_plan is not None else [])
+            if dimension not in required_dimensions and self._normalize(dimension) not in normalized_sql
+        ]
+        if planned_dimensions:
+            warnings.append(
+                f"Structured plan expected dimensions not found in the SQL: {', '.join(planned_dimensions)}."
             )
 
         if sql_intent_plan and sql_intent_plan.group_by and "group by" not in normalized_sql:

@@ -19,6 +19,7 @@ from ..core.entities import (
     SemanticContext,
     SqlIntentPlan,
 )
+from ..core.sql_safety import is_safe_query
 from ..exceptions import QueryGenerationException, ValidationException
 from ..ports.ai_provider import AIProviderPort, QueryContext, QueryResponse
 from ..ports.cache import CachePort
@@ -161,10 +162,11 @@ class QueryGenerationService:
                 database_type,
                 self.max_examples * 2,
             )
+            # The schema budget is its own setting; max_tokens only caps the response.
             schema_context = await self.schema_manager.get_optimal_schema_context(
                 retrieval_plan.retrieval_query,
                 database_type,
-                max_tokens or settings.max_schema_tokens,
+                settings.max_schema_tokens,
             )
             examples = await self._find_relevant_examples(
                 question,
@@ -205,6 +207,13 @@ class QueryGenerationService:
                 semantic_context=semantic_context,
                 sql_intent_plan=sql_intent_plan,
             )
+
+            if execution_validation.get("enabled") and execution_validation.get("success") is False:
+                issues_key = "errors" if "errors" in validation_result else "issues"
+                validation_result.setdefault(issues_key, []).append(
+                    f"Execution failed: {execution_validation.get('error') or 'unknown error'}"
+                )
+                validation_result["is_valid"] = False
 
             result_metadata = {
                 **(response.metadata or {}),
@@ -541,6 +550,12 @@ class QueryGenerationService:
             validation_result["is_valid"] = False
         if semantic_validation.warnings:
             validation_result["warnings"].extend(semantic_validation.warnings)
+
+        # Checked in every mode: generate_only results must never look valid when they write
+        is_safe, safety_error = is_safe_query(sql)
+        if not is_safe:
+            validation_result[issues_key].append(f"Not a read-only query: {safety_error}")
+            validation_result["is_valid"] = False
 
         return validation_result
 
