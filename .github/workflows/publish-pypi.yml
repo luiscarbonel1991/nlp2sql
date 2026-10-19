@@ -1,86 +1,113 @@
 name: Publish Python Package to PyPI
 
+# Production releases are decided by a tag: run this workflow from the release
+# tag (Run workflow -> Use workflow from -> Tags -> vX.Y.Z). A run from a branch
+# fails before anything is checked out. See "Releasing (maintainers)" in
+# CONTRIBUTING.md.
+
 on:
-  release:
-    types: [published]
   workflow_dispatch:
     inputs:
-      tag:
-        description: 'Git tag to publish (e.g., v0.2.0, v0.3.0)'
-        required: false
-        default: 'latest'
-      version:
-        description: 'Package version to publish (e.g., 0.2.0, 0.3.0)'
-        required: false
-        default: 'auto-detect'
       confirm_production:
         description: 'Type "PRODUCTION" to confirm publishing to live PyPI'
         required: true
         default: ''
 
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    environment: pypi # This should match the environment name you provided in GitHub
+permissions: {}
 
+jobs:
+  build:
+    runs-on: ubuntu-24.04
     permissions:
-      id-token: write # This is required for OpenID Connect
       contents: read
 
     steps:
-    - name: Validate production confirmation
+    - name: Require a tag ref
       run: |
-        if [ "${{ github.event.inputs.confirm_production }}" != "PRODUCTION" ]; then
-          echo "❌ Production confirmation required. Please type 'PRODUCTION' to confirm."
+        if [ "$GITHUB_REF_TYPE" != "tag" ]; then
+          echo "::error title=Not a tag::Run this workflow from a release tag (Use workflow from -> Tags), not from '$GITHUB_REF_NAME'."
           exit 1
         fi
-        echo "✅ Production deployment confirmed"
-    
-    - name: Checkout specific tag or latest
-      uses: actions/checkout@v4
-      with:
-        ref: ${{ github.event.inputs.tag != 'latest' && github.event.inputs.tag || github.ref }}
-        fetch-depth: 0
-    
-    - name: Display selected tag/version info
+
+    - name: Validate production confirmation
+      env:
+        CONFIRM_PRODUCTION: ${{ inputs.confirm_production }}
       run: |
-        echo "🏷️ Selected tag: ${{ github.event.inputs.tag || 'latest' }}"
-        echo "📦 Target version: ${{ github.event.inputs.version || 'auto-detect' }}"
-        echo "🔍 Current commit: $(git rev-parse HEAD)"
-        echo "🌟 Current tag: $(git describe --tags --exact-match 2>/dev/null || echo 'No tag')"
-        echo "🚀 Publishing to: PRODUCTION PyPI"
+        if [ "$CONFIRM_PRODUCTION" != "PRODUCTION" ]; then
+          echo "::error::Production confirmation required. Type PRODUCTION to confirm."
+          exit 1
+        fi
+
+    - name: Require a published GitHub Release for the tag
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        is_draft=$(gh release view "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --json isDraft -q .isDraft) || {
+          echo "::error::No GitHub Release found for $GITHUB_REF_NAME. Create and publish the release first."
+          exit 1
+        }
+        if [ "$is_draft" != "false" ]; then
+          echo "::error::The GitHub Release for $GITHUB_REF_NAME is still a draft."
+          exit 1
+        fi
+
+    - name: Checkout the tag
+      uses: actions/checkout@v7
+      with:
+        persist-credentials: false
 
     - name: Set up Python 3.12
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v7
       with:
         python-version: '3.12'
+
+    - name: Verify the tag matches the package version
+      run: |
+        echo "Tag: $GITHUB_REF_NAME, commit: $GITHUB_SHA"
+        python .github/scripts/verify_release_tag.py "$GITHUB_REF_NAME"
 
     - name: Install uv
       run: python -m pip install uv
 
     - name: Install project dependencies with uv
       run: |
-        # Install main dependencies first
         uv pip install --system .
-        # Then install dev dependencies
         uv pip install --system ".[dev]"
-        # Verify structlog is installed
-        python -c "import structlog; print(f'structlog version: {structlog.__version__}')"
 
-    - name: Install build and twine
-      run: python -m pip install build twine
-
-    - name: List installed packages (debug)
-      run: pip list | grep -E "(structlog|pytest)"
+    - name: Install build
+      run: python -m pip install build
 
     - name: Run tests
       env:
         PYTHONPATH: src
-      run: |
-        pytest
+      run: pytest
 
     - name: Build package
       run: python -m build
+
+    - name: Upload distributions
+      uses: actions/upload-artifact@v7
+      with:
+        name: dist
+        path: dist/
+        if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    environment: pypi
+
+    # Only this job can request a PyPI token (Trusted Publishing via OIDC), and
+    # it runs no project or third-party Python code.
+    permissions:
+      id-token: write
+
+    steps:
+    - name: Download distributions
+      uses: actions/download-artifact@v8
+      with:
+        name: dist
+        path: dist/
 
     - name: Publish to PyPI
       uses: pypa/gh-action-pypi-publish@release/v1

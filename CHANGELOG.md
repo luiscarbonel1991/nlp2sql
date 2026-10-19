@@ -22,6 +22,15 @@ pre-1.0.
 
 ## [Unreleased]
 
+### Changed
+- Release: packages are published to PyPI only from a release tag whose name
+  matches the `pyproject.toml` version and that has a published GitHub Release.
+  The publish workflows build in one job and upload from another, so only the
+  upload job can request a PyPI token.
+- CI: runs on `ubuntu-24.04` with the Node 24 versions of `actions/checkout` and
+  `actions/setup-python`, and fails when any copy of the package version is out
+  of sync with `pyproject.toml`.
+
 ## [0.2.0rc15] - 2026-09-18
 
 ### Changed
