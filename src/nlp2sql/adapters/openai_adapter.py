@@ -264,6 +264,8 @@ class OpenAIAdapter(AIProviderPort):
 
             content = response.choices[0].message.content or ""
             result = json.loads(content)
+            # Reported so the service can account for every LLM call of a question
+            result["_tokens_used"] = getattr(response.usage, "total_tokens", 0) or 0
             return result
 
         except Exception as e:

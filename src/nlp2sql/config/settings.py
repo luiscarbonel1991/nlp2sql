@@ -64,6 +64,8 @@ class Settings(BaseSettings):
     default_max_tokens: int = Field(default=2000, validation_alias="NLP2SQL_MAX_TOKENS")
     max_examples: int = Field(default=5, validation_alias="NLP2SQL_MAX_EXAMPLES")
     max_prompt_examples: int = Field(default=3, validation_alias="NLP2SQL_MAX_PROMPT_EXAMPLES")
+    # A second LLM call that reviews the generated SQL; deterministic checks always run
+    llm_validation: bool = Field(default=False, validation_alias="NLP2SQL_LLM_VALIDATION")
     retry_attempts: int = Field(default=3, validation_alias="NLP2SQL_RETRY_ATTEMPTS")
     retry_delay_seconds: float = Field(default=1.0, validation_alias="NLP2SQL_RETRY_DELAY")
 

@@ -379,6 +379,9 @@ Check for:
             result.setdefault("issues", [])
             result.setdefault("suggestions", [])
             result.setdefault("complexity", "moderate")
+            # Reported so the service can account for every LLM call of a question
+            usage = getattr(message, "usage", None)
+            result["_tokens_used"] = (getattr(usage, "input_tokens", 0) or 0) + (getattr(usage, "output_tokens", 0) or 0)
 
             return result
 

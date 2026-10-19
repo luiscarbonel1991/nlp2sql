@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 import hashlib
 import json
 import re
@@ -45,6 +45,35 @@ from .sql_intent_planning_service import SqlIntentPlanningService
 logger = structlog.get_logger()
 
 
+@dataclass
+class _TokenUsage:
+    """Tokens spent by every LLM call made while answering one question."""
+
+    generation: int = 0
+    validation: int = 0
+    llm_calls: int = 0
+
+    def add_generation(self, response: QueryResponse) -> None:
+        self.generation += response.tokens_used or 0
+        self.llm_calls += 1
+
+    def add_validation(self, tokens: int) -> None:
+        self.validation += tokens or 0
+        self.llm_calls += 1
+
+    @property
+    def total(self) -> int:
+        return self.generation + self.validation
+
+    def to_metadata(self) -> dict[str, int]:
+        return {
+            "total": self.total,
+            "generation": self.generation,
+            "validation": self.validation,
+            "llm_calls": self.llm_calls,
+        }
+
+
 class QueryGenerationService:
     """Service for converting natural language to SQL."""
 
@@ -64,9 +93,13 @@ class QueryGenerationService:
         repair_policy: RepairPolicyPort | None = None,
         semantic_resolver: SemanticResolverPort | None = None,
         semantic_validator: SemanticValidatorPort | None = None,
+        llm_validation: bool | None = None,
     ):
         self.ai_provider = ai_provider
         self.schema_repository = schema_repository
+        # Off by default: execution and the deterministic checks give a stronger signal
+        # than asking the same model to review its own SQL, at no extra latency or cost.
+        self.llm_validation = settings.llm_validation if llm_validation is None else llm_validation
         self.cache = cache
         self.query_optimizer = query_optimizer
         self.query_validator = query_validator
@@ -199,6 +232,7 @@ class QueryGenerationService:
                 },
             )
 
+            token_usage = _TokenUsage()
             response, validation_result, execution_validation, repair_attempts = await self._generate_response_pipeline(
                 query_context=query_context,
                 database_type=database_type,
@@ -206,6 +240,7 @@ class QueryGenerationService:
                 timeout_seconds=timeout_seconds,
                 semantic_context=semantic_context,
                 sql_intent_plan=sql_intent_plan,
+                token_usage=token_usage,
             )
 
             if execution_validation.get("enabled") and execution_validation.get("success") is False:
@@ -225,6 +260,7 @@ class QueryGenerationService:
                 "selected_examples": [example.get("metadata", {}) for example in query_context.examples],
                 "repair_attempts": repair_attempts,
                 "execution_validation": execution_validation,
+                "token_usage": token_usage.to_metadata(),
             }
 
             result = {
@@ -233,7 +269,8 @@ class QueryGenerationService:
                 "confidence": response.confidence,
                 "provider": response.provider,
                 "database_type": database_type.value,
-                "tokens_used": response.tokens_used,
+                # Every LLM call for this question: retries, repairs and LLM validation included
+                "tokens_used": token_usage.total,
                 "generation_time_ms": (datetime.now() - start_time).total_seconds() * 1000,
                 "validation": validation_result,
                 "schema_context_length": len(schema_context),
@@ -253,7 +290,8 @@ class QueryGenerationService:
                 "SQL generated successfully",
                 question=question[:50],
                 confidence=response.confidence,
-                tokens_used=response.tokens_used,
+                tokens_used=token_usage.total,
+                llm_calls=token_usage.llm_calls,
                 valid=validation_result.get("is_valid", False),
                 execution_mode=execution_mode,
             )
@@ -275,7 +313,9 @@ class QueryGenerationService:
             schema_context = await self.schema_manager.get_optimal_schema_context(
                 sql, database_type, settings.max_schema_tokens
             )
+            # An explicit validate() request always asks the LLM, regardless of llm_validation
             validation_result = await self.ai_provider.validate_query(sql, schema_context)
+            validation_result["tokens_used"] = validation_result.pop("_tokens_used", 0)
             validation_result["column_errors"] = await self._validate_column_names(sql)
             validation_result["dialect_issues"] = self._validate_dialect_rules(sql, database_type)
 
@@ -374,8 +414,11 @@ class QueryGenerationService:
         timeout_seconds: int,
         semantic_context: SemanticContext | None = None,
         sql_intent_plan: SqlIntentPlan | None = None,
+        token_usage: _TokenUsage | None = None,
     ) -> tuple[QueryResponse, dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
+        token_usage = token_usage if token_usage is not None else _TokenUsage()
         response = await self.ai_provider.generate_query(query_context)
+        token_usage.add_generation(response)
         repair_attempts: list[dict[str, Any]] = []
 
         while True:
@@ -385,6 +428,7 @@ class QueryGenerationService:
                 database_type,
                 semantic_context=semantic_context,
                 sql_intent_plan=sql_intent_plan,
+                token_usage=token_usage,
             )
             execution_validation = {"enabled": execution_mode != "generate_only", "success": None}
 
@@ -392,6 +436,7 @@ class QueryGenerationService:
                 logger.info("Column validation failed, retrying", errors=validation_result["column_errors"])
                 query_context = self._build_column_retry_context(query_context, validation_result["column_errors"])
                 response = await self.ai_provider.generate_query(query_context)
+                token_usage.add_generation(response)
                 repair_attempts.append(
                     {"type": "column_retry", "errors": validation_result["column_errors"], "attempt": len(repair_attempts) + 1}
                 )
@@ -409,6 +454,7 @@ class QueryGenerationService:
                     logger.info("Semantic validation failed, retrying", issues=issue_messages)
                     query_context = self._build_semantic_retry_context(query_context, issue_messages)
                     response = await self.ai_provider.generate_query(query_context)
+                    token_usage.add_generation(response)
                     repair_attempts.append(
                         {
                             "type": "semantic_retry",
@@ -448,6 +494,7 @@ class QueryGenerationService:
                 return response, validation_result, execution_validation, repair_attempts
 
             response = execution_validation["repaired_response"]
+            token_usage.add_generation(response)
 
     async def _execute_or_repair(
         self,
@@ -527,8 +574,17 @@ class QueryGenerationService:
         database_type: DatabaseType,
         semantic_context: SemanticContext | None = None,
         sql_intent_plan: SqlIntentPlan | None = None,
+        token_usage: _TokenUsage | None = None,
     ) -> dict[str, Any]:
-        validation_result = await self.ai_provider.validate_query(sql, schema_context)
+        if self.llm_validation:
+            validation_result = await self.ai_provider.validate_query(sql, schema_context)
+            if token_usage is not None:
+                token_usage.add_validation(validation_result.pop("_tokens_used", 0))
+        else:
+            # The deterministic checks below (columns, dialect, semantics, read-only) decide
+            validation_result = {"is_valid": True, "errors": [], "warnings": []}
+        validation_result.pop("_tokens_used", None)
+        validation_result["llm_validation"] = self.llm_validation
         column_errors = await self._validate_column_names(sql)
         dialect_issues = self._validate_dialect_rules(sql, database_type)
         semantic_validation = await self.semantic_validation_service.validate(sql, semantic_context, sql_intent_plan)

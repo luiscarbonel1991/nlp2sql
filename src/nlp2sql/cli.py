@@ -360,6 +360,11 @@ def inspect(
     default="auto",
     help="Embedding provider: 'auto' (try local, fallback), 'local', 'openai', or 'none' (disable)",
 )
+@click.option(
+    "--llm-validation",
+    is_flag=True,
+    help="Also ask the LLM to review the generated SQL (a second call; default: NLP2SQL_LLM_VALIDATION)",
+)
 @click.pass_context
 def query(
     ctx,
@@ -383,6 +388,7 @@ def query(
     run_validation: bool,
     repair: bool,
     embedding_provider: str,
+    llm_validation: bool,
 ):
     """Generate SQL from natural language question with advanced options."""
     verbose = ctx.obj.get("verbose", False)
@@ -461,6 +467,8 @@ def query(
                 schema_name=schema,
                 embedding_provider_type=embedding_provider_type,
                 example_store=example_store,
+                # Without the flag, NLP2SQL_LLM_VALIDATION decides
+                llm_validation=True if llm_validation else None,
             )
 
             # Generate SQL

@@ -400,6 +400,9 @@ Check for:
             result.setdefault("issues", [])
             result.setdefault("suggestions", [])
             result.setdefault("complexity", "moderate")
+            # Reported so the service can account for every LLM call of a question
+            usage = getattr(response, "usage_metadata", None)
+            result["_tokens_used"] = getattr(usage, "total_token_count", 0) or 0
 
             return result
 

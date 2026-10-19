@@ -219,6 +219,7 @@ def create_query_service(
     semantic_validator: SemanticValidatorPort | None = None,
     *,
     provider_config: Optional[ProviderConfig] = None,
+    llm_validation: Optional[bool] = None,
 ) -> QueryGenerationService:
     """
     Create a configured query service instance.
@@ -239,6 +240,8 @@ def create_query_service(
         provider_config: Optional ProviderConfig for full control over provider settings
             (model, temperature, max_tokens, extra_kwargs). Individual kwargs like api_key
             and model take precedence over values in provider_config.
+        llm_validation: Also ask the LLM to review each generated query (a second call per
+            question). If None, uses NLP2SQL_LLM_VALIDATION (default: off).
 
     Returns:
         Configured QueryGenerationService instance
@@ -352,6 +355,7 @@ def create_query_service(
         repair_policy=repair_policy,
         semantic_resolver=semantic_resolver,
         semantic_validator=semantic_validator,
+        llm_validation=llm_validation,
     )
 
 
@@ -373,6 +377,7 @@ async def create_and_initialize_service(
     semantic_validator: SemanticValidatorPort | None = None,
     *,
     provider_config: Optional[ProviderConfig] = None,
+    llm_validation: Optional[bool] = None,
 ) -> QueryGenerationService:
     """
     Create and initialize a query service with automatic schema loading.
@@ -393,6 +398,8 @@ async def create_and_initialize_service(
         schema_name: Database schema name (default: 'public')
         example_store: Optional pre-loaded few-shot examples for better SQL generation
         provider_config: Optional ProviderConfig for full control over provider settings
+        llm_validation: Also ask the LLM to review each generated query. If None, uses
+            NLP2SQL_LLM_VALIDATION (default: off).
 
     Returns:
         Initialized QueryGenerationService ready for queries
@@ -423,6 +430,7 @@ async def create_and_initialize_service(
         semantic_resolver,
         semantic_validator,
         provider_config=provider_config,
+        llm_validation=llm_validation,
     )
     await service.initialize(database_type)
     return service

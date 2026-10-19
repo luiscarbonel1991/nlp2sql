@@ -4,6 +4,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from nlp2sql.adapters.default_error_classifier import DefaultErrorClassifier
+from nlp2sql.adapters.default_repair_policy import DefaultRepairPolicy
 from nlp2sql.config.settings import settings
 from nlp2sql.core.entities import DatabaseType
 from nlp2sql.ports.ai_provider import QueryResponse
@@ -85,3 +87,64 @@ class TestValidity:
         )
 
         assert result["validation"]["is_valid"] is True
+
+
+class TestLlmValidationAndTokenUsage:
+    """LLM validation is opt-in, and tokens_used covers every LLM call of a question."""
+
+    @pytest.mark.asyncio
+    async def test_llm_validation_is_off_by_default(self):
+        service = _service()
+
+        result = await service.generate_sql("How many users are there?", DatabaseType.POSTGRES)
+
+        service.ai_provider.validate_query.assert_not_awaited()
+        assert result["validation"]["is_valid"] is True
+        assert result["validation"]["llm_validation"] is False
+        assert result["tokens_used"] == 10
+        assert result["metadata"]["token_usage"] == {"total": 10, "generation": 10, "validation": 0, "llm_calls": 1}
+
+    @pytest.mark.asyncio
+    async def test_llm_validation_on_request_counts_its_tokens(self):
+        service = _service()
+        service.llm_validation = True
+        service.ai_provider.validate_query = AsyncMock(
+            return_value={"is_valid": True, "errors": [], "warnings": [], "_tokens_used": 7}
+        )
+
+        result = await service.generate_sql("How many users are there?", DatabaseType.POSTGRES)
+
+        service.ai_provider.validate_query.assert_awaited_once()
+        assert result["tokens_used"] == 17
+        assert result["metadata"]["token_usage"] == {"total": 17, "generation": 10, "validation": 7, "llm_calls": 2}
+        assert "_tokens_used" not in result["validation"]
+
+    @pytest.mark.asyncio
+    async def test_llm_validation_verdict_still_applies_when_enabled(self):
+        service = _service()
+        service.llm_validation = True
+        service.ai_provider.validate_query = AsyncMock(
+            return_value={"is_valid": False, "errors": ["wrong join"], "warnings": [], "_tokens_used": 7}
+        )
+
+        result = await service.generate_sql("How many users are there?", DatabaseType.POSTGRES)
+
+        assert result["validation"]["is_valid"] is False
+
+    @pytest.mark.asyncio
+    async def test_repair_calls_are_counted(self):
+        service = _service()
+        service.error_classifier = DefaultErrorClassifier()
+        service.repair_policy = DefaultRepairPolicy(max_attempts=2)
+        service.execution_port = MagicMock()
+        service.execution_port.execute_readonly = AsyncMock(
+            side_effect=[RuntimeError('column "user_name" does not exist'), {"row_count": 1, "execution_time_ms": 1.0}]
+        )
+
+        result = await service.generate_sql(
+            "How many users are there?", DatabaseType.POSTGRES, execution_mode="generate_validate_repair"
+        )
+
+        assert result["metadata"]["execution_validation"]["success"] is True
+        assert result["tokens_used"] == 20
+        assert result["metadata"]["token_usage"]["llm_calls"] == 2

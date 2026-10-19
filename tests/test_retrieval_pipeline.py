@@ -425,6 +425,7 @@ class TestRepairLoop:
         service.query_optimizer = None
         service.enable_query_optimization = True
         service.query_validator = None
+        service.llm_validation = False
         service.execution_port = MagicMock()
         service.execution_port.execute_readonly = AsyncMock(
             side_effect=[Exception("column bad_column does not exist"), {"row_count": 1, "execution_time_ms": 3.2}]
@@ -486,6 +487,7 @@ class TestRepairLoop:
         service.query_optimizer = None
         service.enable_query_optimization = True
         service.query_validator = None
+        service.llm_validation = False
         service.execution_port = MagicMock()
         service.execution_port.execute_readonly = AsyncMock(return_value={"row_count": 1, "execution_time_ms": 1.2})
         service.error_classifier = DefaultErrorClassifier()
