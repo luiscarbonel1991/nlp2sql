@@ -73,6 +73,7 @@ export NLP2SQL_EMBEDDING_PROVIDER=local
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `NLP2SQL_LLM_VALIDATION` | `false` | Also ask the LLM to review each generated query (a second call per question) |
 | `NLP2SQL_LOG_LEVEL` | `INFO` | Logging verbosity |
 | `NLP2SQL_CACHE_ENABLED` | `true` | Enable or disable query-result caching |
 | `NLP2SQL_ENV` | unset | Optional environment label |
@@ -183,6 +184,12 @@ The runtime has three practical execution modes.
 | `generate_only` | fast generation, prompt iteration, or no execution port available |
 | `generate_and_validate` | safe validation of generated SQL against a readonly execution target |
 | `generate_validate_repair` | production-like usage where repair is worth the extra latency |
+
+Every mode checks column names, dialect rules, semantic rules and that the query is read-only,
+without extra LLM calls. An additional LLM review of the generated SQL is off by default: it
+doubles the latency of each question, and executing the query against the database gives a
+stronger signal. Turn it on with `connect(..., llm_validation=True)`,
+`NLP2SQL_LLM_VALIDATION=true` or `nlp2sql query --llm-validation`.
 
 ### Python
 

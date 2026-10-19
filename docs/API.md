@@ -57,6 +57,7 @@ nlp = await nlp2sql.connect(
 | `hooks`                   | `ExecutionHooks | None`                     | Execution, classification, and repair hooks                         |
 | `semantic_hooks`          | `SemanticHooks | None`                      | Semantic resolver, validator, and optional default semantic context |
 | `semantic_context`        | `SemanticContext | dict | None`             | Default semantic context applied to future `ask()` calls            |
+| `llm_validation`          | `bool | None`                               | Also ask the LLM to review each query (a second call). Default: `NLP2SQL_LLM_VALIDATION`, off |
 
 
 ### `hooks`
@@ -157,7 +158,7 @@ If you do not pass `execution_mode`, the library infers it from `validate` and `
 | `explanation`        | `str | None`        | Optional natural-language explanation          |
 | `provider`           | `str`               | Provider that generated the SQL                |
 | `database_type`      | `str`               | Postgres or Redshift                           |
-| `tokens_used`        | `int`               | Tokens consumed                                |
+| `tokens_used`        | `int`               | Tokens of every LLM call made for the question |
 | `generation_time_ms` | `float`             | End-to-end generation time                     |
 | `examples_used`      | `int`               | Count of selected examples                     |
 | `metadata`           | `dict[str, object]` | Runtime metadata for debugging and integration |
@@ -175,6 +176,7 @@ The metadata payload is intentionally rich. Common fields include:
 | `selected_examples`    | Few-shot examples selected for prompting      |
 | `repair_attempts`      | Repair loop details when repair is enabled    |
 | `execution_validation` | Execution-time validation outcome             |
+| `token_usage`          | `total`, `generation`, `validation` and `llm_calls` for the question |
 | `analysis`             | Query analysis hints                          |
 
 
@@ -272,28 +274,41 @@ print(result["validation"]["is_valid"])
 
 ## Error Handling
 
+`ask()` raises `QueryGenerationException` when SQL cannot be generated. The underlying error is
+its `__cause__`, typed so callers can react to each case:
+
 ```python
 from nlp2sql.exceptions import (
-    ProviderException,
+    ProviderAuthenticationError,
+    ProviderRateLimitError,
+    ProviderRequestError,
+    ProviderUnavailableError,
     QueryGenerationException,
     SchemaException,
-    SecurityException,
     TokenLimitException,
 )
 
 try:
     result = await nlp.ask("Show revenue by month")
-except TokenLimitException:
-    print("The schema context is too large. Add schema filters.")
+except QueryGenerationException as error:
+    cause = error.__cause__
+    if isinstance(cause, ProviderAuthenticationError):
+        print("Invalid or unauthorized API key (HTTP 401/403).")
+    elif isinstance(cause, TokenLimitException):
+        print("The schema context is too large. Add schema filters.")
+    elif isinstance(cause, (ProviderRateLimitError, ProviderUnavailableError)):
+        print("Transient provider error; already retried three times.")
+    elif isinstance(cause, ProviderRequestError):
+        print("The provider rejected the request, e.g. an unknown model.")
+    else:
+        print("The provider could not generate SQL.")
 except SchemaException:
     print("Database connection or schema discovery failed.")
-except QueryGenerationException:
-    print("The provider could not generate SQL.")
-except ProviderException:
-    print("Provider auth, network, or rate-limit error.")
-except SecurityException:
-    print("Generated SQL failed safety checks.")
 ```
+
+Only rate-limit and unavailable errors are retried; authentication and request errors fail on
+the first attempt. Queries that are not read-only come back with `is_valid=False` and are never
+executed.
 
 ## CLI Reference
 
