@@ -22,6 +22,8 @@ pre-1.0.
 
 ## [Unreleased]
 
+## [0.2.0rc16] - 2026-10-19
+
 ### Changed
 - Release: packages are published to PyPI only from a release tag whose name
   matches the `pyproject.toml` version and that has a published GitHub Release.
