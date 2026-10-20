@@ -1,22 +1,34 @@
-"""Translate provider SDK errors into nlp2sql exceptions.
+"""Translate provider SDK errors into nlp2sql exceptions, and decide what is retried.
 
 The AI adapters retry only transient failures. Before, every exception was retried
 three times with backoff, so an invalid API key took about 8 seconds to surface.
 Works without importing any SDK: OpenAI and Anthropic errors carry ``status_code``,
 google.api_core errors carry an integer ``code``.
+
+Output that is not the expected JSON is a different failure: the request worked, the
+model answered badly. ``call_with_format_retry`` asks again once, without waiting,
+and counts the tokens of both answers.
 """
 
-from typing import Optional
+from typing import Any, Awaitable, Callable, Dict, NamedTuple, Optional, TypeVar
+
+import structlog
 
 from ..exceptions import (
     ProviderAuthenticationError,
     ProviderException,
     ProviderRateLimitError,
     ProviderRequestError,
+    ProviderResponseFormatError,
     ProviderUnavailableError,
 )
 
+logger = structlog.get_logger()
+
 TRANSIENT_PROVIDER_ERRORS = (ProviderRateLimitError, ProviderUnavailableError)
+FORMAT_RETRY_ATTEMPTS = 2
+
+ResponseT = TypeVar("ResponseT")
 
 
 def _http_status(exc: BaseException) -> Optional[int]:
@@ -51,3 +63,37 @@ def classify_provider_error(exc: BaseException, message: str) -> ProviderExcepti
     if _is_transport_error(exc):
         return ProviderUnavailableError(message)
     return ProviderException(message)
+
+
+class ParsedGeneration(NamedTuple):
+    response: Any
+    result: Dict[str, Any]
+    tokens_used: int
+    format_retries: int
+
+
+async def call_with_format_retry(
+    send: Callable[[], Awaitable[ResponseT]],
+    parse: Callable[[ResponseT], Dict[str, Any]],
+    tokens_of: Callable[[ResponseT], int],
+    *,
+    provider: str,
+    attempts: int = FORMAT_RETRY_ATTEMPTS,
+) -> ParsedGeneration:
+    """Send a generation request and parse it, asking again when the output is malformed.
+
+    Tokens are read before parsing, so a discarded answer still counts. Every other
+    error propagates on the first attempt; transient ones are retried by the caller.
+    """
+    tokens_used = 0
+    for attempt in range(1, attempts + 1):
+        response = await send()
+        tokens_used += tokens_of(response)
+        try:
+            return ParsedGeneration(response, parse(response), tokens_used, attempt - 1)
+        except ProviderResponseFormatError as error:
+            error.details["tokens_used"] = tokens_used
+            if attempt == attempts:
+                raise
+            logger.warning("Malformed model output, asking again", provider=provider, error=str(error))
+    raise ValueError("attempts must be at least 1")

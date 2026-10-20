@@ -55,7 +55,8 @@ class _TokenUsage:
 
     def add_generation(self, response: QueryResponse) -> None:
         self.generation += response.tokens_used or 0
-        self.llm_calls += 1
+        # An adapter asks again once when the model's output is malformed.
+        self.llm_calls += 1 + ((response.metadata or {}).get("format_retries") or 0)
 
     def add_validation(self, tokens: int) -> None:
         self.validation += tokens or 0

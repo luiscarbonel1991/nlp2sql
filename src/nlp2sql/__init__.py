@@ -116,6 +116,7 @@ __all__ = [
     "ProviderRequestError",
     "ProviderRateLimitError",
     "ProviderUnavailableError",
+    "ProviderResponseFormatError",
     "TokenLimitException",
     "QueryGenerationException",
     "OptimizationException",

@@ -10,11 +10,11 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 
 from ..config.settings import settings
 from ..core.provider_config import ProviderConfig
-from ..exceptions import ProviderException, TokenLimitException
+from ..exceptions import ProviderException, ProviderResponseFormatError, TokenLimitException
 from ..ports.ai_provider import AIProviderPort, AIProviderType, QueryContext, QueryResponse
 from ..utils.helpers import first_not_none
 from ..utils.semantic_prompt import format_semantic_context_lines, format_sql_intent_plan_lines
-from ._provider_errors import TRANSIENT_PROVIDER_ERRORS, classify_provider_error
+from ._provider_errors import TRANSIENT_PROVIDER_ERRORS, call_with_format_retry, classify_provider_error
 
 logger = structlog.get_logger()
 
@@ -206,17 +206,19 @@ class OpenAIAdapter(AIProviderPort):
             prompt = self._build_prompt(context)
             system_prompt = self._get_system_prompt(context.database_type)
 
-            # Make API call
-            response = await self.client.chat.completions.create(
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": prompt},
-                ],
-                **self._completion_kwargs(max_tokens=context.max_tokens, temperature=context.temperature),
+            # Make API call; malformed output is asked for again once
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt},
+            ]
+            completion_kwargs = self._completion_kwargs(max_tokens=context.max_tokens, temperature=context.temperature)
+            generation = await call_with_format_retry(
+                lambda: self.client.chat.completions.create(messages=messages, **completion_kwargs),
+                self._parse_response,
+                self._total_tokens,
+                provider=self.provider_type.value,
             )
-
-            # Parse response
-            result = self._parse_response(response)
+            response, result = generation.response, generation.result
 
             usage = response.usage
             reasoning_tokens = getattr(getattr(usage, "completion_tokens_details", None), "reasoning_tokens", None)
@@ -229,6 +231,7 @@ class OpenAIAdapter(AIProviderPort):
                 "completion_tokens": usage.completion_tokens,
                 "reasoning_effort": None if self._uses_sampling_params() else self.reasoning_effort,
                 "reasoning_tokens": reasoning_tokens,
+                "format_retries": generation.format_retries,
             }
 
             # Include raw response if available
@@ -239,7 +242,7 @@ class OpenAIAdapter(AIProviderPort):
                 sql=result["sql"],
                 explanation=result.get("explanation", ""),
                 confidence=result.get("confidence", 0.8),
-                tokens_used=usage.total_tokens,
+                tokens_used=generation.tokens_used,
                 provider=self.provider_type.value,
                 metadata=metadata,
             )
@@ -389,14 +392,16 @@ Ensure the JSON is properly formatted with no syntax errors. Escape any quotes i
         """Parse OpenAI response."""
         try:
             choice = response.choices[0]
-            message_content = choice.message.content
-            if not message_content:
-                # Reasoning models can spend the whole budget on reasoning tokens
-                # and return no content with finish_reason="length".
+            if choice.finish_reason == "length":
+                # Reasoning models can spend the whole budget on reasoning tokens. An
+                # answer cut at max_tokens would be cut again, so it is not retried.
                 raise ProviderException(
-                    f"Empty completion (finish_reason={choice.finish_reason}); "
+                    "Response truncated at max_tokens (finish_reason=length); "
                     "raise max_tokens or lower reasoning_effort (reasoning tokens count toward max_tokens)"
                 )
+            message_content = choice.message.content
+            if not message_content:
+                raise ProviderResponseFormatError(f"Empty completion (finish_reason={choice.finish_reason})")
 
             raw_content = message_content.strip()
             content = raw_content
@@ -413,8 +418,8 @@ Ensure the JSON is properly formatted with no syntax errors. Escape any quotes i
             result = json.loads(content)
 
             # Validate required fields
-            if "sql" not in result:
-                raise ProviderException("Response missing required 'sql' field")
+            if not isinstance(result, dict) or "sql" not in result:
+                raise ProviderResponseFormatError("Response missing required 'sql' field")
 
             # Set defaults
             result.setdefault("explanation", "")
@@ -430,10 +435,14 @@ Ensure the JSON is properly formatted with no syntax errors. Escape any quotes i
         except json.JSONDecodeError as e:
             # Log the problematic content
             logger.error("JSON parsing failed", content=content, error=str(e))
-            raise ProviderException(f"Invalid JSON response: {e!s}")
+            raise ProviderResponseFormatError(f"Invalid JSON response: {e!s}") from e
         except Exception as e:
             logger.error("Response parsing failed", error=str(e))
             raise ProviderException(f"Failed to parse response: {e!s}")
+
+    @staticmethod
+    def _total_tokens(response) -> int:
+        return getattr(response.usage, "total_tokens", 0) or 0
 
     async def _validate_token_count(self, context: QueryContext) -> None:
         """Validate that context doesn't exceed token limits."""

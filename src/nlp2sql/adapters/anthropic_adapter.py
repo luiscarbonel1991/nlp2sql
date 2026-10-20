@@ -9,11 +9,11 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 
 from ..config.settings import settings
 from ..core.provider_config import ProviderConfig
-from ..exceptions import ProviderException, TokenLimitException
+from ..exceptions import ProviderException, ProviderRequestError, ProviderResponseFormatError, TokenLimitException
 from ..ports.ai_provider import AIProviderPort, AIProviderType, QueryContext, QueryResponse
 from ..utils.helpers import first_not_none
 from ..utils.semantic_prompt import format_semantic_context_lines, format_sql_intent_plan_lines
-from ._provider_errors import TRANSIENT_PROVIDER_ERRORS, classify_provider_error
+from ._provider_errors import TRANSIENT_PROVIDER_ERRORS, call_with_format_retry, classify_provider_error
 
 logger = structlog.get_logger()
 
@@ -139,22 +139,27 @@ class AnthropicAdapter(AIProviderPort):
             # Create messages
             messages = [{"role": "user", "content": prompt}]
 
-            # Call Claude API (no sampling parameters: see class docstring)
-            response = await self.client.messages.create(
-                model=self.model,
-                max_tokens=context.max_tokens,
-                system=system_prompt,
-                messages=messages,
+            # Call Claude API (no sampling parameters: see class docstring); malformed
+            # output is asked for again once
+            generation = await call_with_format_retry(
+                lambda: self.client.messages.create(
+                    model=self.model,
+                    max_tokens=context.max_tokens,
+                    system=system_prompt,
+                    messages=messages,
+                ),
+                self._parse_response,
+                self._total_tokens,
+                provider=self.provider_type.value,
             )
-
-            # Parse response
-            result = self._parse_response(response)
+            response, result = generation.response, generation.result
 
             # Create QueryResponse
             metadata = {
                 "model": self.model,
                 "input_tokens": response.usage.input_tokens,
                 "output_tokens": response.usage.output_tokens,
+                "format_retries": generation.format_retries,
             }
 
             # Include raw response if available
@@ -165,7 +170,7 @@ class AnthropicAdapter(AIProviderPort):
                 sql=result["sql"],
                 explanation=result.get("explanation", ""),
                 confidence=result.get("confidence", 0.8),
-                tokens_used=response.usage.input_tokens + response.usage.output_tokens,
+                tokens_used=generation.tokens_used,
                 provider=self.provider_type.value,
                 metadata=metadata,
             )
@@ -265,6 +270,15 @@ Ensure the JSON is properly formatted with no syntax errors. Escape any quotes i
     def _parse_response(self, response) -> Dict[str, Any]:
         """Parse Anthropic response."""
         try:
+            stop_reason = getattr(response, "stop_reason", None)
+            if stop_reason == "max_tokens":
+                # An answer cut at max_tokens would be cut again, so it is not retried.
+                raise ProviderException("Response truncated at max_tokens (stop_reason=max_tokens); raise max_tokens")
+            if stop_reason == "refusal":
+                raise ProviderRequestError("Claude declined to answer (stop_reason=refusal)")
+            if not response.content:
+                raise ProviderResponseFormatError(f"Empty response (stop_reason={stop_reason})")
+
             raw_content = response.content[0].text.strip()
             content = raw_content
 
@@ -288,8 +302,8 @@ Ensure the JSON is properly formatted with no syntax errors. Escape any quotes i
             result = json.loads(content)
 
             # Validate required fields
-            if "sql" not in result:
-                raise ProviderException("Response missing required 'sql' field")
+            if not isinstance(result, dict) or "sql" not in result:
+                raise ProviderResponseFormatError("Response missing required 'sql' field")
 
             # Set defaults
             result.setdefault("explanation", "")
@@ -300,13 +314,20 @@ Ensure the JSON is properly formatted with no syntax errors. Escape any quotes i
 
             return result
 
+        except ProviderException:
+            raise
         except json.JSONDecodeError as e:
             # Log the problematic content
             logger.error("JSON parsing failed", content=content, error=str(e))
-            raise ProviderException(f"Invalid JSON response: {e!s}")
+            raise ProviderResponseFormatError(f"Invalid JSON response: {e!s}") from e
         except Exception as e:
             logger.error("Response parsing failed", error=str(e))
             raise ProviderException(f"Failed to parse response: {e!s}")
+
+    @staticmethod
+    def _total_tokens(response) -> int:
+        usage = response.usage
+        return (getattr(usage, "input_tokens", 0) or 0) + (getattr(usage, "output_tokens", 0) or 0)
 
     async def _validate_token_count(self, context: QueryContext) -> None:
         """Validate that context doesn't exceed token limits."""
