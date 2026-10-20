@@ -13,7 +13,7 @@ from typing import Any, Dict, Optional
 
 import google.generativeai as genai
 import structlog
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from ..config.settings import settings
 from ..core.provider_config import ProviderConfig
@@ -21,6 +21,7 @@ from ..exceptions import ProviderException, TokenLimitException
 from ..ports.ai_provider import AIProviderPort, AIProviderType, QueryContext, QueryResponse
 from ..utils.helpers import first_not_none
 from ..utils.semantic_prompt import format_semantic_context_lines, format_sql_intent_plan_lines
+from ._provider_errors import TRANSIENT_PROVIDER_ERRORS, classify_provider_error
 
 logger = structlog.get_logger()
 
@@ -148,7 +149,12 @@ class GeminiAdapter(AIProviderPort):
             )
         return str(response.text).strip()
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10), reraise=True)
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=4, max=10),
+        retry=retry_if_exception_type(TRANSIENT_PROVIDER_ERRORS),
+        reraise=True,
+    )
     async def generate_query(self, context: QueryContext) -> QueryResponse:
         """Generate SQL query using Gemini."""
         try:
@@ -202,8 +208,11 @@ class GeminiAdapter(AIProviderPort):
             )
 
         except Exception as e:
-            logger.error("Gemini query generation failed", error=str(e))
-            raise ProviderException(f"Gemini query generation failed: {e!s}")
+            logger.error("Gemini query generation failed", error=str(e), error_type=type(e).__name__)
+            error = classify_provider_error(e, f"Gemini query generation failed: {e!s}")
+            if error is e:
+                raise
+            raise error from e
 
     def _build_full_prompt(self, context: QueryContext) -> str:
         """Build complete prompt including system instructions."""
@@ -350,7 +359,11 @@ Ensure the JSON is properly formatted with no syntax errors. Escape any quotes i
         available_tokens = max_context - context.max_tokens  # Reserve space for response
 
         if total_tokens > available_tokens:
-            raise TokenLimitException(f"Context too large: {total_tokens} tokens exceeds limit of {available_tokens}")
+            raise TokenLimitException(
+                f"Context too large: {total_tokens} tokens exceeds limit of {available_tokens}",
+                tokens_used=total_tokens,
+                max_tokens=available_tokens,
+            )
 
         logger.debug("Token validation passed", total_tokens=total_tokens, available_tokens=available_tokens)
 
@@ -400,6 +413,9 @@ Check for:
             result.setdefault("issues", [])
             result.setdefault("suggestions", [])
             result.setdefault("complexity", "moderate")
+            # Reported so the service can account for every LLM call of a question
+            usage = getattr(response, "usage_metadata", None)
+            result["_tokens_used"] = getattr(usage, "total_token_count", 0) or 0
 
             return result
 

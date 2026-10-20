@@ -5,7 +5,7 @@ from typing import Any, Dict, Optional
 
 import anthropic
 import structlog
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from ..config.settings import settings
 from ..core.provider_config import ProviderConfig
@@ -13,6 +13,7 @@ from ..exceptions import ProviderException, TokenLimitException
 from ..ports.ai_provider import AIProviderPort, AIProviderType, QueryContext, QueryResponse
 from ..utils.helpers import first_not_none
 from ..utils.semantic_prompt import format_semantic_context_lines, format_sql_intent_plan_lines
+from ._provider_errors import TRANSIENT_PROVIDER_ERRORS, classify_provider_error
 
 logger = structlog.get_logger()
 
@@ -119,7 +120,12 @@ class AnthropicAdapter(AIProviderPort):
         """Get maximum input context size for the model."""
         return self._max_context_size
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10), reraise=True)
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=4, max=10),
+        retry=retry_if_exception_type(TRANSIENT_PROVIDER_ERRORS),
+        reraise=True,
+    )
     async def generate_query(self, context: QueryContext) -> QueryResponse:
         """Generate SQL query using Claude."""
         try:
@@ -165,8 +171,11 @@ class AnthropicAdapter(AIProviderPort):
             )
 
         except Exception as e:
-            logger.error("Anthropic query generation failed", error=str(e))
-            raise ProviderException(f"Anthropic query generation failed: {e!s}")
+            logger.error("Anthropic query generation failed", error=str(e), error_type=type(e).__name__)
+            error = classify_provider_error(e, f"Anthropic query generation failed: {e!s}")
+            if error is e:
+                raise
+            raise error from e
 
     def _build_prompt(self, context: QueryContext) -> str:
         """Build prompt for query generation."""
@@ -315,7 +324,11 @@ Ensure the JSON is properly formatted with no syntax errors. Escape any quotes i
         available_tokens = max_context - context.max_tokens  # Reserve space for response
 
         if total_tokens > available_tokens:
-            raise TokenLimitException(f"Context too large: {total_tokens} tokens exceeds limit of {available_tokens}")
+            raise TokenLimitException(
+                f"Context too large: {total_tokens} tokens exceeds limit of {available_tokens}",
+                tokens_used=total_tokens,
+                max_tokens=available_tokens,
+            )
 
         logger.debug(
             "Token validation passed",
@@ -379,6 +392,11 @@ Check for:
             result.setdefault("issues", [])
             result.setdefault("suggestions", [])
             result.setdefault("complexity", "moderate")
+            # Reported so the service can account for every LLM call of a question
+            usage = getattr(message, "usage", None)
+            input_tokens = getattr(usage, "input_tokens", 0) or 0
+            output_tokens = getattr(usage, "output_tokens", 0) or 0
+            result["_tokens_used"] = input_tokens + output_tokens
 
             return result
 

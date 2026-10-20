@@ -643,29 +643,19 @@ class PostgreSQLRepository(SchemaRepositoryPort):
             raise SchemaException(f"Failed to get schema metadata: {e!s}")
 
     async def refresh_schema(self) -> None:
-        """Refresh schema information from database."""
-        if not self._initialized:
-            await self.initialize()
+        """Drop the cached table list so the next get_tables() reads the database again.
 
+        Runs nothing against the database. It used to run ANALYZE on the whole
+        database, which changed nothing nlp2sql reads: row_count comes from the
+        pg_stat_user_tables activity counters, which ANALYZE does not update.
+        """
+        cache_path = self._get_tables_cache_path(self.schema_name)
         try:
-
-            def _run_analyze():
-                conn = self._get_connection()
-                try:
-                    conn.autocommit = True
-                    cursor = conn.cursor()
-                    cursor.execute("ANALYZE")
-                    cursor.close()
-                finally:
-                    conn.close()
-
-            await asyncio.to_thread(_run_analyze)
-
-            logger.info("Schema refreshed successfully")
-
-        except Exception as e:
-            logger.error("Failed to refresh schema", error=str(e))
-            raise SchemaException(f"Failed to refresh schema: {e!s}")
+            cache_path.unlink(missing_ok=True)
+        except OSError as e:
+            logger.warning("Failed to remove tables cache", path=str(cache_path), error=str(e))
+            return
+        logger.info("Schema cache invalidated", schema=self.schema_name)
 
     async def get_table_sample_data(self, table_name: str, limit: int = 5) -> List[Dict[str, Any]]:
         """Get sample data from a table."""

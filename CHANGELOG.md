@@ -22,6 +22,44 @@ pre-1.0.
 
 ## [Unreleased]
 
+### Changed
+- **User-visible: the LLM no longer reviews its own SQL by default.** Every `ask()`
+  made a second LLM call that sent the whole schema context back to the model; it
+  doubled the latency of each question and its tokens were not reported. Column,
+  dialect, semantic and read-only checks still run, and execution modes still
+  validate against the database. Turn the review back on with
+  `connect(..., llm_validation=True)`, `NLP2SQL_LLM_VALIDATION=true` or
+  `nlp2sql query --llm-validation`. `NLP2SQL.validate(sql)` still asks the LLM.
+- `QueryResult.tokens_used` now counts every LLM call made for the question
+  (retries, repairs and LLM validation); it used to report only the last
+  generation call. `metadata["token_usage"]` has the breakdown.
+- `refresh_schema()` (PostgreSQL and Redshift) now drops the cached table list so
+  the next `get_tables()` reads the database again. PostgreSQL no longer runs
+  `ANALYZE` on the whole database on the first `connect()` and every 24 hours.
+- Provider calls are retried only on rate limits, timeouts, connection errors and
+  provider-side errors. Authentication and request errors fail on the first
+  attempt, instead of after about 8 seconds and 3 requests.
+
+### Added
+- `llm_validation` option on `connect()`, `create_query_service()` and
+  `create_and_initialize_service()`, `NLP2SQL_LLM_VALIDATION`, and
+  `nlp2sql query --llm-validation`.
+- `ProviderAuthenticationError`, `ProviderRequestError`, `ProviderRateLimitError`
+  and `ProviderUnavailableError`, subclasses of `ProviderException`, raised by the
+  OpenAI, Anthropic and Gemini adapters and available as the `__cause__` of the
+  `QueryGenerationException` raised by `ask()`.
+
+### Fixed
+- Each `ask()` opened 5 new database connections per table in the schema context
+  (41 for a multi-table question). The context is now built from the table list
+  loaded at `connect()`, with no extra connections.
+- `RedshiftRepository.refresh_schema()` was a no-op.
+- The Anthropic and Gemini adapters raised `TypeError` instead of
+  `TokenLimitException` when the context was too large, and dropped the SDK error
+  as the cause of generation failures.
+- `docs/API.md` showed catching `TokenLimitException` and `ProviderException`
+  directly from `ask()`; they arrive as the cause of `QueryGenerationException`.
+
 ## [0.2.0rc16] - 2026-10-19
 
 ### Changed

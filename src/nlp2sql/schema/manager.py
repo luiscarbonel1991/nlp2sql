@@ -171,10 +171,15 @@ class SchemaManager:
             include_indexes=True,
         )
 
+        # The bulk table list loaded at initialization already holds columns, keys and
+        # descriptions; asking the repository again cost several queries per table, each
+        # on a fresh connection (one per operation by design, see issue #35).
+        cached_tables = {table.name: table for table in await self._get_cached_tables()}
+
         table_details = []
         for table_name, relevance_score in relevant_tables:
             try:
-                table_info = await self.repository.get_table_info(table_name)
+                table_info = cached_tables.get(table_name) or await self.repository.get_table_info(table_name)
                 table_dict = self._table_info_to_dict(table_info)
                 table_dict["relevance_score"] = relevance_score
                 table_details.append(table_dict)

@@ -50,6 +50,10 @@ class FakeOpenAI:
     def calls(self, kind: str) -> int:
         return sum(1 for request in self.requests if request["kind"] == kind)
 
+    def chat_tokens(self) -> int:
+        """Total tokens the fake API reported for successful chat completions."""
+        return sum((request.get("usage") or {}).get("total_tokens", 0) for request in self.requests)
+
     def start(self) -> "FakeOpenAI":
         fake = self
 
@@ -92,8 +96,8 @@ class FakeOpenAI:
                 system = next((m["content"] for m in messages if m["role"] == "system"), "")
                 user = next((m["content"] for m in messages if m["role"] == "user"), "")
                 kind = "validate" if system.startswith(VALIDATION_SYSTEM_PREFIX) else "generate"
-                fake._record({"kind": kind, "body": body, "prompt": user})
                 if fake.chat_status:
+                    fake._record({"kind": kind, "body": body, "prompt": user, "usage": None})
                     return self._send(
                         fake.chat_status,
                         {"error": {"message": f"fake {fake.chat_status}", "type": "invalid_request_error"}},
@@ -104,6 +108,7 @@ class FakeOpenAI:
                     content = json.dumps({"sql": fake.sql, "explanation": "fake", "confidence": 0.9})
                 usage = {"prompt_tokens": (len(system) + len(user)) // 4, "completion_tokens": len(content) // 4}
                 usage["total_tokens"] = usage["prompt_tokens"] + usage["completion_tokens"]
+                fake._record({"kind": kind, "body": body, "prompt": user, "usage": usage})
                 return self._send(
                     200,
                     {

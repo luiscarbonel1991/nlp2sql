@@ -6,7 +6,7 @@ from typing import Any, Dict, Optional, Tuple
 import structlog
 import tiktoken
 from openai import AsyncOpenAI
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from ..config.settings import settings
 from ..core.provider_config import ProviderConfig
@@ -14,6 +14,7 @@ from ..exceptions import ProviderException, TokenLimitException
 from ..ports.ai_provider import AIProviderPort, AIProviderType, QueryContext, QueryResponse
 from ..utils.helpers import first_not_none
 from ..utils.semantic_prompt import format_semantic_context_lines, format_sql_intent_plan_lines
+from ._provider_errors import TRANSIENT_PROVIDER_ERRORS, classify_provider_error
 
 logger = structlog.get_logger()
 
@@ -189,7 +190,12 @@ class OpenAIAdapter(AIProviderPort):
 
     # ── Generation ─────────────────────────────────────────────────────
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10), reraise=True)
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=4, max=10),
+        retry=retry_if_exception_type(TRANSIENT_PROVIDER_ERRORS),
+        reraise=True,
+    )
     async def generate_query(self, context: QueryContext) -> QueryResponse:
         """Generate SQL query from natural language."""
         try:
@@ -244,7 +250,10 @@ class OpenAIAdapter(AIProviderPort):
                 error=str(e),
                 error_type=type(e).__name__,
             )
-            raise ProviderException(f"OpenAI query generation failed: {e!s}") from e
+            error = classify_provider_error(e, f"OpenAI query generation failed: {e!s}")
+            if error is e:
+                raise
+            raise error from e
 
     async def validate_query(self, sql: str, schema_context: str) -> Dict[str, Any]:
         """Validate generated SQL query."""
@@ -264,6 +273,8 @@ class OpenAIAdapter(AIProviderPort):
 
             content = response.choices[0].message.content or ""
             result = json.loads(content)
+            # Reported so the service can account for every LLM call of a question
+            result["_tokens_used"] = getattr(response.usage, "total_tokens", 0) or 0
             return result
 
         except Exception as e:

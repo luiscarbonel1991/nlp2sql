@@ -32,6 +32,30 @@ class TokenLimitException(ProviderException):
         self.max_tokens = max_tokens
 
 
+class ProviderAuthenticationError(ProviderException):
+    """The provider rejected the credentials (HTTP 401/403). Retrying cannot help."""
+
+    pass
+
+
+class ProviderRequestError(ProviderException):
+    """The provider rejected the request itself (other 4xx), e.g. an unknown model."""
+
+    pass
+
+
+class ProviderRateLimitError(ProviderException):
+    """The provider throttled the request (HTTP 429). Transient: retried."""
+
+    pass
+
+
+class ProviderUnavailableError(ProviderException):
+    """Timeout, connection failure or provider-side error (408/409/5xx). Transient: retried."""
+
+    pass
+
+
 class QueryGenerationException(NLP2SQLException):
     """Exception during query generation."""
 

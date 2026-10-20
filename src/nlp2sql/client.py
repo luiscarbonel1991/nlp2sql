@@ -174,6 +174,7 @@ async def connect(
     semantic_resolver: Optional[SemanticResolverPort] = None,
     semantic_validator: Optional[SemanticValidatorPort] = None,
     semantic_context: SemanticContext | None = None,
+    llm_validation: Optional[bool] = None,
 ) -> NLP2SQL:
     """Connect to a database and return a ready-to-use NLP2SQL client.
 
@@ -197,6 +198,10 @@ async def connect(
             - A pre-built ``ExampleRepositoryPort`` instance
         hooks: Grouped execution hooks for validation/repair in the public DSL.
         semantic_hooks: Grouped semantic hooks for business-aware retrieval and validation.
+        llm_validation: Also ask the LLM to review each generated query, a second call per
+            question. If None, uses ``NLP2SQL_LLM_VALIDATION`` (default: off). Column, dialect,
+            semantic and read-only checks always run, and execution modes validate against the
+            database.
 
     Returns:
         An initialized ``NLP2SQL`` client ready for ``ask()`` calls.
@@ -270,6 +275,7 @@ async def connect(
         repair_policy=repair_policy,
         semantic_resolver=semantic_resolver,
         semantic_validator=semantic_validator,
+        llm_validation=llm_validation,
     )
 
     return NLP2SQL(service=service, database_type=database_type, semantic_context=semantic_context)
