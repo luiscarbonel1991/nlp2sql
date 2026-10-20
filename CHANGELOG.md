@@ -39,6 +39,15 @@ pre-1.0.
 - Provider calls are retried only on rate limits, timeouts, connection errors and
   provider-side errors. Authentication and request errors fail on the first
   attempt, instead of after about 8 seconds and 3 requests.
+- An answer from the model that is not the expected JSON (not JSON, not an object,
+  or without `sql`) is asked for again once, without waiting; it used to be retried
+  up to 3 times with 4-10 second waits. Both answers count in `tokens_used` and in
+  `metadata["token_usage"]["llm_calls"]`.
+- An answer cut off at `max_tokens` (OpenAI `finish_reason="length"`, Anthropic
+  `stop_reason="max_tokens"`, Gemini `MAX_TOKENS`) fails on the first attempt with a
+  `ProviderException` that says to raise `max_tokens`, instead of "Invalid JSON
+  response" after 3 attempts. Anthropic refusals and Gemini safety blocks raise
+  `ProviderRequestError`.
 
 ### Added
 - `llm_validation` option on `connect()`, `create_query_service()` and
@@ -48,6 +57,9 @@ pre-1.0.
   and `ProviderUnavailableError`, subclasses of `ProviderException`, raised by the
   OpenAI, Anthropic and Gemini adapters and available as the `__cause__` of the
   `QueryGenerationException` raised by `ask()`.
+- `ProviderResponseFormatError` (subclass of `ProviderException`): the model answered
+  twice without the expected JSON. `details["tokens_used"]` has the tokens of both
+  answers.
 
 ### Fixed
 - Each `ask()` opened 5 new database connections per table in the schema context
@@ -57,6 +69,7 @@ pre-1.0.
 - The Anthropic and Gemini adapters raised `TypeError` instead of
   `TokenLimitException` when the context was too large, and dropped the SDK error
   as the cause of generation failures.
+- The Anthropic adapter reported its own errors as "Failed to parse response: ...".
 - `docs/API.md` showed catching `TokenLimitException` and `ProviderException`
   directly from `ask()`; they arrive as the cause of `QueryGenerationException`.
 
