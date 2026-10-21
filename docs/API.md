@@ -162,6 +162,17 @@ If you do not pass `execution_mode`, the library infers it from `validate` and `
 | `generation_time_ms` | `float`             | End-to-end generation time                     |
 | `examples_used`      | `int`               | Count of selected examples                     |
 | `metadata`           | `dict[str, object]` | Runtime metadata for debugging and integration |
+| `validation`         | `dict[str, object]` | The checks behind `is_valid`: `errors`, `warnings`, `column_errors`, `dialect_issues`, `semantic_validation`, `llm_validation` |
+| `rows`               | `list[dict] | None`  | Result rows when the query was executed (`validate=True`) and succeeded; at most 100, values as returned by the database driver |
+| `columns`            | `list[str] | None`  | Column names of `rows`                         |
+
+```python
+result = await nlp.ask("How many users have placed orders?", validate=True)
+if result.is_valid:
+    print(result.columns, result.rows)
+else:
+    print(result.validation["errors"])
+```
 
 
 ### `QueryResult.metadata`
@@ -271,6 +282,23 @@ result = await service.generate_sql(
 print(result["sql"])
 print(result["validation"]["is_valid"])
 ```
+
+## Logging
+
+nlp2sql prints nothing by default. It logs through the standard `logging` module, under
+the `nlp2sql` logger and one child logger per module (`nlp2sql.services.query_service`, ...),
+with a `NullHandler` attached, so your application decides where the records go and at
+which level:
+
+```python
+import logging
+
+logging.basicConfig(level=logging.WARNING)
+logging.getLogger("nlp2sql").setLevel(logging.INFO)
+```
+
+The user's question and the raw model output are logged only at `DEBUG`; a rejected or
+failing query logs the first 100 characters of its SQL at `WARNING`/`ERROR`. The CLI logs to stderr at `WARNING` (`-v` for `DEBUG`, or `NLP2SQL_LOG_LEVEL`).
 
 ## Error Handling
 
