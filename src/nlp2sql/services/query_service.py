@@ -244,6 +244,9 @@ class QueryGenerationService:
                 token_usage=token_usage,
             )
 
+            rows = execution_validation.pop("_rows", None)
+            columns = execution_validation.pop("_columns", None)
+
             if execution_validation.get("enabled") and execution_validation.get("success") is False:
                 issues_key = "errors" if "errors" in validation_result else "issues"
                 validation_result.setdefault(issues_key, []).append(
@@ -274,6 +277,8 @@ class QueryGenerationService:
                 "tokens_used": token_usage.total,
                 "generation_time_ms": (datetime.now() - start_time).total_seconds() * 1000,
                 "validation": validation_result,
+                "rows": rows,
+                "columns": columns,
                 "schema_context_length": len(schema_context),
                 "examples_used": len(query_context.examples),
                 "metadata": result_metadata,
@@ -515,6 +520,9 @@ class QueryGenerationService:
                     "row_count": result.get("row_count"),
                     "execution_time_ms": result.get("execution_time_ms"),
                 },
+                # Popped by generate_sql into the result: rows stay out of the metadata
+                "_rows": result.get("results"),
+                "_columns": result.get("columns"),
             }
         except Exception as exc:
             if execution_mode != "generate_validate_repair" or not self.error_classifier or not self.repair_policy:
