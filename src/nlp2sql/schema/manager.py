@@ -102,10 +102,11 @@ class SchemaManager:
                         await self._refresh_schema_if_needed()
                         if self.embedding_provider:
                             try:
-                                # Warm up the embedding provider using the public API
-                                await self.embedding_provider.encode(["warmup"])
-                            except Exception:
-                                pass
+                                # Encoding a dummy text here cost one paid request per start
+                                # with remote providers; warmup() does nothing for them.
+                                await self.embedding_provider.warmup()
+                            except Exception as e:
+                                logger.warning("Embedding provider warmup failed", error=str(e))
                         return
                 except Exception as e:
                     logger.warning("Failed to check existing index, proceeding with full initialization", error=str(e))

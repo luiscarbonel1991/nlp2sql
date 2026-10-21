@@ -63,6 +63,10 @@ class LocalEmbeddingAdapter(EmbeddingProviderPort):
             self._model = _get_cached_model(self._model_name)
             self._embedding_dim = self._model.get_sentence_embedding_dimension()
 
+    async def warmup(self) -> None:
+        """Load the model now, off the event loop, so the first question does not pay for it."""
+        await asyncio.to_thread(self._load_model)
+
     async def encode(self, texts: List[str]) -> np.ndarray:
         """
         Generate embeddings for texts using sentence-transformers.
