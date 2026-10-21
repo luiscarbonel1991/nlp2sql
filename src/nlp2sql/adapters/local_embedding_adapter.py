@@ -5,11 +5,11 @@ import threading
 from typing import List
 
 import numpy as np
-import structlog
 
 from ..ports.embedding_provider import EmbeddingProviderPort
+from ..utils.logger import get_logger
 
-logger = structlog.get_logger()
+logger = get_logger(__name__)
 
 _model_cache = {}
 _model_cache_lock = threading.Lock()

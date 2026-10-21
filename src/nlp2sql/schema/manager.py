@@ -5,7 +5,6 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
-import structlog
 
 from ..config.settings import settings
 from ..core.entities import DatabaseType
@@ -14,10 +13,11 @@ from ..ports.cache import CachePort
 from ..ports.embedding_provider import EmbeddingProviderPort
 from ..ports.schema_repository import SchemaRepositoryPort, TableInfo
 from ..ports.schema_strategy import SchemaContext
+from ..utils.logger import get_logger
 from .analyzer import SchemaAnalyzer
 from .embedding_manager import SchemaEmbeddingManager
 
-logger = structlog.get_logger()
+logger = get_logger(__name__)
 
 
 class SchemaManager:

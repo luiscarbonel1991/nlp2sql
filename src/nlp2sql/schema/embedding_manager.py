@@ -8,7 +8,6 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import faiss
 import numpy as np
-import structlog
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
@@ -16,9 +15,10 @@ from ..core.entities import DatabaseType
 from ..exceptions import SchemaException
 from ..ports.cache import CachePort
 from ..ports.embedding_provider import EmbeddingProviderPort
+from ..utils.logger import get_logger
 from ..utils.storage import get_data_directory
 
-logger = structlog.get_logger()
+logger = get_logger(__name__)
 
 
 class SchemaEmbeddingManager:

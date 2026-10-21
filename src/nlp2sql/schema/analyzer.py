@@ -5,14 +5,14 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
-import structlog
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 from ..ports.embedding_provider import EmbeddingProviderPort
 from ..ports.schema_strategy import SchemaChunk, SchemaContext, SchemaStrategyPort
+from ..utils.logger import get_logger
 
-logger = structlog.get_logger()
+logger = get_logger(__name__)
 
 
 @dataclass

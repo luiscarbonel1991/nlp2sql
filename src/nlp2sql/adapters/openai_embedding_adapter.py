@@ -3,13 +3,13 @@
 from typing import List
 
 import numpy as np
-import structlog
 from openai import AsyncOpenAI
 
 from ..exceptions import ProviderException
 from ..ports.embedding_provider import EmbeddingProviderPort
+from ..utils.logger import get_logger
 
-logger = structlog.get_logger()
+logger = get_logger(__name__)
 
 
 class OpenAIEmbeddingAdapter(EmbeddingProviderPort):

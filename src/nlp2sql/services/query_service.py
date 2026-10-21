@@ -10,7 +10,6 @@ import re
 from datetime import datetime
 from typing import Any
 
-import structlog
 
 from ..config.settings import settings
 from ..core.entities import (
@@ -34,6 +33,7 @@ from ..ports.schema_repository import SchemaRepositoryPort
 from ..ports.semantic_resolver import SemanticResolverPort
 from ..ports.semantic_validator import SemanticValidatorPort
 from ..schema.manager import SchemaManager
+from ..utils.logger import get_logger
 from .example_selection_service import ExampleSelectionService
 from .prompt_assembly_service import PromptAssemblyService
 from .query_analysis_service import QueryAnalysisService
@@ -42,7 +42,7 @@ from .semantic_resolution_service import SemanticResolutionService
 from .semantic_validation_service import SemanticValidationService
 from .sql_intent_planning_service import SqlIntentPlanningService
 
-logger = structlog.get_logger()
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -188,7 +188,7 @@ class QueryGenerationService:
             ):
                 cached_result = await self.cache.get(cache_key)
                 if cached_result:
-                    logger.info("Query served from cache", question=question[:50])
+                    logger.debug("Query served from cache", question=question[:50])
                     return cached_result
 
             relevant_tables = await self.schema_manager.find_relevant_tables(
@@ -292,9 +292,9 @@ class QueryGenerationService:
             ):
                 await self.cache.set(cache_key, result)
 
+            logger.debug("Question answered", question=question, sql=response.sql)
             logger.info(
                 "SQL generated successfully",
-                question=question[:50],
                 confidence=response.confidence,
                 tokens_used=token_usage.total,
                 llm_calls=token_usage.llm_calls,
@@ -305,12 +305,8 @@ class QueryGenerationService:
             return result
 
         except Exception as e:
-            logger.error(
-                "SQL generation failed",
-                question=question[:50],
-                error=str(e),
-                error_type=type(e).__name__,
-            )
+            logger.error("SQL generation failed", error=str(e), error_type=type(e).__name__)
+            logger.debug("Question not answered", question=question)
             raise QueryGenerationException(f"SQL generation failed: {e!s}") from e
 
     async def validate_sql(self, sql: str, database_type: DatabaseType) -> dict[str, Any]:
@@ -378,7 +374,7 @@ class QueryGenerationService:
             return suggestions[:max_suggestions]
 
         except Exception as e:
-            logger.error("Failed to get query suggestions", partial_question=partial_question, error=str(e))
+            logger.error("Failed to get query suggestions", error=str(e))
             return []
 
     async def explain_query(self, sql: str, database_type: DatabaseType) -> dict[str, Any]:

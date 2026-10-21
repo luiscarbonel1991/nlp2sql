@@ -4,9 +4,9 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List
 
-import structlog
+from ..utils.logger import get_logger
 
-logger = structlog.get_logger()
+logger = get_logger(__name__)
 
 
 def load_default_examples(examples_file: str = "examples/default_examples.json") -> List[Dict[str, Any]]:
