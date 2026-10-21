@@ -9,7 +9,7 @@ candidate; the adapter reports that as an actionable error.
 
 import asyncio
 import json
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import google.generativeai as genai
 import structlog
@@ -17,11 +17,11 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 
 from ..config.settings import settings
 from ..core.provider_config import ProviderConfig
-from ..exceptions import ProviderException, TokenLimitException
+from ..exceptions import ProviderException, ProviderRequestError, ProviderResponseFormatError, TokenLimitException
 from ..ports.ai_provider import AIProviderPort, AIProviderType, QueryContext, QueryResponse
 from ..utils.helpers import first_not_none
 from ..utils.semantic_prompt import format_semantic_context_lines, format_sql_intent_plan_lines
-from ._provider_errors import TRANSIENT_PROVIDER_ERRORS, classify_provider_error
+from ._provider_errors import TRANSIENT_PROVIDER_ERRORS, call_with_format_retry, classify_provider_error
 
 logger = structlog.get_logger()
 
@@ -44,6 +44,9 @@ GEMINI_FAMILY_CONTEXT_LIMIT = 1_048_576
 # Conservative floor for non-Gemini names served through the same API (gemma,
 # tuned models). The previous 30,720 fallback was wrong for every Gemini model.
 DEFAULT_CONTEXT_LIMIT = 32_768
+
+# Finish reasons where Gemini withheld the answer; asking again would not help.
+_BLOCKED_FINISH_REASONS = {"SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII"}
 
 
 class GeminiAdapter(AIProviderPort):
@@ -138,16 +141,35 @@ class GeminiAdapter(AIProviderPort):
         if not candidates:
             raise ProviderException("Gemini returned no response candidates")
         candidate = candidates[0]
+        finish_reason = getattr(candidate, "finish_reason", None)
+        finish_name = getattr(finish_reason, "name", finish_reason)
+        if finish_name == "MAX_TOKENS":
+            # An answer cut at max_tokens would be cut again, so it is not retried.
+            raise ProviderException(
+                "Gemini response truncated at max_tokens (finish_reason=MAX_TOKENS); "
+                "raise max_tokens (thinking tokens count against the output budget)"
+            )
+        if finish_name in _BLOCKED_FINISH_REASONS:
+            raise ProviderRequestError(f"Gemini blocked the response (finish_reason={finish_name})")
         content = getattr(candidate, "content", None)
         parts = getattr(content, "parts", None) or []
         if not parts:
-            finish_reason = getattr(candidate, "finish_reason", None)
-            finish_name = getattr(finish_reason, "name", finish_reason)
-            raise ProviderException(
-                f"Gemini returned no content (finish_reason={finish_name}); "
-                "raise max_tokens (thinking tokens count against the output budget)"
-            )
+            raise ProviderResponseFormatError(f"Gemini returned no content (finish_reason={finish_name})")
         return str(response.text).strip()
+
+    def _usage_tokens(self, response: Any, prompt: str) -> Tuple[int, int]:
+        """Prompt and output tokens: the usage reported by the API, else estimates."""
+        usage = getattr(response, "usage_metadata", None)
+        prompt_tokens = getattr(usage, "prompt_token_count", None) if usage is not None else None
+        output_tokens = getattr(usage, "candidates_token_count", None) if usage is not None else None
+        if prompt_tokens is None:
+            prompt_tokens = self.get_token_count(prompt)
+        if output_tokens is None:
+            try:
+                output_tokens = self.get_token_count(self._extract_text(response))
+            except (ProviderException, ValueError):
+                output_tokens = 0
+        return prompt_tokens, output_tokens
 
     @retry(
         stop=stop_after_attempt(3),
@@ -169,22 +191,17 @@ class GeminiAdapter(AIProviderPort):
                 temperature=context.temperature, max_output_tokens=context.max_tokens, candidate_count=1
             )
 
-            # Generate content
-            response = await asyncio.to_thread(
-                self.model.generate_content, full_prompt, generation_config=generation_config
+            # Generate content; malformed output is asked for again once
+            generation = await call_with_format_retry(
+                lambda: asyncio.to_thread(
+                    self.model.generate_content, full_prompt, generation_config=generation_config
+                ),
+                self._parse_response,
+                lambda response: sum(self._usage_tokens(response, full_prompt)),
+                provider=self.provider_type.value,
             )
-
-            # Parse response
-            result = self._parse_response(response)
-
-            # Prefer the exact usage reported by the API; fall back to estimates.
-            usage = getattr(response, "usage_metadata", None)
-            prompt_tokens = getattr(usage, "prompt_token_count", None) if usage is not None else None
-            output_tokens = getattr(usage, "candidates_token_count", None) if usage is not None else None
-            if prompt_tokens is None:
-                prompt_tokens = self.get_token_count(full_prompt)
-            if output_tokens is None:
-                output_tokens = self.get_token_count(result.get("_raw_response", ""))
+            response, result = generation.response, generation.result
+            prompt_tokens, output_tokens = self._usage_tokens(response, full_prompt)
 
             # Create QueryResponse
             metadata = {
@@ -192,6 +209,7 @@ class GeminiAdapter(AIProviderPort):
                 "prompt_tokens": prompt_tokens,
                 "output_tokens": output_tokens,
                 "finish_reason": getattr(response.candidates[0], "finish_reason", None),
+                "format_retries": generation.format_retries,
             }
 
             # Include raw response if available
@@ -202,7 +220,7 @@ class GeminiAdapter(AIProviderPort):
                 sql=result["sql"],
                 explanation=result.get("explanation", ""),
                 confidence=result.get("confidence", 0.8),
-                tokens_used=prompt_tokens + output_tokens,
+                tokens_used=generation.tokens_used,
                 provider=self.provider_type.value,
                 metadata=metadata,
             )
@@ -324,8 +342,8 @@ Ensure the JSON is properly formatted with no syntax errors. Escape any quotes i
             result = json.loads(content)
 
             # Validate required fields
-            if "sql" not in result:
-                raise ProviderException("Response missing required 'sql' field")
+            if not isinstance(result, dict) or "sql" not in result:
+                raise ProviderResponseFormatError("Response missing required 'sql' field")
 
             # Set defaults
             result.setdefault("explanation", "")
@@ -341,7 +359,7 @@ Ensure the JSON is properly formatted with no syntax errors. Escape any quotes i
         except json.JSONDecodeError as e:
             # Log the problematic content
             logger.error("JSON parsing failed", content=content, error=str(e))
-            raise ProviderException(f"Invalid JSON response: {e!s}")
+            raise ProviderResponseFormatError(f"Invalid JSON response: {e!s}") from e
         except Exception as e:
             logger.error("Response parsing failed", error=str(e))
             raise ProviderException(f"Failed to parse response: {e!s}")

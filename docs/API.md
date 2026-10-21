@@ -282,6 +282,7 @@ from nlp2sql.exceptions import (
     ProviderAuthenticationError,
     ProviderRateLimitError,
     ProviderRequestError,
+    ProviderResponseFormatError,
     ProviderUnavailableError,
     QueryGenerationException,
     SchemaException,
@@ -300,15 +301,19 @@ except QueryGenerationException as error:
         print("Transient provider error; already retried three times.")
     elif isinstance(cause, ProviderRequestError):
         print("The provider rejected the request, e.g. an unknown model.")
+    elif isinstance(cause, ProviderResponseFormatError):
+        print("The model answered twice without the expected JSON.")
     else:
         print("The provider could not generate SQL.")
 except SchemaException:
     print("Database connection or schema discovery failed.")
 ```
 
-Only rate-limit and unavailable errors are retried; authentication and request errors fail on
-the first attempt. Queries that are not read-only come back with `is_valid=False` and are never
-executed.
+Only rate-limit and unavailable errors are retried with backoff; authentication and request
+errors fail on the first attempt. An answer that is not the expected JSON is asked for again
+once, without waiting, and `tokens_used` counts both answers. An answer cut off at `max_tokens`
+is not asked for again: it fails with a `ProviderException` that says to raise `max_tokens`.
+Queries that are not read-only come back with `is_valid=False` and are never executed.
 
 ## CLI Reference
 

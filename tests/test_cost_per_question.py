@@ -81,6 +81,20 @@ async def test_llm_validation_on_request_is_counted(postgres_available, fake_ope
 
 
 @pytest.mark.asyncio
+async def test_a_malformed_answer_is_asked_for_again_and_counted(postgres_available, fake_openai, isolated_caches):
+    nlp = await _connect(postgres_available)
+    fake_openai.requests.clear()
+    fake_openai.chat_contents = ["Here is the query: SELECT COUNT(DISTINCT user_id) FROM orders"]
+
+    result = await nlp.ask("How many users have placed orders?")
+
+    assert result.sql == fake_openai.sql
+    assert fake_openai.calls("generate") == 2
+    assert result.tokens_used == fake_openai.chat_tokens()
+    assert result.metadata["token_usage"]["llm_calls"] == 2
+
+
+@pytest.mark.asyncio
 async def test_a_question_opens_no_database_connections(
     postgres_available, fake_openai, isolated_caches, database_stats
 ):

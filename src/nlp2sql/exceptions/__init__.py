@@ -56,6 +56,15 @@ class ProviderUnavailableError(ProviderException):
     pass
 
 
+class ProviderResponseFormatError(ProviderException):
+    """The model answered, but not with the expected JSON object with a ``sql`` field.
+
+    Retried once, immediately. ``details["tokens_used"]`` holds the tokens of every attempt.
+    """
+
+    pass
+
+
 class QueryGenerationException(NLP2SQLException):
     """Exception during query generation."""
 

@@ -5,7 +5,8 @@ library exactly as a user would (SDK, adapters, prompts) without keys or cost, a
 inspect every request the library sends.
 
 - ``/v1/chat/completions`` answers SQL generation with ``{"sql": fake.sql, ...}`` and
-  SQL validation with ``{"is_valid": true, ...}``.
+  SQL validation with ``{"is_valid": true, ...}``. ``chat_contents`` queues raw answers
+  for the next generation calls (malformed output), ``finish_reason`` sets how they end.
 - ``/v1/embeddings`` returns deterministic bag-of-words vectors (feature hashing), so
   word overlap between a question and a table description gives real similarity.
 """
@@ -38,6 +39,8 @@ class FakeOpenAI:
 
     sql: str = "SELECT COUNT(*) AS user_count FROM users;"
     chat_status: Optional[int] = None
+    chat_contents: list[str] = field(default_factory=list)
+    finish_reason: str = "stop"
     requests: list[dict[str, Any]] = field(default_factory=list)
     _server: Optional[ThreadingHTTPServer] = None
     _lock: threading.Lock = field(default_factory=threading.Lock)
@@ -102,10 +105,12 @@ class FakeOpenAI:
                         fake.chat_status,
                         {"error": {"message": f"fake {fake.chat_status}", "type": "invalid_request_error"}},
                     )
+                finish_reason = "stop"
                 if kind == "validate":
                     content = json.dumps({"is_valid": True, "errors": [], "warnings": [], "suggestions": []})
                 else:
-                    content = json.dumps({"sql": fake.sql, "explanation": "fake", "confidence": 0.9})
+                    content = fake._next_generation_content()
+                    finish_reason = fake.finish_reason
                 usage = {"prompt_tokens": (len(system) + len(user)) // 4, "completion_tokens": len(content) // 4}
                 usage["total_tokens"] = usage["prompt_tokens"] + usage["completion_tokens"]
                 fake._record({"kind": kind, "body": body, "prompt": user, "usage": usage})
@@ -117,7 +122,11 @@ class FakeOpenAI:
                         "created": int(time.time()),
                         "model": body.get("model"),
                         "choices": [
-                            {"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}
+                            {
+                                "index": 0,
+                                "message": {"role": "assistant", "content": content},
+                                "finish_reason": finish_reason,
+                            }
                         ],
                         "usage": usage,
                     },
@@ -131,6 +140,12 @@ class FakeOpenAI:
         if self._server is not None:
             self._server.shutdown()
             self._server.server_close()
+
+    def _next_generation_content(self) -> str:
+        with self._lock:
+            if self.chat_contents:
+                return self.chat_contents.pop(0)
+        return json.dumps({"sql": self.sql, "explanation": "fake", "confidence": 0.9})
 
     def _record(self, entry: dict[str, Any]) -> None:
         with self._lock:
