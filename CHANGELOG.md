@@ -22,6 +22,8 @@ pre-1.0.
 
 ## [Unreleased]
 
+## [0.2.0rc17] - 2026-10-20
+
 ### Changed
 - **User-visible: the LLM no longer reviews its own SQL by default.** Every `ask()`
   made a second LLM call that sent the whole schema context back to the model; it
