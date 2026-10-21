@@ -1,5 +1,6 @@
 """Shared fixtures for nlp2sql tests."""
 
+import logging
 import os
 from typing import Any
 
@@ -164,3 +165,13 @@ def isolated_caches(monkeypatch: pytest.MonkeyPatch, tmp_path):
     monkeypatch.setenv("NLP2SQL_EXAMPLES_DIR", str(tmp_path / "examples"))
     monkeypatch.chdir(tmp_path)
     return tmp_path
+
+
+@pytest.fixture(autouse=True)
+def restore_nlp2sql_logger():
+    """The CLI attaches a stderr handler to the "nlp2sql" logger; keep it from leaking across tests."""
+    logger = logging.getLogger("nlp2sql")
+    handlers, level = list(logger.handlers), logger.level
+    yield
+    logger.handlers[:] = handlers
+    logger.setLevel(level)
