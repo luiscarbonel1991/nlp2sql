@@ -11,14 +11,14 @@ from typing import Any
 
 import faiss
 import numpy as np
-import structlog
 
 from ..exceptions import SchemaException
 from ..ports.embedding_provider import EmbeddingProviderPort
 from ..ports.example_repository import ExampleRepositoryPort
+from ..utils.logger import get_logger
 from ..utils.storage import get_data_directory
 
-logger = structlog.get_logger()
+logger = get_logger(__name__)
 
 
 class ExampleStore(ExampleRepositoryPort):

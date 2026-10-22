@@ -4,7 +4,6 @@ import json
 from typing import Any, Dict, Optional
 
 import anthropic
-import structlog
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from ..config.settings import settings
@@ -12,10 +11,11 @@ from ..core.provider_config import ProviderConfig
 from ..exceptions import ProviderException, ProviderRequestError, ProviderResponseFormatError, TokenLimitException
 from ..ports.ai_provider import AIProviderPort, AIProviderType, QueryContext, QueryResponse
 from ..utils.helpers import first_not_none
+from ..utils.logger import get_logger
 from ..utils.semantic_prompt import format_semantic_context_lines, format_sql_intent_plan_lines
 from ._provider_errors import TRANSIENT_PROVIDER_ERRORS, call_with_format_retry, classify_provider_error
 
-logger = structlog.get_logger()
+logger = get_logger(__name__)
 
 # Maximum input tokens per model. Legacy rows are kept so users who pin an
 # older (or retired) model keep an accurate budget.
@@ -318,7 +318,8 @@ Ensure the JSON is properly formatted with no syntax errors. Escape any quotes i
             raise
         except json.JSONDecodeError as e:
             # Log the problematic content
-            logger.error("JSON parsing failed", content=content, error=str(e))
+            # The model output can quote user data: DEBUG only
+            logger.debug("JSON parsing failed", content=content, error=str(e))
             raise ProviderResponseFormatError(f"Invalid JSON response: {e!s}") from e
         except Exception as e:
             logger.error("Response parsing failed", error=str(e))
@@ -422,11 +423,8 @@ Check for:
             return result
 
         except Exception as e:
-            logger.error(
-                "Query validation failed",
-                error=str(e),
-                content=content if "content" in locals() else "No content received",
-            )
+            logger.error("Query validation failed", error=str(e))
+            logger.debug("Query validation output", content=content if "content" in locals() else None)
             # Return a basic validation result on error
             return {
                 "is_valid": True,

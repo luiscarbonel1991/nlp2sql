@@ -90,9 +90,10 @@ jobs:
         NLP2SQL_TEST_POSTGRES_DB: testdb
       run: pytest tests/test_pgvector_example_repository.py -m integration -q
 
-    # README Quick Start per provider, the false-invalid gold set and the cost of
-    # one question (LLM calls, tokens, database connections), with the OpenAI SDK
-    # pointed at tests/fakes/fake_openai.py (no keys, no cost).
+    # README Quick Start per provider, the false-invalid gold set, the cost of one
+    # question (LLM calls, tokens, database connections) and what an application gets
+    # back (no output, rows, validation reasons), with the OpenAI SDK pointed at
+    # tests/fakes/fake_openai.py (no keys, no cost).
     - name: First-run regression tests
       env:
         PYTHONPATH: src
@@ -102,7 +103,7 @@ jobs:
         NLP2SQL_TEST_POSTGRES_USER: testuser
         NLP2SQL_TEST_POSTGRES_PASS: testpass
         NLP2SQL_TEST_POSTGRES_DB: testdb
-      run: pytest tests/test_first_run.py tests/test_false_invalid_regression.py tests/test_cost_per_question.py -m integration -q
+      run: pytest tests/test_first_run.py tests/test_false_invalid_regression.py tests/test_cost_per_question.py tests/test_library_output.py -m integration -q
 
   # Installs the built wheel the way a user does: fresh environment, no lock
   # file, latest dependency versions. Catches undeclared dependencies (rc13-rc15

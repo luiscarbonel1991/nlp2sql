@@ -18,13 +18,13 @@ from typing import Any
 
 import numpy as np
 import psycopg2
-import structlog
 from psycopg2 import sql as psycopg2_sql
 from psycopg2.extras import Json, RealDictCursor, execute_values
 
 from ..exceptions import SchemaException
 from ..ports.embedding_provider import EmbeddingProviderPort
 from ..ports.example_repository import ExampleRepositoryPort
+from ..utils.logger import get_logger
 
 try:
     from pgvector.psycopg2 import register_vector
@@ -34,7 +34,7 @@ except ImportError as exc:
         "Install with: pip install 'nlp2sql[pgvector]' (or 'pip install pgvector')."
     ) from exc
 
-logger = structlog.get_logger()
+logger = get_logger(__name__)
 
 DEFAULT_TABLE_NAME = "nlp2sql_examples"
 _TABLE_NAME_PATTERN = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")

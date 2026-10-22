@@ -12,8 +12,6 @@ and counts the tokens of both answers.
 
 from typing import Any, Awaitable, Callable, Dict, NamedTuple, Optional, TypeVar
 
-import structlog
-
 from ..exceptions import (
     ProviderAuthenticationError,
     ProviderException,
@@ -22,8 +20,9 @@ from ..exceptions import (
     ProviderResponseFormatError,
     ProviderUnavailableError,
 )
+from ..utils.logger import get_logger
 
-logger = structlog.get_logger()
+logger = get_logger(__name__)
 
 TRANSIENT_PROVIDER_ERRORS = (ProviderRateLimitError, ProviderUnavailableError)
 FORMAT_RETRY_ATTEMPTS = 2

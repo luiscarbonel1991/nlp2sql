@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 import os
 import sys
 import time
@@ -10,9 +11,9 @@ from pathlib import Path
 from typing import Optional
 
 import click
-import structlog
 
 from . import create_and_initialize_service, create_query_service
+from .config.settings import settings
 from .core.entities import DatabaseType
 from .core.runtime import ExecutionMode
 from .core.provider_config import ProviderConfig
@@ -30,25 +31,42 @@ def get_embeddings_dir() -> Path:
     return Path(embeddings_dir)
 
 
-def setup_logging(verbose: bool = False):
-    """Configure logging."""
-    level = "DEBUG" if verbose else "INFO"
+class _StderrHandler(logging.StreamHandler):
+    """Writes to the current ``sys.stderr`` (click's test runner swaps it per invocation)."""
 
-    processors = [
-        structlog.processors.add_log_level,
-        structlog.processors.TimeStamper(fmt="iso"),
-    ]
+    @property
+    def stream(self):  # type: ignore[override]
+        return sys.stderr
 
+    @stream.setter
+    def stream(self, _value) -> None:
+        pass
+
+
+_cli_log_handler: Optional[logging.Handler] = None
+
+
+def setup_logging(verbose: bool = False) -> None:
+    """Send nlp2sql logs to stderr, so command output on stdout stays parseable.
+
+    Level: DEBUG with --verbose, else NLP2SQL_LOG_LEVEL when set, else WARNING. Before,
+    the CLI logged at INFO to stdout, mixed with the SQL and JSON it prints.
+    """
+    global _cli_log_handler
     if verbose:
-        processors.append(structlog.processors.JSONRenderer())
+        level = "DEBUG"
+    elif "log_level" in settings.model_fields_set:
+        level = settings.log_level.value
     else:
-        processors.append(structlog.dev.ConsoleRenderer())
+        level = "WARNING"
 
-    structlog.configure(
-        processors=processors,
-        logger_factory=structlog.PrintLoggerFactory(),
-        wrapper_class=structlog.make_filtering_bound_logger(min_level=level),
-    )
+    library_logger = logging.getLogger("nlp2sql")
+    if _cli_log_handler is not None:
+        library_logger.removeHandler(_cli_log_handler)
+    _cli_log_handler = _StderrHandler()
+    _cli_log_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    library_logger.addHandler(_cli_log_handler)
+    library_logger.setLevel(level)
 
 
 def detect_command_confusion(ctx, param, value):
