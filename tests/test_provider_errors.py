@@ -56,6 +56,11 @@ def _status(sdk, error_class: str, status: int) -> Exception:
         (_status(anthropic, "InternalServerError", 529), ProviderUnavailableError),
         (google_exceptions.Unauthenticated("bad key"), ProviderAuthenticationError),
         (google_exceptions.InvalidArgument("bad model"), ProviderRequestError),
+        # What Gemini answers to an invalid API key (seen with nlp2sql setup)
+        (
+            google_exceptions.InvalidArgument('API key not valid. [reason: "API_KEY_INVALID"]'),
+            ProviderAuthenticationError,
+        ),
         (google_exceptions.ResourceExhausted("quota"), ProviderRateLimitError),
         (google_exceptions.ServiceUnavailable("down"), ProviderUnavailableError),
         (google_exceptions.DeadlineExceeded("slow"), ProviderUnavailableError),

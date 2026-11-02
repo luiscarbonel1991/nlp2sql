@@ -109,12 +109,24 @@ class NLP2SQL:
         """Get query suggestions from a partial question."""
         return await self._service.get_query_suggestions(partial, self._database_type, limit)
 
+    async def get_stats(self) -> dict[str, Any]:
+        """Service statistics: provider, its context size and which components are enabled."""
+        return await self._service.get_service_stats()
+
     @property
     def stats(self) -> dict[str, Any]:
-        """Get service statistics (sync wrapper)."""
+        """``get_stats()`` for synchronous code.
+
+        Raises:
+            RuntimeError: Inside a running event loop; use ``await nlp.get_stats()`` there.
+        """
         import asyncio
 
-        return asyncio.get_event_loop().run_until_complete(self._service.get_service_stats())
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(self.get_stats())
+        raise RuntimeError("NLP2SQL.stats cannot run inside an event loop; use `await nlp.get_stats()`")
 
 
 # ------------------------------------------------------------------

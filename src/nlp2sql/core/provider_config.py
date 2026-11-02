@@ -37,6 +37,13 @@ class ProviderConfig:
         "gemini": "gemini-3.6-flash",
     }
 
+    # Environment variable each provider's API key is read from
+    API_KEY_ENV_VARS: ClassVar[dict[str, str]] = {
+        "openai": "OPENAI_API_KEY",
+        "anthropic": "ANTHROPIC_API_KEY",
+        "gemini": "GOOGLE_API_KEY",
+    }
+
     def __post_init__(self) -> None:
         if self.provider not in self.SUPPORTED_PROVIDERS:
             msg = f"Unsupported provider: '{self.provider}'. Supported: {sorted(self.SUPPORTED_PROVIDERS)}"

@@ -1,34 +1,48 @@
 """Enhanced command line interface for nlp2sql."""
 
 import asyncio
+import csv
 import json
 import logging
 import os
 import sys
 import time
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, TextIO
 
 import click
 
-from . import create_and_initialize_service, create_query_service
+from . import create_ai_provider, create_and_initialize_service
 from .config.settings import settings
 from .core.entities import DatabaseType
 from .core.runtime import ExecutionMode
 from .core.provider_config import ProviderConfig
-from .exceptions import NLP2SQLException, ProviderException
+from .exceptions import (
+    NLP2SQLException,
+    ProviderAuthenticationError,
+    ProviderException,
+    ProviderRateLimitError,
+    ProviderRequestError,
+    ProviderUnavailableError,
+)
+from .ports.ai_provider import QueryContext
+from .ports.schema_repository import TableInfo
+from .schema.filters import filter_tables
 from .utils.artifact_loader import (
     create_example_store_from_payload,
     load_examples_payload,
     load_semantic_context,
 )
-
-
-def get_embeddings_dir() -> Path:
-    """Get the embeddings directory path from environment variable."""
-    embeddings_dir = os.getenv("NLP2SQL_EMBEDDINGS_DIR", "./embeddings")
-    return Path(embeddings_dir)
+from .utils.redaction import mask_database_url
+from .utils.storage import (
+    EMBEDDINGS_LOCATION,
+    EXAMPLES_LOCATION,
+    existing_data_directories,
+    index_directory_name,
+    tables_cache_directory_name,
+)
 
 
 class _StderrHandler(logging.StreamHandler):
@@ -69,15 +83,72 @@ def setup_logging(verbose: bool = False) -> None:
     library_logger.setLevel(level)
 
 
-def detect_command_confusion(ctx, param, value):
-    """Detect common command confusions and provide helpful suggestions."""
-    if ctx.info_name == "inspect" and param.name == "question":
-        click.echo("Error: 'inspect' command doesn't accept --question option", err=True)
-        click.echo('Hint: Did you mean: nlp2sql query --database-url [...] --question "..."', err=True)
-        click.echo("Info: Use 'inspect' to analyze database schema", err=True)
-        click.echo("AI: Use 'query' to generate SQL from natural language", err=True)
-        ctx.exit(1)
-    return value
+PROVIDER_NAMES = {"openai": "OpenAI", "anthropic": "Anthropic", "gemini": "Gemini"}
+
+
+def provider_api_key(provider: str) -> Optional[str]:
+    """API key from the provider's environment variable (ProviderConfig.API_KEY_ENV_VARS)."""
+    env_var = ProviderConfig.API_KEY_ENV_VARS.get(provider)
+    return os.getenv(env_var) if env_var else None
+
+
+def configured_providers() -> list[str]:
+    return [provider for provider in PROVIDER_NAMES if provider_api_key(provider)]
+
+
+# One table and one question keep a provider check to a few hundred tokens
+_CHECK_SCHEMA = "Table: users\nColumns: id (integer, primary key), name (text)"
+_CHECK_QUESTION = "How many users are there?"
+
+
+async def check_provider(provider: str, api_key: Optional[str]) -> str:
+    """Generate SQL for one small question; return "model, latency, tokens". Raises on failure."""
+    config = ProviderConfig(provider=provider, api_key=api_key)
+    ai_provider = create_ai_provider(config)
+    started = time.perf_counter()
+    response = await ai_provider.generate_query(
+        QueryContext(question=_CHECK_QUESTION, database_type="postgres", schema_context=_CHECK_SCHEMA, examples=[])
+    )
+    elapsed = time.perf_counter() - started
+    return f"{config.resolved_model}, {elapsed:.1f}s, {response.tokens_used} tokens"
+
+
+def describe_provider_failure(provider: str, error: Exception) -> str:
+    """What to do about a failed provider check, from the error type."""
+    env_var = ProviderConfig.API_KEY_ENV_VARS[provider]
+    status = (getattr(error, "details", None) or {}).get("status_code")
+    if isinstance(error, ImportError):
+        return f"SDK not installed. Install with: pip install nlp2sql[{provider}]"
+    if isinstance(error, ProviderAuthenticationError):
+        return f"API key rejected ({status}). Check {env_var}"
+    if isinstance(error, ProviderRateLimitError):
+        return "rate limited or out of quota (429)"
+    if isinstance(error, ProviderUnavailableError):
+        return "provider unreachable or unavailable"
+    if isinstance(error, ProviderRequestError):
+        hint = ". Check the model id" if status == 404 else ""
+        return f"request rejected ({status}){hint}"
+    return str(error)
+
+
+async def run_provider_checks(providers: list[str]) -> list[bool]:
+    """Check each provider with one real request and print one line per provider."""
+    results = []
+    for provider in providers:
+        name = PROVIDER_NAMES[provider]
+        try:
+            summary = await check_provider(provider, provider_api_key(provider))
+        except Exception as e:
+            reason = describe_provider_failure(provider, e)
+            click.echo(f"   [ERROR] {name}: {reason}")
+            detail = str(e).splitlines()[0] if str(e) else ""
+            if detail and detail != reason:
+                click.echo(f"      {detail[:200]}")
+            results.append(False)
+            continue
+        click.echo(f"   [OK] {name}: {summary}")
+        results.append(True)
+    return results
 
 
 def detect_database_type(database_url: str) -> DatabaseType:
@@ -100,7 +171,10 @@ def detect_database_type(database_url: str) -> DatabaseType:
 def validate_database_url(ctx, param, value):
     """Validate database URL format."""
     if value and not value.startswith(("postgresql://", "postgres://", "mysql://", "sqlite://", "redshift://")):
-        click.echo(f"[ERROR] Invalid database URL format: {value}", err=True)
+        # Never echo the value: a malformed URL can still contain the password
+        scheme = value.split("://", 1)[0] if "://" in value else None
+        reason = f"unsupported scheme '{scheme}'" if scheme else "missing scheme://"
+        click.echo(f"[ERROR] Invalid database URL format: {reason}", err=True)
         click.echo("Hint: Expected format: postgresql://user:pass@host:port/database", err=True)
         click.echo("Note: Examples:", err=True)
         click.echo("   postgresql://testuser:testpass@localhost:5432/testdb", err=True)
@@ -118,6 +192,137 @@ def parse_schema_filters(schema_filters: str | None) -> dict | None:
         return json.loads(schema_filters)
     except json.JSONDecodeError as exc:
         raise ValueError(f"Invalid JSON in schema-filters: {exc.msg}.") from exc
+
+
+def split_names(value: Optional[str]) -> Optional[list[str]]:
+    """Parse a comma-separated option into names; None when it names nothing."""
+    names = [name.strip() for name in (value or "").split(",") if name.strip()]
+    return names or None
+
+
+_SORT_KEYS = {
+    "rows": lambda table: table.row_count or 0,
+    "size": lambda table: table.size_bytes or 0,
+    "columns": lambda table: len(table.columns),
+}
+
+
+def select_tables(  # noqa: PLR0913 — one keyword per inspect option
+    tables: list[TableInfo],
+    *,
+    include_tables: Optional[list[str]] = None,
+    exclude_tables: Optional[list[str]] = None,
+    exclude_system: bool = False,
+    min_rows: Optional[int] = None,
+    sort_by: str = "name",
+    max_tables: Optional[int] = None,
+) -> list[TableInfo]:
+    """Apply the inspect options: filter, keep tables with at least ``min_rows``, sort, then limit."""
+    selected = filter_tables(
+        tables,
+        include_tables=include_tables,
+        exclude_tables=exclude_tables,
+        exclude_system_tables=exclude_system,
+    )
+    if min_rows is not None:
+        selected = [table for table in selected if (table.row_count or 0) >= min_rows]
+    selected.sort(key=lambda table: table.name)
+    if sort_by in _SORT_KEYS:
+        # Stable sort: ties stay in name order
+        selected.sort(key=_SORT_KEYS[sort_by], reverse=True)
+    return selected[:max_tables] if max_tables is not None else selected
+
+
+def table_as_dict(table: TableInfo) -> dict:
+    return {
+        "name": table.name,
+        "schema": table.schema,
+        "columns": table.columns,
+        "primary_keys": table.primary_keys,
+        "foreign_keys": table.foreign_keys,
+        "indexes": table.indexes,
+        "row_count": table.row_count,
+        "size_bytes": table.size_bytes,
+        "description": table.description,
+    }
+
+
+def write_tables_csv(tables: list[TableInfo], output: TextIO) -> None:
+    """One row per table; columns and foreign_keys are counts."""
+    writer = csv.writer(output)
+    writer.writerow(["name", "schema", "row_count", "size_bytes", "columns", "foreign_keys", "description"])
+    for table in tables:
+        writer.writerow(
+            [
+                table.name,
+                table.schema,
+                table.row_count if table.row_count is not None else "",
+                table.size_bytes if table.size_bytes is not None else "",
+                len(table.columns),
+                len(table.foreign_keys),
+                table.description or "",
+            ]
+        )
+
+
+_SIZE_STEP = 1024
+
+
+def _format_size(size_bytes: Optional[int]) -> str:
+    if size_bytes is None:
+        return "-"
+    if size_bytes < _SIZE_STEP:
+        return f"{size_bytes} B"
+    size = size_bytes / _SIZE_STEP
+    for unit in ("KB", "MB", "GB"):
+        if size < _SIZE_STEP:
+            return f"{size:.1f} {unit}"
+        size /= _SIZE_STEP
+    return f"{size:.1f} TB"
+
+
+def render_tables(tables: list[TableInfo]) -> str:
+    """Plain-text table: name left-aligned, numbers right-aligned."""
+    headers = ["Table", "Rows", "Size", "Columns", "Foreign keys"]
+    rows = [
+        [
+            table.name,
+            f"{table.row_count:,}" if table.row_count is not None else "-",
+            _format_size(table.size_bytes),
+            str(len(table.columns)),
+            str(len(table.foreign_keys)),
+        ]
+        for table in tables
+    ]
+    widths = [max(len(cell) for cell in column) for column in zip(headers, *rows)]
+
+    def line(cells: list[str]) -> str:
+        first = cells[0].ljust(widths[0])
+        rest = [cell.rjust(width) for cell, width in zip(cells[1:], widths[1:])]
+        return "  ".join([first, *rest]).rstrip()
+
+    return "\n".join([line(headers), "  ".join("-" * width for width in widths), *map(line, rows)])
+
+
+def write_tables(tables: list[TableInfo], output_format: str, output: TextIO) -> None:
+    """Write the selected tables as json, csv or a plain-text table."""
+    if output_format == "json":
+        json.dump([table_as_dict(table) for table in tables], output, indent=2)
+    elif output_format == "csv":
+        write_tables_csv(tables, output)
+    else:
+        click.echo(render_tables(tables), file=output)
+
+
+def write_schema_summary(tables: list[TableInfo], total: int, database_url: str, schema: str, output: TextIO) -> None:
+    shown = f"{len(tables)}" if len(tables) == total else f"{len(tables)} (of {total})"
+    click.echo("[STATS] Database Schema Summary", file=output)
+    click.echo("=" * 30, file=output)
+    click.echo(f"Database URL: {mask_database_url(database_url)}", file=output)
+    click.echo(f"Schema: {schema}", file=output)
+    click.echo(f"Total tables: {shown}", file=output)
+    click.echo(f"Total columns: {sum(len(table.columns) for table in tables):,}", file=output)
+    click.echo(f"Tables with foreign keys: {sum(1 for table in tables if table.foreign_keys)}", file=output)
 
 
 def resolve_execution_mode(validate: bool, repair: bool) -> str:
@@ -187,21 +392,17 @@ def config(ctx):
     click.echo(f"Config file: {config_path}")
 
     click.echo("\n🔑 API Keys Status:")
-    api_keys = {
-        "OpenAI": os.getenv("OPENAI_API_KEY"),
-        "Anthropic": os.getenv("ANTHROPIC_API_KEY"),
-        "Google": os.getenv("GOOGLE_API_KEY"),
-    }
-    for provider, key in api_keys.items():
-        if key:
-            click.echo(f"   [OK] {provider}: Set")
+    for provider, name in PROVIDER_NAMES.items():
+        env_var = ProviderConfig.API_KEY_ENV_VARS[provider]
+        if provider_api_key(provider):
+            click.echo(f"   [OK] {name} ({env_var}): Set")
         else:
-            click.echo(f"   [ERROR] {provider}: Not set")
+            click.echo(f"   [ERROR] {name} ({env_var}): Not set")
 
     db_url = os.getenv("DATABASE_URL")
     click.echo("\n[DATABASE] Database Connection:")
     if db_url:
-        click.echo(f"   [OK] DATABASE_URL: {db_url}")
+        click.echo(f"   [OK] DATABASE_URL: {mask_database_url(db_url)}")
     else:
         click.echo("   [ERROR] DATABASE_URL: Not set")
 
@@ -246,11 +447,18 @@ api_key = "$GOOGLE_API_KEY"
 )
 @click.option("--include-tables", help="Comma-separated list of tables to include")
 @click.option("--exclude-tables", help="Comma-separated list of tables to exclude")
-@click.option("--exclude-system", is_flag=True, help="Exclude system tables")
-@click.option("--min-rows", type=int, help="Only show tables with at least N rows")
+@click.option("--exclude-system", is_flag=True, help="Exclude system tables (pg_, sql_, information_schema, ...)")
+@click.option(
+    "--min-rows",
+    type=int,
+    help="Only show tables with at least N rows (PostgreSQL statistics estimate; Redshift reports 0 rows)",
+)
 @click.option("--max-tables", type=int, help="Limit number of tables shown")
 @click.option(
-    "--sort-by", type=click.Choice(["name", "rows", "size", "columns"]), default="name", help="Sort tables by field"
+    "--sort-by",
+    type=click.Choice(["name", "rows", "size", "columns"]),
+    default="name",
+    help="Sort tables by field (rows, size and columns: largest first)",
 )
 @click.pass_context
 def inspect(
@@ -267,13 +475,6 @@ def inspect(
     sort_by: str,
 ):
     """Inspect database schema with advanced filtering and analysis."""
-    if "question" in ctx.params:
-        click.echo("Error: 'inspect' command doesn't accept --question option", err=True)
-        click.echo('Hint: Did you mean: nlp2sql query --database-url [...] --question "..."', err=True)
-        click.echo("Info: Use 'inspect' to analyze database schema", err=True)
-        click.echo("AI: Use 'query' to generate SQL from natural language", err=True)
-        ctx.exit(1)
-
     verbose = ctx.obj.get("verbose", False)
 
     async def _inspect():
@@ -292,39 +493,23 @@ def inspect(
                 click.echo(f"[ERROR] {e}", err=True)
                 sys.exit(1)
 
-            # Get schema information
-            tables = await repo.get_tables()
+            all_tables = await repo.get_tables()
+            if min_rows and database_type == DatabaseType.REDSHIFT:
+                click.echo("[WARNING] Redshift tables report 0 rows, so --min-rows leaves no tables", err=True)
+            tables = select_tables(
+                all_tables,
+                include_tables=split_names(include_tables),
+                exclude_tables=split_names(exclude_tables),
+                exclude_system=exclude_system,
+                min_rows=min_rows,
+                sort_by=sort_by,
+                max_tables=max_tables,
+            )
 
-            if output_format == "json":
-                # Export full schema as JSON
-                schema_data = []
-                for table in tables:
-                    table_data = {
-                        "name": table.name,
-                        "schema": table.schema,
-                        "columns": table.columns,
-                        "primary_keys": table.primary_keys,
-                        "foreign_keys": table.foreign_keys,
-                        "indexes": table.indexes,
-                        "row_count": table.row_count,
-                        "size_bytes": table.size_bytes,
-                        "description": table.description,
-                    }
-                    schema_data.append(table_data)
-
-                json.dump(schema_data, output, indent=2)
-
-            else:  # summary or table
-                total_columns = sum(len(t.columns) for t in tables)
-                tables_with_fk = sum(1 for t in tables if t.foreign_keys)
-
-                click.echo("[STATS] Database Schema Summary", file=output)
-                click.echo("=" * 30, file=output)
-                click.echo(f"Database URL: {database_url}", file=output)
-                click.echo(f"Schema: {schema}", file=output)
-                click.echo(f"Total tables: {len(tables)}", file=output)
-                click.echo(f"Total columns: {total_columns:,}", file=output)
-                click.echo(f"Tables with foreign keys: {tables_with_fk}", file=output)
+            if output_format == "summary":
+                write_schema_summary(tables, len(all_tables), database_url, schema, output)
+            else:
+                write_tables(tables, output_format, output)
 
         except NLP2SQLException as e:
             click.echo(f"[ERROR] Application Error: {e!s}", err=True)
@@ -424,14 +609,8 @@ def query(
             # Get API key from parameter or environment
             final_api_key = api_key
             if not final_api_key:
-                # Map provider to correct environment variable
-                env_var_mapping = {
-                    "openai": "OPENAI_API_KEY",
-                    "anthropic": "ANTHROPIC_API_KEY",
-                    "gemini": "GOOGLE_API_KEY",
-                }
-                env_var = env_var_mapping.get(provider, f"{provider.upper()}_API_KEY")
-                final_api_key = os.getenv(env_var)
+                env_var = ProviderConfig.API_KEY_ENV_VARS[provider]
+                final_api_key = provider_api_key(provider)
                 if not final_api_key:
                     click.echo(f"[ERROR] No API key provided. Set {env_var} or use --api-key", err=True)
                     sys.exit(1)
@@ -555,28 +734,20 @@ def query(
 @click.pass_context
 def setup(ctx):
     """Interactive setup and configuration for nlp2sql."""
-    verbose = ctx.obj.get("verbose", False)
-
     click.echo("nlp2sql - Interactive Setup")
     click.echo("=" * 40)
-
-    # Check API keys
-    api_keys = {
-        "OpenAI": os.getenv("OPENAI_API_KEY"),
-        "Anthropic": os.getenv("ANTHROPIC_API_KEY"),
-        "Google": os.getenv("GOOGLE_API_KEY"),
-    }
 
     click.echo("\n🔑 API Keys Status:")
     available_providers = []
 
-    for provider, key in api_keys.items():
+    for provider, name in PROVIDER_NAMES.items():
+        key = provider_api_key(provider)
         if key:
             masked_key = f"{key[:8]}...{key[-4:]}" if len(key) > 12 else "***"
-            click.echo(f"   [OK] {provider}: {masked_key}")
-            available_providers.append(provider.lower())
+            click.echo(f"   [OK] {name}: {masked_key}")
+            available_providers.append(provider)
         else:
-            click.echo(f"   [ERROR] {provider}: Not set")
+            click.echo(f"   [ERROR] {name}: Not set ({ProviderConfig.API_KEY_ENV_VARS[provider]})")
 
     if not available_providers:
         click.echo("\n[WARNING] No API keys found!")
@@ -589,8 +760,9 @@ def setup(ctx):
     click.echo(f"\n[OK] Available providers: {', '.join(available_providers)}")
 
     # Interactive configuration
-    if click.confirm("\n[CONFIG] Would you like to test your API keys?"):
-        asyncio.run(_test_providers(available_providers, verbose))
+    if click.confirm("\n[CONFIG] Would you like to test your API keys? (one small request each)"):
+        click.echo("\n🧪 Testing API providers...")
+        asyncio.run(run_provider_checks(available_providers))
 
     # Database setup
     if click.confirm("\n[DATABASE] Would you like to configure a database connection?"):
@@ -598,29 +770,6 @@ def setup(ctx):
 
     click.echo("\n[SUCCESS] Setup completed!")
     click.echo("Hint: Run 'nlp2sql validate' to verify your configuration")
-
-
-async def _test_providers(providers: list, verbose: bool = False):
-    """Test API providers."""
-    click.echo("\n🧪 Testing API providers...")
-
-    for provider in providers:
-        if verbose:
-            click.echo(f"Info: Testing {provider}...")
-
-        try:
-            # Map provider to correct environment variable
-            env_var_mapping = {"openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY", "gemini": "GOOGLE_API_KEY"}
-            env_var = env_var_mapping.get(provider, f"{provider.upper()}_API_KEY")
-
-            # Create a simple service to test the provider (side-effect: validates credentials)
-            create_query_service(
-                database_url="postgresql://test:test@localhost/test", ai_provider=provider, api_key=os.getenv(env_var)
-            )
-            click.echo(f"   [OK] {provider.title()}: Connection successful")
-
-        except Exception as e:
-            click.echo(f"   [ERROR] {provider.title()}: {e!s}")
 
 
 def _setup_database():
@@ -656,33 +805,12 @@ def validate(ctx):
 
     tests = []
 
-    # Test API keys
-    api_keys = {
-        "openai": os.getenv("OPENAI_API_KEY"),
-        "anthropic": os.getenv("ANTHROPIC_API_KEY"),
-        "gemini": os.getenv("GOOGLE_API_KEY"),
-    }
-
-    click.echo("\n🔑 Testing API Keys...")
-    working_providers = []
-
-    for provider, key in api_keys.items():
-        if not key:
-            if verbose:
-                click.echo(f"   [WARNING] {provider.title()}: Not configured")
-            continue
-
-        try:
-            create_query_service(
-                database_url="postgresql://test:test@localhost/test", ai_provider=provider, api_key=key
-            )
-            click.echo(f"   [OK] {provider.title()}: Valid")
-            working_providers.append(provider)
-            tests.append(True)
-
-        except Exception as e:
-            click.echo(f"   [ERROR] {provider.title()}: {e!s}")
-            tests.append(False)
+    click.echo("\n🔑 Testing API Keys (one small request each)...")
+    if verbose:
+        for provider, name in PROVIDER_NAMES.items():
+            if not provider_api_key(provider):
+                click.echo(f"   [WARNING] {name}: Not configured ({ProviderConfig.API_KEY_ENV_VARS[provider]})")
+    tests.extend(asyncio.run(run_provider_checks(configured_providers())))
 
     # Test database connection if provided
     db_url = os.getenv("DATABASE_URL")
@@ -698,19 +826,24 @@ def validate(ctx):
     elif verbose:
         click.echo("\n[WARNING] No DATABASE_URL configured")
 
-    # Summary
-    passed = sum(tests)
-    total = len(tests)
+    if not _print_validation_summary(tests):
+        sys.exit(1)
 
+
+def _print_validation_summary(tests: list[bool]) -> bool:
+    """Print the summary; True only when something was checked and everything passed."""
+    passed, total = sum(tests), len(tests)
     click.echo("\n[STATS] Validation Summary:")
     click.echo(f"   Tests passed: {passed}/{total}")
-
-    if passed == total and total > 0:
+    if total == 0:
+        click.echo("[ERROR] Nothing to validate: set an API key or DATABASE_URL.")
+    elif passed == total:
         click.echo("[SUCCESS] All tests passed! nlp2sql is ready to use!")
     elif passed > 0:
         click.echo("[WARNING] Some tests passed. Check failures above.")
     else:
         click.echo("[ERROR] All tests failed. Please check your configuration.")
+    return total > 0 and passed == total
 
 
 async def _test_database(db_url: str, verbose: bool = False):
@@ -718,7 +851,7 @@ async def _test_database(db_url: str, verbose: bool = False):
     from .factories import RepositoryFactory
 
     if verbose:
-        click.echo(f"Info: Connecting to: {db_url[:30]}...")
+        click.echo(f"Info: Connecting to: {mask_database_url(db_url)}")
 
     await RepositoryFactory.create_and_initialize(db_url)
     if verbose:
@@ -737,29 +870,16 @@ def providers_list():
     click.echo("AI: Available AI Providers")
     click.echo("=" * 30)
 
-    default_models = ProviderConfig.DEFAULT_MODELS
+    contexts = {"openai": "1.05M tokens (922K input)", "anthropic": "1M tokens", "gemini": "1M tokens"}
     providers_info = [
         {
-            "name": "OpenAI",
-            "provider": "openai",
-            "env_var": "OPENAI_API_KEY",
-            "models": f"default: {default_models['openai']}",
-            "context": "1.05M tokens (922K input)",
-        },
-        {
-            "name": "Anthropic",
-            "provider": "anthropic",
-            "env_var": "ANTHROPIC_API_KEY",
-            "models": f"default: {default_models['anthropic']}",
-            "context": "1M tokens",
-        },
-        {
-            "name": "Google",
-            "provider": "gemini",
-            "env_var": "GOOGLE_API_KEY",
-            "models": f"default: {default_models['gemini']}",
-            "context": "1M tokens",
-        },
+            "name": name,
+            "provider": provider,
+            "env_var": ProviderConfig.API_KEY_ENV_VARS[provider],
+            "models": f"default: {ProviderConfig.DEFAULT_MODELS[provider]}",
+            "context": contexts[provider],
+        }
+        for provider, name in PROVIDER_NAMES.items()
     ]
 
     for provider in providers_info:
@@ -775,57 +895,27 @@ def providers_list():
 
 
 @providers.command("test")
-@click.option("--provider", help="Test specific provider (openai, anthropic, gemini)")
+@click.option(
+    "--provider",
+    type=click.Choice(sorted(ProviderConfig.SUPPORTED_PROVIDERS)),
+    help="Test one provider (default: every provider with an API key set)",
+)
 def providers_test(provider):
-    """Test AI provider connections."""
+    """Check AI providers with one small SQL generation request each (exit 1 if any fails)."""
+    if provider and not provider_api_key(provider):
+        click.echo(f"[ERROR] {PROVIDER_NAMES[provider]}: no API key. Set {ProviderConfig.API_KEY_ENV_VARS[provider]}")
+        sys.exit(1)
+    providers_to_test = [provider] if provider else configured_providers()
+    if not providers_to_test:
+        env_vars = ", ".join(ProviderConfig.API_KEY_ENV_VARS.values())
+        click.echo(f"[ERROR] No providers configured. Set one of: {env_vars}")
+        sys.exit(1)
 
-    async def _test():
-        providers_to_test = []
-
-        if provider:
-            providers_to_test = [provider]
-        else:
-            # Test all configured providers
-            all_providers = ["openai", "anthropic", "gemini"]
-            env_vars = ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY"]
-
-            for p, env_var in zip(all_providers, env_vars):
-                if os.getenv(env_var):
-                    providers_to_test.append(p)
-
-        if not providers_to_test:
-            click.echo("[ERROR] No providers configured or specified")
-            return
-
-        click.echo("🧪 Testing AI Providers")
-        click.echo("=" * 25)
-
-        for p in providers_to_test:
-            click.echo(f"\nInfo: Testing {p.title()}...")
-
-            try:
-                # Map provider to correct environment variable
-                env_var_mapping = {
-                    "openai": "OPENAI_API_KEY",
-                    "anthropic": "ANTHROPIC_API_KEY",
-                    "gemini": "GOOGLE_API_KEY",
-                }
-                env_var = env_var_mapping.get(p, f"{p.upper()}_API_KEY")
-
-                create_query_service(
-                    database_url="postgresql://test:test@localhost/test", ai_provider=p, api_key=os.getenv(env_var)
-                )
-
-                click.echo(f"   [OK] {p.title()}: Connection successful")
-                click.echo("   [STATS] Provider initialized and ready")
-
-            except ImportError:
-                click.echo(f"   [ERROR] {p.title()}: Missing dependency")
-                click.echo(f"   Hint: Install with: pip install nlp2sql[{p}]")
-            except Exception as e:
-                click.echo(f"   [ERROR] {p.title()}: {e!s}")
-
-    asyncio.run(_test())
+    click.echo("🧪 Testing AI Providers")
+    click.echo("=" * 25)
+    results = asyncio.run(run_provider_checks(providers_to_test))
+    if not all(results):
+        sys.exit(1)
 
 
 @cli.command()
@@ -892,19 +982,8 @@ def benchmark(
                 click.echo(f"[ERROR] Questions file not found: {questions}", err=True)
                 return
 
-        # Determine providers to test
-        if providers:
-            test_providers = providers.split(",")
-        else:
-            # Test all configured providers
-            test_providers = []
-            for p, env_var in [
-                ("openai", "OPENAI_API_KEY"),
-                ("anthropic", "ANTHROPIC_API_KEY"),
-                ("gemini", "GOOGLE_API_KEY"),
-            ]:
-                if os.getenv(env_var):
-                    test_providers.append(p)
+        # The listed providers, else every provider with an API key set
+        test_providers = providers.split(",") if providers else configured_providers()
 
         if not test_providers:
             click.echo("[ERROR] No providers configured", err=True)
@@ -930,10 +1009,7 @@ def benchmark(
                 "confidences": [],
             }
 
-            # Map provider to correct environment variable
-            env_var_mapping = {"openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY", "gemini": "GOOGLE_API_KEY"}
-            env_var = env_var_mapping.get(provider, f"{provider.upper()}_API_KEY")
-            api_key = os.getenv(env_var)
+            api_key = provider_api_key(provider)
 
             try:
                 if embedding_provider == "none":
@@ -1038,144 +1114,167 @@ def benchmark(
 
 @cli.group()
 def cache():
-    """Manage nlp2sql cache and embeddings."""
+    """Inspect or clear the caches nlp2sql keeps on disk."""
     pass
 
 
+SCHEMA_INDEX_FILES = ("schema_index.faiss", "schema_metadata.pkl")
+EXAMPLE_INDEX_FILES = ("examples_index.faiss", "examples_metadata.pkl")
+
+
+@dataclass
+class CacheFiles:
+    """The caches found where the library writes them (see utils/storage.py)."""
+
+    bases: list[Path]
+    schema_indexes: list[Path]
+    example_indexes: list[Path]
+    tables_caches: list[Path]
+
+
+def _index_directories(bases: list[Path], file_names: tuple[str, ...], name: Optional[str]) -> list[Path]:
+    """Directories holding an index: ``base/name`` for one database, else every subdirectory.
+
+    Without a database, the base itself is included: an ExampleStore created without a
+    database_url writes its index there.
+    """
+    candidates: list[Path] = []
+    for base in bases:
+        if name is not None:
+            candidates.append(base / name)
+        else:
+            candidates.extend([base, *sorted(path for path in base.iterdir() if path.is_dir())])
+    return [directory for directory in candidates if any((directory / f).is_file() for f in file_names)]
+
+
+def find_cache_files(database_url: Optional[str] = None, schema: str = "public") -> CacheFiles:
+    """Find schema indexes, example indexes and table caches, for one database or all."""
+    embedding_bases = existing_data_directories(*EMBEDDINGS_LOCATION)
+    example_bases = existing_data_directories(*EXAMPLES_LOCATION)
+    index_name = index_directory_name(database_url, schema) if database_url else None
+
+    if database_url:
+        tables_dir = tables_cache_directory_name(database_url)
+        tables_caches = [base / tables_dir / f"tables_cache_{schema}.pkl" for base in embedding_bases]
+        tables_caches = [path for path in tables_caches if path.is_file()]
+    else:
+        tables_caches = sorted(path for base in embedding_bases for path in base.glob("*/tables_cache_*.pkl"))
+
+    return CacheFiles(
+        bases=embedding_bases + example_bases,
+        schema_indexes=_index_directories(embedding_bases, SCHEMA_INDEX_FILES, index_name),
+        example_indexes=_index_directories(example_bases, EXAMPLE_INDEX_FILES, index_name),
+        tables_caches=tables_caches,
+    )
+
+
+def _size_of(paths: list[Path]) -> str:
+    return _format_size(sum(path.stat().st_size for path in paths if path.is_file()))
+
+
+def _echo_index_directories(title: str, directories: list[Path], file_names: tuple[str, ...]) -> None:
+    click.echo(f"\n{title}: {len(directories) or 'none found'}")
+    for directory in directories:
+        files = [directory / name for name in file_names if (directory / name).is_file()]
+        click.echo(f"   {directory.resolve()}: {', '.join(f.name for f in files)} ({_size_of(files)})")
+
+
+def _echo_tables_caches(paths: list[Path]) -> None:
+    import pickle
+
+    click.echo(f"\nTable caches: {len(paths) or 'none found'}")
+    for path in paths:
+        try:
+            with open(path, "rb") as f:
+                cache_data = pickle.load(f)
+        except Exception as e:
+            click.echo(f"   {path.resolve()}: [ERROR] {e}")
+            continue
+        created_at = cache_data.get("created_at")
+        age = f", age: {(datetime.now() - created_at).total_seconds() / 3600:.1f}h" if created_at else ""
+        tables = cache_data.get("table_count", 0)
+        click.echo(f"   {path.resolve()}: {tables} tables (schema: {cache_data.get('schema_name', '?')}{age})")
+
+
+def _delete_files(paths: list[Path], keep_directories: list[Path]) -> list[Path]:
+    """Delete ``paths``, then their directory when it is left empty and is not a base directory."""
+    deleted = []
+    for path in paths:
+        try:
+            path.unlink()
+        except OSError as e:
+            click.echo(f"   [ERROR] Failed to delete {path}: {e}", err=True)
+            continue
+        deleted.append(path)
+        parent = path.parent
+        if parent not in keep_directories and not any(parent.iterdir()):
+            parent.rmdir()
+    return deleted
+
+
 @cache.command("clear")
-@click.option("--all", "clear_all", is_flag=True, help="Clear all cache files")
-@click.option("--embeddings", is_flag=True, help="Clear embeddings cache")
-@click.option("--queries", is_flag=True, help="Clear query cache")
-@click.option("--tables", is_flag=True, help="Clear tables cache (forces re-fetch from database)")
-def cache_clear(clear_all: bool, embeddings: bool, queries: bool, tables: bool):
-    """Clear various cache files.
+@click.option("--all", "clear_all", is_flag=True, help="Clear schema indexes, example indexes and table caches")
+@click.option("--embeddings", is_flag=True, help="Clear schema and example indexes (rebuilt on the next connect)")
+@click.option("--tables", is_flag=True, help="Clear table caches (re-read from the database on the next connect)")
+@click.option("--queries", is_flag=True, help="Kept for compatibility: nlp2sql keeps no query cache on disk")
+@click.option("--database-url", callback=validate_database_url, help="Clear only this database's caches")
+@click.option("--schema", default="public", show_default=True, help="Schema, used with --database-url")
+def cache_clear(  # noqa: PLR0913 — one keyword per option
+    clear_all: bool, embeddings: bool, tables: bool, queries: bool, database_url: Optional[str], schema: str
+):
+    """Clear the caches nlp2sql keeps on disk.
 
     Examples:
-        nlp2sql cache clear --tables       # Clear tables cache only
-        nlp2sql cache clear --embeddings   # Clear embeddings cache only
-        nlp2sql cache clear --all          # Clear all caches
+        nlp2sql cache clear --tables       # Clear table caches only
+        nlp2sql cache clear --embeddings   # Clear schema and example indexes
+        nlp2sql cache clear --all --database-url postgresql://...   # One database only
     """
-    if not any([clear_all, embeddings, queries, tables]):
-        click.echo("[ERROR] Specify what to clear: --all, --embeddings, --queries, or --tables")
-        return
+    if not any([clear_all, embeddings, tables, queries]):
+        click.echo("[ERROR] Specify what to clear: --all, --embeddings, --tables or --queries", err=True)
+        sys.exit(1)
 
-    # Get embeddings directory from environment variable
-    embeddings_dir = get_embeddings_dir()
-
-    cleared = []
-
-    if clear_all:
-        embeddings = queries = tables = True
-
-    if embeddings:
-        click.echo("Clearing embeddings cache...")
-        cache_paths = [str(embeddings_dir) + "/", "schema_embeddings.pkl", "schema_index.faiss"]
-        for path in cache_paths:
-            if Path(path).exists():
-                if Path(path).is_dir():
-                    import shutil
-
-                    shutil.rmtree(path)
-                else:
-                    Path(path).unlink()
-                cleared.append(path)
-
+    found = find_cache_files(database_url, schema)
+    to_delete: list[Path] = []
+    if clear_all or embeddings:
+        for directories, names in (
+            (found.schema_indexes, SCHEMA_INDEX_FILES),
+            (found.example_indexes, EXAMPLE_INDEX_FILES),
+        ):
+            to_delete += [d / name for d in directories for name in names if (d / name).is_file()]
+    if clear_all or tables:
+        to_delete += found.tables_caches
     if queries:
-        click.echo("Clearing query cache...")
-        cache_paths = ["query_cache.db", ".nlp2sql_cache/"]
-        for path in cache_paths:
-            if Path(path).exists():
-                if Path(path).is_dir():
-                    import shutil
+        click.echo("Query cache: nlp2sql keeps no query cache on disk, nothing to clear")
 
-                    shutil.rmtree(path)
-                else:
-                    Path(path).unlink()
-                cleared.append(path)
-
-    if tables:
-        click.echo("Clearing tables cache...")
-        # Tables cache files are stored as tables_cache_*.pkl in embeddings subdirectories
-        if embeddings_dir.exists():
-            for cache_file in embeddings_dir.rglob("tables_cache_*.pkl"):
-                try:
-                    cache_file.unlink()
-                    cleared.append(str(cache_file))
-                    click.echo(f"   Deleted: {cache_file}")
-                except Exception as e:
-                    click.echo(f"   [ERROR] Failed to delete {cache_file}: {e}", err=True)
-
-    if cleared:
-        click.echo(f"[OK] Cleared {len(cleared)} cache file(s)")
-    else:
+    deleted = _delete_files(to_delete, found.bases)
+    for path in deleted:
+        click.echo(f"   Deleted: {path.resolve()}")
+    if deleted:
+        click.echo(f"[OK] Cleared {len(deleted)} cache file(s)")
+    elif not to_delete:
         click.echo("No cache files found to clear")
+    if len(deleted) < len(to_delete):
+        sys.exit(1)
 
 
 @cache.command("info")
-def cache_info():
-    """Show cache information and statistics."""
-    import pickle
+@click.option("--database-url", callback=validate_database_url, help="Show only this database's caches")
+@click.option("--schema", default="public", show_default=True, help="Schema, used with --database-url")
+def cache_info(database_url: Optional[str], schema: str):
+    """Show the caches nlp2sql keeps on disk, where they are and their size."""
+    found = find_cache_files(database_url, schema)
 
     click.echo("[STATS] Cache Information")
     click.echo("=" * 25)
+    if database_url:
+        click.echo(f"Database: {mask_database_url(database_url)} (schema: {schema})")
+    for env_var, *_ in (EMBEDDINGS_LOCATION, EXAMPLES_LOCATION):
+        click.echo(f"{env_var}: {os.getenv(env_var) or 'not set (./ or /tmp fallback)'}")
 
-    # Check embeddings cache using environment variable
-    embeddings_path = get_embeddings_dir()
-    if embeddings_path.exists():
-        size = sum(f.stat().st_size for f in embeddings_path.rglob("*") if f.is_file())
-        files = len([f for f in embeddings_path.rglob("*") if f.is_file()])
-        click.echo("Embeddings cache:")
-        click.echo(f"   Location: {embeddings_path.absolute()}")
-        click.echo(f"   Size: {size / 1024 / 1024:.2f} MB")
-        click.echo(f"   Files: {files}")
-    else:
-        click.echo("Embeddings cache: Not found")
-
-    # Check tables cache
-    tables_caches = list(embeddings_path.rglob("tables_cache_*.pkl")) if embeddings_path.exists() else []
-    if tables_caches:
-        click.echo("\nTables cache:")
-        total_tables = 0
-        for cache_file in tables_caches:
-            try:
-                with open(cache_file, "rb") as f:
-                    cache_data = pickle.load(f)
-                table_count = cache_data.get("table_count", 0)
-                created_at = cache_data.get("created_at")
-                schema_name = cache_data.get("schema_name", "unknown")
-                total_tables += table_count
-
-                age_str = ""
-                if created_at:
-                    age_hours = (datetime.now() - created_at).total_seconds() / 3600
-                    age_str = f", age: {age_hours:.1f}h"
-
-                click.echo(f"   {cache_file.name}: {table_count} tables (schema: {schema_name}{age_str})")
-            except Exception as e:
-                click.echo(f"   {cache_file.name}: [ERROR] {e}")
-        click.echo(f"   Total cached tables: {total_tables}")
-    else:
-        click.echo("\nTables cache: Not found")
-
-    # Check FAISS index
-    faiss_path = Path("schema_index.faiss")
-    if faiss_path.exists():
-        size = faiss_path.stat().st_size
-        click.echo("\nFAISS index:")
-        click.echo(f"   Location: {faiss_path.absolute()}")
-        click.echo(f"   Size: {size / 1024 / 1024:.2f} MB")
-    else:
-        click.echo("\nFAISS index: Not found")
-
-    # Check query cache
-    query_cache_path = Path("query_cache.db")
-    if query_cache_path.exists():
-        size = query_cache_path.stat().st_size
-        click.echo("\nQuery cache:")
-        click.echo(f"   📁 Location: {query_cache_path.absolute()}")
-        click.echo(f"   [STATS] Size: {size / 1024:.2f} KB")
-    else:
-        click.echo("💾 Query cache: Not found")
+    _echo_index_directories("Schema indexes", found.schema_indexes, SCHEMA_INDEX_FILES)
+    _echo_tables_caches(found.tables_caches)
+    _echo_index_directories("Example indexes", found.example_indexes, EXAMPLE_INDEX_FILES)
+    click.echo("\nQuery cache: none (nlp2sql does not cache generated queries on disk)")
 
 
 def main():

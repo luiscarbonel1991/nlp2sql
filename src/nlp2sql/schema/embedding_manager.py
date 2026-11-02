@@ -1,6 +1,5 @@
 """Embedding manager for schema vectorization and search."""
 
-import hashlib
 import pickle
 from datetime import datetime
 from pathlib import Path
@@ -14,7 +13,7 @@ from ..exceptions import SchemaException
 from ..ports.cache import CachePort
 from ..ports.embedding_provider import EmbeddingProviderPort
 from ..utils.logger import get_logger
-from ..utils.storage import get_data_directory
+from ..utils.storage import EMBEDDINGS_LOCATION, get_data_directory, index_directory_name
 
 logger = get_logger(__name__)
 
@@ -60,11 +59,10 @@ class SchemaEmbeddingManager:
 
         # Create a unique directory for each database+schema combination
         # This prevents embeddings from different schemas being mixed together
-        index_key = f"{database_url}:{schema_name}"
-        db_hash = hashlib.md5(index_key.encode()).hexdigest()
+        db_hash = index_directory_name(database_url, schema_name)
 
         # Get embeddings directory with fallback chain for containerized environments
-        embeddings_dir = get_data_directory("NLP2SQL_EMBEDDINGS_DIR", "embeddings", "nlp2sql_embeddings")
+        embeddings_dir = get_data_directory(*EMBEDDINGS_LOCATION)
         self.index_path = (index_path or embeddings_dir) / db_hash
 
         try:

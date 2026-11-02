@@ -16,6 +16,7 @@ from ..ports.schema_strategy import SchemaContext
 from ..utils.logger import get_logger
 from .analyzer import SchemaAnalyzer
 from .embedding_manager import SchemaEmbeddingManager
+from .filters import filter_tables
 
 logger = get_logger(__name__)
 
@@ -510,44 +511,14 @@ class SchemaManager:
 
     def _apply_schema_filters(self, tables: List[TableInfo]) -> List[TableInfo]:
         """Apply schema filters to table list."""
-        filtered_tables = []
-
-        for table in tables:
-            # Extract schema name if present (e.g., "public.users" -> "public")
-            schema_name = None
-            if hasattr(table, "schema") and table.schema:
-                schema_name = table.schema
-            elif "." in table.name:
-                schema_name = table.name.split(".")[0]
-
-            if self.included_schemas is not None:
-                if schema_name not in self.included_schemas:
-                    continue
-
-            if schema_name in self.excluded_schemas:
-                continue
-
-            if self.included_tables is not None:
-                if table.name not in self.included_tables:
-                    continue
-
-            if table.name in self.excluded_tables:
-                continue
-
-            if self.exclude_system_tables:
-                system_patterns = [
-                    "pg_",
-                    "sql_",
-                    "information_schema",
-                    "sys_",
-                    "sqlite_",
-                    "mysql.",
-                    "performance_schema",
-                ]
-                if any(table.name.startswith(pattern) for pattern in system_patterns):
-                    continue
-
-            filtered_tables.append(table)
+        filtered_tables = filter_tables(
+            tables,
+            include_schemas=self.included_schemas,
+            exclude_schemas=self.excluded_schemas,
+            include_tables=self.included_tables,
+            exclude_tables=self.excluded_tables,
+            exclude_system_tables=self.exclude_system_tables,
+        )
 
         logger.info(
             "Schema filtering applied",

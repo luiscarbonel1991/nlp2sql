@@ -30,6 +30,13 @@ pre-1.0.
 - **Port addition:** `EmbeddingProviderPort.warmup()`, called by `connect()` when the
   schema index already exists. Not abstract: the default does nothing, so existing
   embedding providers keep working. `LocalEmbeddingAdapter` loads its model there.
+- `NLP2SQL.get_stats()`, the async form of `NLP2SQL.stats`.
+- `create_ai_provider(ProviderConfig)` builds only the AI provider adapter, with no
+  database, embedding model or cache directory; `create_query_service` uses it.
+- `ProviderConfig.API_KEY_ENV_VARS`: the environment variable each provider's API key is
+  read from (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`).
+- `nlp2sql cache info` and `nlp2sql cache clear` accept `--database-url` and `--schema` to
+  look at or clear one database's caches.
 
 ### Changed
 - **User-visible: the library no longer prints logs.** It logs through standard-library
@@ -46,11 +53,49 @@ pre-1.0.
   their output on stdout. `NLP2SQL_LOG_LEVEL` was not read before.
 - `import nlp2sql` no longer imports scikit-learn; it loads on first use. About 0.9 s
   instead of 3.2 s in a fresh environment.
+- **User-visible: PostgreSQL `row_count` is the estimated number of rows**
+  (`pg_class.reltuples`, kept current by autovacuum and replicated to read replicas; the
+  live-row counter for a table never analyzed). It was writes since the last statistics
+  reset (`n_tup_ins + n_tup_upd + n_tup_del`): 0 for every table of a database whose
+  statistics were reset, and one more for every updated row. It is shown by
+  `nlp2sql inspect` and in table metadata; prompts and table ranking do not use it.
+  Cached table lists are read again once (cache version 2.1).
+- **User-visible: `nlp2sql providers test`, `validate` and `setup` send one small SQL
+  generation request per provider** (a few hundred tokens) and print the model, latency
+  and tokens. They only built a query service before, so an invalid key or model id
+  reported success. `providers test` and `validate` exit 1 when a check fails or there
+  is nothing to check; `cache clear` without a flag exits 1.
+- An invalid Gemini API key raises `ProviderAuthenticationError`, like a 401 from OpenAI
+  or Anthropic. Google answers it with 400 `API_KEY_INVALID`, which raised
+  `ProviderRequestError`.
 
 ### Fixed
+- **The CLI printed the database password**: `inspect` and `config` showed the
+  connection string as given, `validate -v` its first 30 characters, and an invalid
+  `--database-url` was echoed back. The password is now replaced by `***`, and the invalid-URL error names only the
+  scheme.
 - A warm `connect()` sent one embedding request (the text "warmup") on every start with
   OpenAI embeddings.
 - `refresh_schema()` logged "Schema cache invalidated" when there was no cache to drop.
+- PostgreSQL and Redshift `get_tables()` failed with `PermissionError` when the working
+  directory was read-only and `NLP2SQL_EMBEDDINGS_DIR` was not set. The table cache now
+  falls back to `/tmp/nlp2sql_embeddings`, like the schema index.
+- `nlp2sql inspect` ignored `--include-tables`, `--exclude-tables`, `--exclude-system`,
+  `--min-rows`, `--max-tables` and `--sort-by`, and `--format table` and `--format csv`
+  printed the summary.
+- `nlp2sql setup` checked Gemini under the name `google`, which the library rejects.
+- `nlp2sql cache info` looked for `schema_index.faiss` and `query_cache.db` in the
+  working directory and missed the per-database indexes nlp2sql writes.
+  `cache clear --embeddings` deleted the whole embeddings directory, table caches
+  included, and left the example index; it now deletes schema and example indexes only.
+  There is no query cache on disk, which `--queries` now says.
+- `NLP2SQL.stats` raised `RuntimeError` in async code ("This event loop is already
+  running") and in a script after `asyncio.run(connect(...))` ("There is no current
+  event loop"). Use `await nlp.get_stats()` in async code.
+
+### Removed
+- `nlp2sql.cli.detect_command_confusion` and `nlp2sql.cli.get_embeddings_dir`, unused
+  helpers of the CLI module.
 
 ## [0.2.0rc17] - 2026-10-20
 

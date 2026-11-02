@@ -16,7 +16,7 @@ from ..exceptions import SchemaException
 from ..ports.embedding_provider import EmbeddingProviderPort
 from ..ports.example_repository import ExampleRepositoryPort
 from ..utils.logger import get_logger
-from ..utils.storage import get_data_directory
+from ..utils.storage import EXAMPLES_LOCATION, get_data_directory, index_directory_name
 
 logger = get_logger(__name__)
 
@@ -55,15 +55,13 @@ class ExampleStore(ExampleRepositoryPort):
         self.embedding_dim = self.embedding_provider.get_embedding_dimension()
 
         # Resolve writable base directory with fallback chain
-        base_dir = get_data_directory("NLP2SQL_EXAMPLES_DIR", "examples_index", "nlp2sql_examples")
+        base_dir = get_data_directory(*EXAMPLES_LOCATION)
 
         if index_path is not None:
             self.index_path = index_path
         elif database_url:
             # Per-database isolation (same pattern as SchemaEmbeddingManager)
-            index_key = f"{database_url}:{schema_name}"
-            db_hash = hashlib.md5(index_key.encode()).hexdigest()
-            self.index_path = base_dir / db_hash
+            self.index_path = base_dir / index_directory_name(database_url, schema_name)
         else:
             # Backward compatible: global directory
             self.index_path = base_dir
