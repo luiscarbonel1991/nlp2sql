@@ -1,5 +1,6 @@
 """nlp2sql - Natural Language to SQL converter with multiple AI providers."""
 
+import logging as _logging
 from typing import Any, Optional
 
 from .adapters.openai_adapter import OpenAIAdapter
@@ -45,8 +46,12 @@ from .ports.semantic_resolver import SemanticResolverPort
 from .ports.semantic_validator import SemanticValidatorPort
 from .schema.example_store import ExampleStore
 from .services.query_service import QueryGenerationService
+from .utils.logger import get_logger
 
 __version__ = "0.2.0rc17"
+
+# Silent unless the application configures logging (the logging HOWTO's advice for libraries)
+_logging.getLogger(__name__).addHandler(_logging.NullHandler())
 __author__ = "Luis Carbonel"
 __email__ = "devhighlevel@gmail.com"
 
@@ -258,9 +263,7 @@ def create_query_service(
         - Pass embedding_provider_type='openai' (uses OpenAI embeddings API)
         - Pass a custom embedding_provider instance
     """
-    import structlog
-
-    _logger = structlog.get_logger()
+    _logger = get_logger(__name__)
 
     # Create repository using factory
     repository = RepositoryFactory.create(database_url, schema_name, database_type)
@@ -324,9 +327,7 @@ def create_query_service(
                 embedding_provider = LocalEmbeddingAdapter()
             except ImportError:
                 # sentence-transformers not installed - continue without embeddings
-                import structlog
-
-                _logger = structlog.get_logger()
+                _logger = get_logger(__name__)
                 _logger.info(
                     "Local embedding provider not available (sentence-transformers not installed). "
                     "Table matching will use text-based methods only. For better accuracy, install with: "

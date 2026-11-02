@@ -22,9 +22,10 @@ from typing import Any, Optional
 if hasattr(signal, "SIGPIPE"):
     signal.signal(signal.SIGPIPE, signal.SIG_DFL)
 
-# ===== CRITICAL: Configure structlog to stderr BEFORE any nlp2sql imports =====
-# MCP protocol uses stdout exclusively for JSON-RPC communication.
-# nlp2sql modules use structlog internally, so we MUST configure it globally here first.
+# ===== Logging goes to stderr: MCP uses stdout exclusively for JSON-RPC =====
+# The server logs through structlog (configured below). nlp2sql logs through the
+# standard "nlp2sql" logger and prints nothing until configured, so its import order
+# no longer matters; basicConfig below sends it to stderr.
 import structlog
 
 structlog.configure(
@@ -42,12 +43,13 @@ structlog.configure(
     cache_logger_on_first_use=False,
 )
 
-# Also configure standard logging to stderr
+# Standard logging (nlp2sql and third-party libraries) to stderr
 logging.basicConfig(
-    format="%(message)s",
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     stream=sys.stderr,
     level=logging.WARNING,
 )
+logging.getLogger("nlp2sql").setLevel(logging.INFO)
 
 # Suppress verbose third-party loggers
 for _lib in ["urllib3", "httpx", "httpcore", "asyncio", "openai", "anthropic", "faiss", "faiss.loader"]:
@@ -55,7 +57,7 @@ for _lib in ["urllib3", "httpx", "httpcore", "asyncio", "openai", "anthropic", "
 
 logger = structlog.get_logger(__name__)
 
-# ===== NOW safe to import external modules =====
+# ===== Imports =====
 from mcp.server.fastmcp import FastMCP
 
 # Add parent directory to path for nlp2sql imports

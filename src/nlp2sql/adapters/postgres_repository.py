@@ -15,15 +15,15 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import psycopg2
-import structlog
 from psycopg2 import sql as psycopg2_sql
 from psycopg2.extras import RealDictCursor
 
 from ..core.sql_safety import DEFAULT_QUERY_ROWS, apply_row_limit, is_safe_query
 from ..exceptions import SchemaException, SecurityException
 from ..ports.schema_repository import SchemaMetadata, SchemaRepositoryPort, TableInfo
+from ..utils.logger import get_logger
 
-logger = structlog.get_logger()
+logger = get_logger(__name__)
 
 # Cache configuration
 SCHEMA_CACHE_TTL_HOURS = int(os.getenv("NLP2SQL_SCHEMA_CACHE_TTL_HOURS", "24"))
@@ -651,7 +651,9 @@ class PostgreSQLRepository(SchemaRepositoryPort):
         """
         cache_path = self._get_tables_cache_path(self.schema_name)
         try:
-            cache_path.unlink(missing_ok=True)
+            cache_path.unlink()
+        except FileNotFoundError:
+            return
         except OSError as e:
             logger.warning("Failed to remove tables cache", path=str(cache_path), error=str(e))
             return

@@ -6,6 +6,7 @@ RedshiftRepository.refresh_schema() was a no-op, so neither actually refreshed t
 cached table list.
 """
 
+import logging
 from pathlib import Path
 from unittest.mock import patch
 
@@ -23,8 +24,9 @@ REPOSITORIES = [
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("repository_class", "url"), REPOSITORIES)
 async def test_refresh_schema_drops_the_table_cache_without_touching_the_database(
-    tmp_path: Path, repository_class, url
+    tmp_path: Path, repository_class, url, caplog
 ):
+    caplog.set_level(logging.INFO, logger="nlp2sql")
     with patch.dict("os.environ", {"NLP2SQL_EMBEDDINGS_DIR": str(tmp_path)}):
         repository = repository_class(url)
         cache_path = repository._get_tables_cache_path(repository.schema_name)
@@ -34,13 +36,17 @@ async def test_refresh_schema_drops_the_table_cache_without_touching_the_databas
             await repository.refresh_schema()
 
     assert not cache_path.exists()
+    assert "Schema cache invalidated" in caplog.text
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("repository_class", "url"), REPOSITORIES)
-async def test_refresh_schema_without_a_cache_file_is_a_no_op(tmp_path: Path, repository_class, url):
+async def test_refresh_schema_without_a_cache_file_is_a_no_op(tmp_path: Path, repository_class, url, caplog):
+    caplog.set_level(logging.INFO, logger="nlp2sql")
     with patch.dict("os.environ", {"NLP2SQL_EMBEDDINGS_DIR": str(tmp_path)}):
         repository = repository_class(url)
         await repository.refresh_schema()
 
     assert not repository._get_tables_cache_path(repository.schema_name).exists()
+    # The first connect() refreshes before any cache exists; it used to log an invalidation
+    assert "Schema cache invalidated" not in caplog.text

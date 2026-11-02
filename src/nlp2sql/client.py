@@ -14,8 +14,6 @@ Usage::
 
 from typing import Any, Optional
 
-import structlog
-
 from .core.entities import DatabaseType, SemanticContext
 from .core.provider_config import ProviderConfig
 from .core.result import QueryResult
@@ -28,8 +26,9 @@ from .ports.repair_policy import RepairPolicyPort
 from .ports.semantic_resolver import SemanticResolverPort
 from .ports.semantic_validator import SemanticValidatorPort
 from .services.query_service import QueryGenerationService
+from .utils.logger import get_logger
 
-logger = structlog.get_logger()
+logger = get_logger(__name__)
 
 
 class NLP2SQL:

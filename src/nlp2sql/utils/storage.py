@@ -10,9 +10,9 @@ Used by SchemaEmbeddingManager and ExampleStore.
 import os
 from pathlib import Path
 
-import structlog
+from .logger import get_logger
 
-logger = structlog.get_logger()
+logger = get_logger(__name__)
 
 
 def get_data_directory(

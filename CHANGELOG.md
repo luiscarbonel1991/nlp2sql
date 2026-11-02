@@ -22,6 +22,36 @@ pre-1.0.
 
 ## [Unreleased]
 
+### Added
+- `QueryResult.validation` (the checks behind `is_valid`: `errors`, `warnings`,
+  `column_errors`, ...), and `QueryResult.rows` and `QueryResult.columns` when the query
+  was executed (`validate=True`) and succeeded, at most 100 rows. The execution already
+  returned them; they were discarded.
+- **Port addition:** `EmbeddingProviderPort.warmup()`, called by `connect()` when the
+  schema index already exists. Not abstract: the default does nothing, so existing
+  embedding providers keep working. `LocalEmbeddingAdapter` loads its model there.
+
+### Changed
+- **User-visible: the library no longer prints logs.** It logs through standard-library
+  loggers under `nlp2sql` with a `NullHandler`, so nothing is printed unless the
+  application configures logging. Before, it used structlog's default configuration,
+  which printed to stdout (22-36 lines per `connect()` + `ask()`), and the MCP server had
+  to configure structlog globally before importing nlp2sql. Applications that configured
+  structlog globally to capture nlp2sql's logs now receive them through the standard
+  `logging` module (with structlog, through `structlog.stdlib.ProcessorFormatter`).
+- The user's question and the raw model output are logged only at `DEBUG`; they
+  appeared in `INFO` and `ERROR` records.
+- The CLI writes its logs to stderr at `WARNING` (`-v` for `DEBUG`, or
+  `NLP2SQL_LOG_LEVEL`), so `nlp2sql inspect --format json` and `nlp2sql query` print only
+  their output on stdout. `NLP2SQL_LOG_LEVEL` was not read before.
+- `import nlp2sql` no longer imports scikit-learn; it loads on first use. About 0.9 s
+  instead of 3.2 s in a fresh environment.
+
+### Fixed
+- A warm `connect()` sent one embedding request (the text "warmup") on every start with
+  OpenAI embeddings.
+- `refresh_schema()` logged "Schema cache invalidated" when there was no cache to drop.
+
 ## [0.2.0rc17] - 2026-10-20
 
 ### Changed

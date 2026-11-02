@@ -74,7 +74,7 @@ export NLP2SQL_EMBEDDING_PROVIDER=local
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `NLP2SQL_LLM_VALIDATION` | `false` | Also ask the LLM to review each generated query (a second call per question) |
-| `NLP2SQL_LOG_LEVEL` | `INFO` | Logging verbosity |
+| `NLP2SQL_LOG_LEVEL` | `WARNING` in the CLI | Level of the CLI logs, written to stderr. The library itself never configures logging: applications set the level of the `nlp2sql` logger |
 | `NLP2SQL_CACHE_ENABLED` | `true` | Enable or disable query-result caching |
 | `NLP2SQL_ENV` | unset | Optional environment label |
 | `TOKENIZERS_PARALLELISM` | unset | Set to `false` to reduce tokenizer warnings |

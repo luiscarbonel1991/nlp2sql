@@ -3,12 +3,13 @@
 No network access: adapters are built with fake keys and SDK clients are mocked.
 """
 
+import logging
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from click.testing import CliRunner
-from structlog.testing import capture_logs
 
 from nlp2sql.adapters import anthropic_adapter as anthropic_module
 from nlp2sql.adapters import gemini_adapter as gemini_module
@@ -39,6 +40,26 @@ def _context(**overrides) -> QueryContext:
     }
     params.update(overrides)
     return QueryContext(**params)
+
+
+@contextmanager
+def capture_logs():
+    """Records emitted through the nlp2sql loggers, as {"log_level", "event"} dicts."""
+    records: list[dict] = []
+
+    class _Collect(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            records.append({"log_level": record.levelname.lower(), "event": record.getMessage()})
+
+    logger = logging.getLogger("nlp2sql")
+    handler, previous_level = _Collect(), logger.level
+    logger.addHandler(handler)
+    logger.setLevel(logging.DEBUG)
+    try:
+        yield records
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(previous_level)
 
 
 def _warnings(logs, needle: str):

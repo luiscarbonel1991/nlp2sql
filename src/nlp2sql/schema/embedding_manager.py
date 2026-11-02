@@ -8,17 +8,15 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import faiss
 import numpy as np
-import structlog
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
 
 from ..core.entities import DatabaseType
 from ..exceptions import SchemaException
 from ..ports.cache import CachePort
 from ..ports.embedding_provider import EmbeddingProviderPort
+from ..utils.logger import get_logger
 from ..utils.storage import get_data_directory
 
-logger = structlog.get_logger()
+logger = get_logger(__name__)
 
 
 class SchemaEmbeddingManager:
@@ -317,6 +315,8 @@ class SchemaEmbeddingManager:
             try:
                 query_vec = self.tfidf_vectorizer.transform([query])
                 # Calculate cosine similarity between query and all docs
+                from sklearn.metrics.pairwise import cosine_similarity  # deferred, see _update_tfidf
+
                 sparse_scores = cosine_similarity(query_vec, self.tfidf_matrix).flatten()
 
                 # Get top sparse results
@@ -504,6 +504,9 @@ class SchemaEmbeddingManager:
         # Note: For very large schemas, this might be slow and need optimization
         # (e.g., incremental fitting or batching), but for <100k elements it's fine.
         if self.tfidf_texts:
+            # scikit-learn takes about a second to import: load it only when indexing
+            from sklearn.feature_extraction.text import TfidfVectorizer
+
             self.tfidf_vectorizer = TfidfVectorizer(
                 analyzer="word",
                 ngram_range=(1, 2),  # Use unigrams and bigrams

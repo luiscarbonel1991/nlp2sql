@@ -32,6 +32,16 @@ class EmbeddingProviderPort(ABC):
         """
         pass
 
+    async def warmup(self) -> None:
+        """
+        Prepare the provider before the first question, e.g. load a local model.
+
+        Called by connect() when the schema index already exists on disk. Not abstract:
+        the default does nothing, which suits remote providers (a request here would be
+        paid on every start). Added in 0.2.0rc18; existing implementations keep working.
+        """
+        return None
+
     @property
     @abstractmethod
     def provider_type(self) -> str:

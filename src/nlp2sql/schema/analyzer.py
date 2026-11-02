@@ -5,14 +5,20 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
-import structlog
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
 
 from ..ports.embedding_provider import EmbeddingProviderPort
 from ..ports.schema_strategy import SchemaChunk, SchemaContext, SchemaStrategyPort
+from ..utils.logger import get_logger
 
-logger = structlog.get_logger()
+logger = get_logger(__name__)
+
+
+def _cosine_similarity(a: Any, b: Any) -> np.ndarray:
+    # scikit-learn takes about a second to import, so it loads on first use instead of
+    # on "import nlp2sql" (CLI commands and processes that never search pay nothing)
+    from sklearn.metrics.pairwise import cosine_similarity
+
+    return cosine_similarity(a, b)
 
 
 @dataclass
@@ -57,7 +63,6 @@ class SchemaAnalyzer(SchemaStrategyPort):
                 "Text-based matching (exact, partial, token) will still work."
             )
 
-        self.tfidf_vectorizer = TfidfVectorizer(ngram_range=(1, 3), stop_words="english", max_features=10000)
         self._schema_embeddings = {}
         self._schema_descriptions = {}
 
@@ -264,7 +269,7 @@ class SchemaAnalyzer(SchemaStrategyPort):
         schema_names = list(self._schema_embeddings.keys())
         schema_embeddings = np.array([self._schema_embeddings[name] for name in schema_names])
 
-        similarities = cosine_similarity([query_embedding], schema_embeddings)[0]
+        similarities = _cosine_similarity([query_embedding], schema_embeddings)[0]
 
         # Get top-k
         top_indices = np.argsort(similarities)[-top_k:][::-1]
@@ -389,7 +394,7 @@ class SchemaAnalyzer(SchemaStrategyPort):
         if query_embedding.size == 0 or element_embedding.size == 0:
             return 0.0
 
-        similarity = cosine_similarity(query_embedding, element_embedding)[0][0]
+        similarity = _cosine_similarity(query_embedding, element_embedding)[0][0]
         return float(similarity)
 
     def _create_element_description(self, element: Dict[str, Any]) -> str:
@@ -595,12 +600,12 @@ class SchemaAnalyzer(SchemaStrategyPort):
         # Handle both 1D and 2D embeddings
         if len(element_embeddings.shape) == 1:
             # Single embedding returned
-            similarity = cosine_similarity(query_embedding.reshape(1, -1), element_embeddings.reshape(1, -1))[0][0]
+            similarity = _cosine_similarity(query_embedding.reshape(1, -1), element_embeddings.reshape(1, -1))[0][0]
             if len(valid_elements) == 1:
                 results.append((valid_elements[0], float(similarity)))
         else:
             # Multiple embeddings - use batch similarity calculation
-            similarities = cosine_similarity(query_embedding.reshape(1, -1), element_embeddings)[0]
+            similarities = _cosine_similarity(query_embedding.reshape(1, -1), element_embeddings)[0]
             for i, element in enumerate(valid_elements):
                 if i < len(similarities):
                     results.append((element, float(similarities[i])))
