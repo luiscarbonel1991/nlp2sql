@@ -48,8 +48,8 @@ export DATABASE_URL="redshift://user:pass@cluster.region.redshift.amazonaws.com:
 |----------|---------|-------------|
 | `NLP2SQL_MAX_SCHEMA_TOKENS` | `8000` | Maximum schema tokens sent to the model |
 | `NLP2SQL_SCHEMA_CACHE_TTL_HOURS` | `24` | Refresh window for schema caches |
-| `NLP2SQL_EMBEDDINGS_DIR` | `./embeddings` | Disk location for schema embedding caches |
-| `NLP2SQL_EXAMPLES_DIR` | implementation default | Disk location for example indexes |
+| `NLP2SQL_EMBEDDINGS_DIR` | `./embeddings` | Disk location for schema indexes and table caches (`/tmp/nlp2sql_embeddings` if the working directory is read-only) |
+| `NLP2SQL_EXAMPLES_DIR` | `./examples_index` | Disk location for example indexes (`/tmp/nlp2sql_examples` if the working directory is read-only) |
 | `NLP2SQL_EMBEDDING_MODEL` | `all-MiniLM-L6-v2` | Default local embedding model |
 | `NLP2SQL_EMBEDDING_PROVIDER` | `local` | Default embedding provider |
 

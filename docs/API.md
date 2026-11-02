@@ -15,9 +15,11 @@ nlp2sql.connect(url, provider=...)         # recommended DSL entry point
   -> NLP2SQL.validate(sql)
   -> NLP2SQL.explain(sql)
   -> NLP2SQL.suggest(partial)
+  -> NLP2SQL.get_stats()                    # or nlp.stats from synchronous code
 
 create_and_initialize_service(url, ...)    # lower-level service factory
 create_query_service(...)                   # manual wiring + manual initialize
+create_ai_provider(ProviderConfig(...))     # just the provider adapter, no database
 generate_sql_from_db(url, question, ...)   # one-shot helper
 ```
 
@@ -106,6 +108,9 @@ config = ProviderConfig(
 | `model`       | optional explicit model            |
 | `temperature` | generation temperature             |
 | `max_tokens`  | response budget                    |
+
+`ProviderConfig.API_KEY_ENV_VARS` maps each provider to the environment variable the CLI
+reads its key from: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` and `GOOGLE_API_KEY`.
 
 
 ## `NLP2SQL.ask(...)`
@@ -283,6 +288,19 @@ print(result["sql"])
 print(result["validation"]["is_valid"])
 ```
 
+To call a provider without a database (for example, to check a key), build only the
+adapter:
+
+```python
+from nlp2sql import ProviderConfig, create_ai_provider
+
+provider = create_ai_provider(ProviderConfig(provider="anthropic", api_key="sk-ant-..."))
+```
+
+`NLP2SQL.get_stats()` returns the provider, its context size and which components are
+enabled. From synchronous code, `nlp.stats` runs it; inside an event loop it raises
+`RuntimeError`, so use `await nlp.get_stats()` there.
+
 ## Logging
 
 nlp2sql prints nothing by default. It logs through the standard `logging` module, under
@@ -414,17 +432,53 @@ nlp2sql inspect \
   --format table
 ```
 
+
+| Option                                 | Meaning                                                   |
+| -------------------------------------- | --------------------------------------------------------- |
+| `--format`                             | `summary` (default), `table`, `json` or `csv`             |
+| `--include-tables`, `--exclude-tables` | Comma-separated table names                               |
+| `--exclude-system`                     | Skip tables named like `pg_*`, `sql_*`, `information_schema` |
+| `--min-rows`                           | Keep tables with at least N rows                          |
+| `--sort-by`                            | `name`, or `rows`, `size`, `columns` (largest first)      |
+| `--max-tables`                         | Show at most N tables, after sorting                      |
+| `--output`                             | Write to a file instead of stdout                         |
+
+
+Rows are PostgreSQL's estimate (`pg_class.reltuples`, kept current by autovacuum); Redshift
+reports 0 rows, so `--min-rows` leaves no Redshift tables. The summary shows the connection
+string with the password replaced by `***`.
+
+### `nlp2sql providers test` and `nlp2sql validate`
+
+Check each provider that has an API key set with one small SQL generation request (a few
+hundred tokens), and print the model, latency and tokens:
+
+```bash
+nlp2sql providers test                     # every provider with a key set
+nlp2sql providers test --provider gemini
+nlp2sql validate                           # providers, plus DATABASE_URL when set
+```
+
+A failure says what to fix (rejected key, unknown model id, rate limit, unreachable
+provider, SDK not installed), and the command exits 1.
+
 ### `nlp2sql cache`
 
-Inspect or clear caches:
+Inspect or clear the caches nlp2sql keeps on disk: schema indexes and table caches under
+`NLP2SQL_EMBEDDINGS_DIR` (default `./embeddings`), example indexes under
+`NLP2SQL_EXAMPLES_DIR` (default `./examples_index`), with a `/tmp` fallback when the
+working directory is read-only.
 
 ```bash
 nlp2sql cache info
-nlp2sql cache clear --embeddings
-nlp2sql cache clear --queries
+nlp2sql cache info --database-url postgresql://testuser:testpass@localhost:5432/testdb
+nlp2sql cache clear --embeddings     # schema and example indexes
+nlp2sql cache clear --tables         # table lists, re-read on the next connect
+nlp2sql cache clear --all --database-url postgresql://...   # one database only
 ```
 
 Clearing embeddings is required when switching embedding models or providers for an existing on-disk index.
+There is no query cache on disk; `--queries` is kept for compatibility.
 
 ## Integration Example
 
