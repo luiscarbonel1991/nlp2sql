@@ -1,6 +1,7 @@
 """Enhanced command line interface for nlp2sql."""
 
 import asyncio
+import csv
 import json
 import logging
 import os
@@ -8,7 +9,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, TextIO
 
 import click
 
@@ -18,6 +19,8 @@ from .core.entities import DatabaseType
 from .core.runtime import ExecutionMode
 from .core.provider_config import ProviderConfig
 from .exceptions import NLP2SQLException, ProviderException
+from .ports.schema_repository import TableInfo
+from .schema.filters import filter_tables
 from .utils.artifact_loader import (
     create_example_store_from_payload,
     load_examples_payload,
@@ -70,17 +73,6 @@ def setup_logging(verbose: bool = False) -> None:
     library_logger.setLevel(level)
 
 
-def detect_command_confusion(ctx, param, value):
-    """Detect common command confusions and provide helpful suggestions."""
-    if ctx.info_name == "inspect" and param.name == "question":
-        click.echo("Error: 'inspect' command doesn't accept --question option", err=True)
-        click.echo('Hint: Did you mean: nlp2sql query --database-url [...] --question "..."', err=True)
-        click.echo("Info: Use 'inspect' to analyze database schema", err=True)
-        click.echo("AI: Use 'query' to generate SQL from natural language", err=True)
-        ctx.exit(1)
-    return value
-
-
 def detect_database_type(database_url: str) -> DatabaseType:
     """Detect database type from connection URL.
 
@@ -122,6 +114,137 @@ def parse_schema_filters(schema_filters: str | None) -> dict | None:
         return json.loads(schema_filters)
     except json.JSONDecodeError as exc:
         raise ValueError(f"Invalid JSON in schema-filters: {exc.msg}.") from exc
+
+
+def split_names(value: Optional[str]) -> Optional[list[str]]:
+    """Parse a comma-separated option into names; None when it names nothing."""
+    names = [name.strip() for name in (value or "").split(",") if name.strip()]
+    return names or None
+
+
+_SORT_KEYS = {
+    "rows": lambda table: table.row_count or 0,
+    "size": lambda table: table.size_bytes or 0,
+    "columns": lambda table: len(table.columns),
+}
+
+
+def select_tables(  # noqa: PLR0913 — one keyword per inspect option
+    tables: list[TableInfo],
+    *,
+    include_tables: Optional[list[str]] = None,
+    exclude_tables: Optional[list[str]] = None,
+    exclude_system: bool = False,
+    min_rows: Optional[int] = None,
+    sort_by: str = "name",
+    max_tables: Optional[int] = None,
+) -> list[TableInfo]:
+    """Apply the inspect options: filter, keep tables with at least ``min_rows``, sort, then limit."""
+    selected = filter_tables(
+        tables,
+        include_tables=include_tables,
+        exclude_tables=exclude_tables,
+        exclude_system_tables=exclude_system,
+    )
+    if min_rows is not None:
+        selected = [table for table in selected if (table.row_count or 0) >= min_rows]
+    selected.sort(key=lambda table: table.name)
+    if sort_by in _SORT_KEYS:
+        # Stable sort: ties stay in name order
+        selected.sort(key=_SORT_KEYS[sort_by], reverse=True)
+    return selected[:max_tables] if max_tables is not None else selected
+
+
+def table_as_dict(table: TableInfo) -> dict:
+    return {
+        "name": table.name,
+        "schema": table.schema,
+        "columns": table.columns,
+        "primary_keys": table.primary_keys,
+        "foreign_keys": table.foreign_keys,
+        "indexes": table.indexes,
+        "row_count": table.row_count,
+        "size_bytes": table.size_bytes,
+        "description": table.description,
+    }
+
+
+def write_tables_csv(tables: list[TableInfo], output: TextIO) -> None:
+    """One row per table; columns and foreign_keys are counts."""
+    writer = csv.writer(output)
+    writer.writerow(["name", "schema", "row_count", "size_bytes", "columns", "foreign_keys", "description"])
+    for table in tables:
+        writer.writerow(
+            [
+                table.name,
+                table.schema,
+                table.row_count if table.row_count is not None else "",
+                table.size_bytes if table.size_bytes is not None else "",
+                len(table.columns),
+                len(table.foreign_keys),
+                table.description or "",
+            ]
+        )
+
+
+_SIZE_STEP = 1024
+
+
+def _format_size(size_bytes: Optional[int]) -> str:
+    if size_bytes is None:
+        return "-"
+    if size_bytes < _SIZE_STEP:
+        return f"{size_bytes} B"
+    size = size_bytes / _SIZE_STEP
+    for unit in ("KB", "MB", "GB"):
+        if size < _SIZE_STEP:
+            return f"{size:.1f} {unit}"
+        size /= _SIZE_STEP
+    return f"{size:.1f} TB"
+
+
+def render_tables(tables: list[TableInfo]) -> str:
+    """Plain-text table: name left-aligned, numbers right-aligned."""
+    headers = ["Table", "Rows", "Size", "Columns", "Foreign keys"]
+    rows = [
+        [
+            table.name,
+            f"{table.row_count:,}" if table.row_count is not None else "-",
+            _format_size(table.size_bytes),
+            str(len(table.columns)),
+            str(len(table.foreign_keys)),
+        ]
+        for table in tables
+    ]
+    widths = [max(len(cell) for cell in column) for column in zip(headers, *rows)]
+
+    def line(cells: list[str]) -> str:
+        first = cells[0].ljust(widths[0])
+        rest = [cell.rjust(width) for cell, width in zip(cells[1:], widths[1:])]
+        return "  ".join([first, *rest]).rstrip()
+
+    return "\n".join([line(headers), "  ".join("-" * width for width in widths), *map(line, rows)])
+
+
+def write_tables(tables: list[TableInfo], output_format: str, output: TextIO) -> None:
+    """Write the selected tables as json, csv or a plain-text table."""
+    if output_format == "json":
+        json.dump([table_as_dict(table) for table in tables], output, indent=2)
+    elif output_format == "csv":
+        write_tables_csv(tables, output)
+    else:
+        click.echo(render_tables(tables), file=output)
+
+
+def write_schema_summary(tables: list[TableInfo], total: int, database_url: str, schema: str, output: TextIO) -> None:
+    shown = f"{len(tables)}" if len(tables) == total else f"{len(tables)} (of {total})"
+    click.echo("[STATS] Database Schema Summary", file=output)
+    click.echo("=" * 30, file=output)
+    click.echo(f"Database URL: {mask_database_url(database_url)}", file=output)
+    click.echo(f"Schema: {schema}", file=output)
+    click.echo(f"Total tables: {shown}", file=output)
+    click.echo(f"Total columns: {sum(len(table.columns) for table in tables):,}", file=output)
+    click.echo(f"Tables with foreign keys: {sum(1 for table in tables if table.foreign_keys)}", file=output)
 
 
 def resolve_execution_mode(validate: bool, repair: bool) -> str:
@@ -250,11 +373,18 @@ api_key = "$GOOGLE_API_KEY"
 )
 @click.option("--include-tables", help="Comma-separated list of tables to include")
 @click.option("--exclude-tables", help="Comma-separated list of tables to exclude")
-@click.option("--exclude-system", is_flag=True, help="Exclude system tables")
-@click.option("--min-rows", type=int, help="Only show tables with at least N rows")
+@click.option("--exclude-system", is_flag=True, help="Exclude system tables (pg_, sql_, information_schema, ...)")
+@click.option(
+    "--min-rows",
+    type=int,
+    help="Only show tables with at least N rows (PostgreSQL statistics estimate; Redshift reports 0 rows)",
+)
 @click.option("--max-tables", type=int, help="Limit number of tables shown")
 @click.option(
-    "--sort-by", type=click.Choice(["name", "rows", "size", "columns"]), default="name", help="Sort tables by field"
+    "--sort-by",
+    type=click.Choice(["name", "rows", "size", "columns"]),
+    default="name",
+    help="Sort tables by field (rows, size and columns: largest first)",
 )
 @click.pass_context
 def inspect(
@@ -271,13 +401,6 @@ def inspect(
     sort_by: str,
 ):
     """Inspect database schema with advanced filtering and analysis."""
-    if "question" in ctx.params:
-        click.echo("Error: 'inspect' command doesn't accept --question option", err=True)
-        click.echo('Hint: Did you mean: nlp2sql query --database-url [...] --question "..."', err=True)
-        click.echo("Info: Use 'inspect' to analyze database schema", err=True)
-        click.echo("AI: Use 'query' to generate SQL from natural language", err=True)
-        ctx.exit(1)
-
     verbose = ctx.obj.get("verbose", False)
 
     async def _inspect():
@@ -296,39 +419,23 @@ def inspect(
                 click.echo(f"[ERROR] {e}", err=True)
                 sys.exit(1)
 
-            # Get schema information
-            tables = await repo.get_tables()
+            all_tables = await repo.get_tables()
+            if min_rows and database_type == DatabaseType.REDSHIFT:
+                click.echo("[WARNING] Redshift tables report 0 rows, so --min-rows leaves no tables", err=True)
+            tables = select_tables(
+                all_tables,
+                include_tables=split_names(include_tables),
+                exclude_tables=split_names(exclude_tables),
+                exclude_system=exclude_system,
+                min_rows=min_rows,
+                sort_by=sort_by,
+                max_tables=max_tables,
+            )
 
-            if output_format == "json":
-                # Export full schema as JSON
-                schema_data = []
-                for table in tables:
-                    table_data = {
-                        "name": table.name,
-                        "schema": table.schema,
-                        "columns": table.columns,
-                        "primary_keys": table.primary_keys,
-                        "foreign_keys": table.foreign_keys,
-                        "indexes": table.indexes,
-                        "row_count": table.row_count,
-                        "size_bytes": table.size_bytes,
-                        "description": table.description,
-                    }
-                    schema_data.append(table_data)
-
-                json.dump(schema_data, output, indent=2)
-
-            else:  # summary or table
-                total_columns = sum(len(t.columns) for t in tables)
-                tables_with_fk = sum(1 for t in tables if t.foreign_keys)
-
-                click.echo("[STATS] Database Schema Summary", file=output)
-                click.echo("=" * 30, file=output)
-                click.echo(f"Database URL: {mask_database_url(database_url)}", file=output)
-                click.echo(f"Schema: {schema}", file=output)
-                click.echo(f"Total tables: {len(tables)}", file=output)
-                click.echo(f"Total columns: {total_columns:,}", file=output)
-                click.echo(f"Tables with foreign keys: {tables_with_fk}", file=output)
+            if output_format == "summary":
+                write_schema_summary(tables, len(all_tables), database_url, schema, output)
+            else:
+                write_tables(tables, output_format, output)
 
         except NLP2SQLException as e:
             click.echo(f"[ERROR] Application Error: {e!s}", err=True)
