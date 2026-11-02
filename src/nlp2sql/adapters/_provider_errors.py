@@ -53,6 +53,9 @@ def classify_provider_error(exc: BaseException, message: str) -> ProviderExcepti
     status = _http_status(exc)
     if status in (401, 403):
         return ProviderAuthenticationError(message, {"status_code": status})
+    # Google APIs answer an invalid API key with 400 INVALID_ARGUMENT, reason API_KEY_INVALID
+    if status == 400 and "API_KEY_INVALID" in str(exc):
+        return ProviderAuthenticationError(message, {"status_code": status})
     if status == 429:
         return ProviderRateLimitError(message, {"status_code": status})
     if status is not None and (status >= 500 or status in (408, 409)):
