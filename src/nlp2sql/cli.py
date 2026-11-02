@@ -23,6 +23,7 @@ from .utils.artifact_loader import (
     load_examples_payload,
     load_semantic_context,
 )
+from .utils.redaction import mask_database_url
 
 
 def get_embeddings_dir() -> Path:
@@ -100,7 +101,10 @@ def detect_database_type(database_url: str) -> DatabaseType:
 def validate_database_url(ctx, param, value):
     """Validate database URL format."""
     if value and not value.startswith(("postgresql://", "postgres://", "mysql://", "sqlite://", "redshift://")):
-        click.echo(f"[ERROR] Invalid database URL format: {value}", err=True)
+        # Never echo the value: a malformed URL can still contain the password
+        scheme = value.split("://", 1)[0] if "://" in value else None
+        reason = f"unsupported scheme '{scheme}'" if scheme else "missing scheme://"
+        click.echo(f"[ERROR] Invalid database URL format: {reason}", err=True)
         click.echo("Hint: Expected format: postgresql://user:pass@host:port/database", err=True)
         click.echo("Note: Examples:", err=True)
         click.echo("   postgresql://testuser:testpass@localhost:5432/testdb", err=True)
@@ -201,7 +205,7 @@ def config(ctx):
     db_url = os.getenv("DATABASE_URL")
     click.echo("\n[DATABASE] Database Connection:")
     if db_url:
-        click.echo(f"   [OK] DATABASE_URL: {db_url}")
+        click.echo(f"   [OK] DATABASE_URL: {mask_database_url(db_url)}")
     else:
         click.echo("   [ERROR] DATABASE_URL: Not set")
 
@@ -320,7 +324,7 @@ def inspect(
 
                 click.echo("[STATS] Database Schema Summary", file=output)
                 click.echo("=" * 30, file=output)
-                click.echo(f"Database URL: {database_url}", file=output)
+                click.echo(f"Database URL: {mask_database_url(database_url)}", file=output)
                 click.echo(f"Schema: {schema}", file=output)
                 click.echo(f"Total tables: {len(tables)}", file=output)
                 click.echo(f"Total columns: {total_columns:,}", file=output)
@@ -718,7 +722,7 @@ async def _test_database(db_url: str, verbose: bool = False):
     from .factories import RepositoryFactory
 
     if verbose:
-        click.echo(f"Info: Connecting to: {db_url[:30]}...")
+        click.echo(f"Info: Connecting to: {mask_database_url(db_url)}")
 
     await RepositoryFactory.create_and_initialize(db_url)
     if verbose:
