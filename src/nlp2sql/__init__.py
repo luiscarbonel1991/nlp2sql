@@ -34,6 +34,7 @@ from .core.result import QueryResult
 from .core.runtime import ExecutionHooks, ExecutionMode, SemanticHooks
 from .exceptions import *
 from .factories import RepositoryFactory
+from .ports.ai_provider import AIProviderPort
 from .ports.embedding_provider import EmbeddingProviderPort
 from .ports.example_repository import ExampleRepositoryPort
 from .ports.error_classifier import ErrorClassifierPort
@@ -69,6 +70,7 @@ __all__ = [
     "create_query_service",
     "create_and_initialize_service",
     "generate_sql_from_db",
+    "create_ai_provider",
     "create_embedding_provider",
     "create_repository",
     # Factory
@@ -183,6 +185,42 @@ def create_embedding_provider(
     raise ValueError(f"Unknown embedding provider: {provider}. Available providers: {available_providers}")
 
 
+def create_ai_provider(provider_config: ProviderConfig) -> AIProviderPort:
+    """Create the AI provider adapter for ``provider_config``.
+
+    Builds only the adapter: no database connection, embedding model or cache directory,
+    so it is cheap enough to check a provider and API key. Fields left as None use the
+    adapter's defaults.
+
+    Raises:
+        ImportError: If the provider's SDK is not installed (``pip install nlp2sql[anthropic]``
+            or ``nlp2sql[gemini]``).
+
+    Example:
+        provider = create_ai_provider(ProviderConfig(provider="anthropic", api_key=key))
+    """
+    adapter_kwargs: dict[str, Any] = {"api_key": provider_config.api_key}
+    for field_name in ("model", "temperature", "max_tokens"):
+        value = getattr(provider_config, field_name)
+        if value is not None:
+            adapter_kwargs[field_name] = value
+
+    if provider_config.provider == "openai":
+        return OpenAIAdapter(**adapter_kwargs)
+    if provider_config.provider == "anthropic":
+        from .adapters.anthropic_adapter import AnthropicAdapter
+
+        return AnthropicAdapter(**adapter_kwargs)
+    if provider_config.provider == "gemini":
+        from .adapters.gemini_adapter import GeminiAdapter
+
+        return GeminiAdapter(**adapter_kwargs)
+    available_providers = sorted(ProviderConfig.SUPPORTED_PROVIDERS)
+    raise NotImplementedError(
+        f"AI provider '{provider_config.provider}' not supported. Available: {available_providers}"
+    )
+
+
 async def create_repository(
     database_url: str,
     schema_name: str = "public",
@@ -269,44 +307,15 @@ def create_query_service(
     repository = RepositoryFactory.create(database_url, schema_name, database_type)
 
     # Resolve provider configuration
-    if provider_config is not None:
-        _provider_name = provider_config.provider
-        _api_key = provider_config.api_key
-        _model = provider_config.model
-        _temperature = provider_config.temperature
-        _max_tokens = provider_config.max_tokens
-    else:
-        _provider_name = ai_provider
-        _api_key = api_key
-        _model = model
-        _temperature = None
-        _max_tokens = None
+    if provider_config is None:
+        if ai_provider not in ProviderConfig.SUPPORTED_PROVIDERS:
+            available_providers = sorted(ProviderConfig.SUPPORTED_PROVIDERS)
+            raise NotImplementedError(f"AI provider '{ai_provider}' not supported. Available: {available_providers}")
+        provider_config = ProviderConfig(provider=ai_provider, api_key=api_key, model=model)
+    _provider_name = provider_config.provider
+    _api_key = provider_config.api_key
 
-    # Build adapter kwargs — only pass non-None values so adapters use their own defaults
-    adapter_kwargs: dict[str, Any] = {"api_key": _api_key}
-    if _model is not None:
-        adapter_kwargs["model"] = _model
-    if _temperature is not None:
-        adapter_kwargs["temperature"] = _temperature
-    if _max_tokens is not None:
-        adapter_kwargs["max_tokens"] = _max_tokens
-
-    # Create AI provider adapter
-    if _provider_name == "openai":
-        from .adapters.openai_adapter import OpenAIAdapter
-
-        provider = OpenAIAdapter(**adapter_kwargs)
-    elif _provider_name == "anthropic":
-        from .adapters.anthropic_adapter import AnthropicAdapter
-
-        provider = AnthropicAdapter(**adapter_kwargs)
-    elif _provider_name == "gemini":
-        from .adapters.gemini_adapter import GeminiAdapter
-
-        provider = GeminiAdapter(**adapter_kwargs)
-    else:
-        available_providers = sorted(ProviderConfig.SUPPORTED_PROVIDERS)
-        raise NotImplementedError(f"AI provider '{_provider_name}' not supported. Available: {available_providers}")
+    provider = create_ai_provider(provider_config)
 
     # Create embedding provider
     # If embedding_provider_type is explicitly set, create that provider (raises if deps missing)

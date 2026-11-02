@@ -13,12 +13,20 @@ from typing import Optional, TextIO
 
 import click
 
-from . import create_and_initialize_service, create_query_service
+from . import create_ai_provider, create_and_initialize_service
 from .config.settings import settings
 from .core.entities import DatabaseType
 from .core.runtime import ExecutionMode
 from .core.provider_config import ProviderConfig
-from .exceptions import NLP2SQLException, ProviderException
+from .exceptions import (
+    NLP2SQLException,
+    ProviderAuthenticationError,
+    ProviderException,
+    ProviderRateLimitError,
+    ProviderRequestError,
+    ProviderUnavailableError,
+)
+from .ports.ai_provider import QueryContext
 from .ports.schema_repository import TableInfo
 from .schema.filters import filter_tables
 from .utils.artifact_loader import (
@@ -71,6 +79,74 @@ def setup_logging(verbose: bool = False) -> None:
     _cli_log_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
     library_logger.addHandler(_cli_log_handler)
     library_logger.setLevel(level)
+
+
+PROVIDER_NAMES = {"openai": "OpenAI", "anthropic": "Anthropic", "gemini": "Gemini"}
+
+
+def provider_api_key(provider: str) -> Optional[str]:
+    """API key from the provider's environment variable (ProviderConfig.API_KEY_ENV_VARS)."""
+    env_var = ProviderConfig.API_KEY_ENV_VARS.get(provider)
+    return os.getenv(env_var) if env_var else None
+
+
+def configured_providers() -> list[str]:
+    return [provider for provider in PROVIDER_NAMES if provider_api_key(provider)]
+
+
+# One table and one question keep a provider check to a few hundred tokens
+_CHECK_SCHEMA = "Table: users\nColumns: id (integer, primary key), name (text)"
+_CHECK_QUESTION = "How many users are there?"
+
+
+async def check_provider(provider: str, api_key: Optional[str]) -> str:
+    """Generate SQL for one small question; return "model, latency, tokens". Raises on failure."""
+    config = ProviderConfig(provider=provider, api_key=api_key)
+    ai_provider = create_ai_provider(config)
+    started = time.perf_counter()
+    response = await ai_provider.generate_query(
+        QueryContext(question=_CHECK_QUESTION, database_type="postgres", schema_context=_CHECK_SCHEMA, examples=[])
+    )
+    elapsed = time.perf_counter() - started
+    return f"{config.resolved_model}, {elapsed:.1f}s, {response.tokens_used} tokens"
+
+
+def describe_provider_failure(provider: str, error: Exception) -> str:
+    """What to do about a failed provider check, from the error type."""
+    env_var = ProviderConfig.API_KEY_ENV_VARS[provider]
+    status = (getattr(error, "details", None) or {}).get("status_code")
+    if isinstance(error, ImportError):
+        return f"SDK not installed. Install with: pip install nlp2sql[{provider}]"
+    if isinstance(error, ProviderAuthenticationError):
+        return f"API key rejected ({status}). Check {env_var}"
+    if isinstance(error, ProviderRateLimitError):
+        return "rate limited or out of quota (429)"
+    if isinstance(error, ProviderUnavailableError):
+        return "provider unreachable or unavailable"
+    if isinstance(error, ProviderRequestError):
+        hint = ". Check the model id" if status == 404 else ""
+        return f"request rejected ({status}){hint}"
+    return str(error)
+
+
+async def run_provider_checks(providers: list[str]) -> list[bool]:
+    """Check each provider with one real request and print one line per provider."""
+    results = []
+    for provider in providers:
+        name = PROVIDER_NAMES[provider]
+        try:
+            summary = await check_provider(provider, provider_api_key(provider))
+        except Exception as e:
+            reason = describe_provider_failure(provider, e)
+            click.echo(f"   [ERROR] {name}: {reason}")
+            detail = str(e).splitlines()[0] if str(e) else ""
+            if detail and detail != reason:
+                click.echo(f"      {detail[:200]}")
+            results.append(False)
+            continue
+        click.echo(f"   [OK] {name}: {summary}")
+        results.append(True)
+    return results
 
 
 def detect_database_type(database_url: str) -> DatabaseType:
@@ -314,16 +390,12 @@ def config(ctx):
     click.echo(f"Config file: {config_path}")
 
     click.echo("\n🔑 API Keys Status:")
-    api_keys = {
-        "OpenAI": os.getenv("OPENAI_API_KEY"),
-        "Anthropic": os.getenv("ANTHROPIC_API_KEY"),
-        "Google": os.getenv("GOOGLE_API_KEY"),
-    }
-    for provider, key in api_keys.items():
-        if key:
-            click.echo(f"   [OK] {provider}: Set")
+    for provider, name in PROVIDER_NAMES.items():
+        env_var = ProviderConfig.API_KEY_ENV_VARS[provider]
+        if provider_api_key(provider):
+            click.echo(f"   [OK] {name} ({env_var}): Set")
         else:
-            click.echo(f"   [ERROR] {provider}: Not set")
+            click.echo(f"   [ERROR] {name} ({env_var}): Not set")
 
     db_url = os.getenv("DATABASE_URL")
     click.echo("\n[DATABASE] Database Connection:")
@@ -535,14 +607,8 @@ def query(
             # Get API key from parameter or environment
             final_api_key = api_key
             if not final_api_key:
-                # Map provider to correct environment variable
-                env_var_mapping = {
-                    "openai": "OPENAI_API_KEY",
-                    "anthropic": "ANTHROPIC_API_KEY",
-                    "gemini": "GOOGLE_API_KEY",
-                }
-                env_var = env_var_mapping.get(provider, f"{provider.upper()}_API_KEY")
-                final_api_key = os.getenv(env_var)
+                env_var = ProviderConfig.API_KEY_ENV_VARS[provider]
+                final_api_key = provider_api_key(provider)
                 if not final_api_key:
                     click.echo(f"[ERROR] No API key provided. Set {env_var} or use --api-key", err=True)
                     sys.exit(1)
@@ -666,28 +732,20 @@ def query(
 @click.pass_context
 def setup(ctx):
     """Interactive setup and configuration for nlp2sql."""
-    verbose = ctx.obj.get("verbose", False)
-
     click.echo("nlp2sql - Interactive Setup")
     click.echo("=" * 40)
-
-    # Check API keys
-    api_keys = {
-        "OpenAI": os.getenv("OPENAI_API_KEY"),
-        "Anthropic": os.getenv("ANTHROPIC_API_KEY"),
-        "Google": os.getenv("GOOGLE_API_KEY"),
-    }
 
     click.echo("\n🔑 API Keys Status:")
     available_providers = []
 
-    for provider, key in api_keys.items():
+    for provider, name in PROVIDER_NAMES.items():
+        key = provider_api_key(provider)
         if key:
             masked_key = f"{key[:8]}...{key[-4:]}" if len(key) > 12 else "***"
-            click.echo(f"   [OK] {provider}: {masked_key}")
-            available_providers.append(provider.lower())
+            click.echo(f"   [OK] {name}: {masked_key}")
+            available_providers.append(provider)
         else:
-            click.echo(f"   [ERROR] {provider}: Not set")
+            click.echo(f"   [ERROR] {name}: Not set ({ProviderConfig.API_KEY_ENV_VARS[provider]})")
 
     if not available_providers:
         click.echo("\n[WARNING] No API keys found!")
@@ -700,8 +758,9 @@ def setup(ctx):
     click.echo(f"\n[OK] Available providers: {', '.join(available_providers)}")
 
     # Interactive configuration
-    if click.confirm("\n[CONFIG] Would you like to test your API keys?"):
-        asyncio.run(_test_providers(available_providers, verbose))
+    if click.confirm("\n[CONFIG] Would you like to test your API keys? (one small request each)"):
+        click.echo("\n🧪 Testing API providers...")
+        asyncio.run(run_provider_checks(available_providers))
 
     # Database setup
     if click.confirm("\n[DATABASE] Would you like to configure a database connection?"):
@@ -709,29 +768,6 @@ def setup(ctx):
 
     click.echo("\n[SUCCESS] Setup completed!")
     click.echo("Hint: Run 'nlp2sql validate' to verify your configuration")
-
-
-async def _test_providers(providers: list, verbose: bool = False):
-    """Test API providers."""
-    click.echo("\n🧪 Testing API providers...")
-
-    for provider in providers:
-        if verbose:
-            click.echo(f"Info: Testing {provider}...")
-
-        try:
-            # Map provider to correct environment variable
-            env_var_mapping = {"openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY", "gemini": "GOOGLE_API_KEY"}
-            env_var = env_var_mapping.get(provider, f"{provider.upper()}_API_KEY")
-
-            # Create a simple service to test the provider (side-effect: validates credentials)
-            create_query_service(
-                database_url="postgresql://test:test@localhost/test", ai_provider=provider, api_key=os.getenv(env_var)
-            )
-            click.echo(f"   [OK] {provider.title()}: Connection successful")
-
-        except Exception as e:
-            click.echo(f"   [ERROR] {provider.title()}: {e!s}")
 
 
 def _setup_database():
@@ -767,33 +803,12 @@ def validate(ctx):
 
     tests = []
 
-    # Test API keys
-    api_keys = {
-        "openai": os.getenv("OPENAI_API_KEY"),
-        "anthropic": os.getenv("ANTHROPIC_API_KEY"),
-        "gemini": os.getenv("GOOGLE_API_KEY"),
-    }
-
-    click.echo("\n🔑 Testing API Keys...")
-    working_providers = []
-
-    for provider, key in api_keys.items():
-        if not key:
-            if verbose:
-                click.echo(f"   [WARNING] {provider.title()}: Not configured")
-            continue
-
-        try:
-            create_query_service(
-                database_url="postgresql://test:test@localhost/test", ai_provider=provider, api_key=key
-            )
-            click.echo(f"   [OK] {provider.title()}: Valid")
-            working_providers.append(provider)
-            tests.append(True)
-
-        except Exception as e:
-            click.echo(f"   [ERROR] {provider.title()}: {e!s}")
-            tests.append(False)
+    click.echo("\n🔑 Testing API Keys (one small request each)...")
+    if verbose:
+        for provider, name in PROVIDER_NAMES.items():
+            if not provider_api_key(provider):
+                click.echo(f"   [WARNING] {name}: Not configured ({ProviderConfig.API_KEY_ENV_VARS[provider]})")
+    tests.extend(asyncio.run(run_provider_checks(configured_providers())))
 
     # Test database connection if provided
     db_url = os.getenv("DATABASE_URL")
@@ -809,19 +824,24 @@ def validate(ctx):
     elif verbose:
         click.echo("\n[WARNING] No DATABASE_URL configured")
 
-    # Summary
-    passed = sum(tests)
-    total = len(tests)
+    if not _print_validation_summary(tests):
+        sys.exit(1)
 
+
+def _print_validation_summary(tests: list[bool]) -> bool:
+    """Print the summary; True only when something was checked and everything passed."""
+    passed, total = sum(tests), len(tests)
     click.echo("\n[STATS] Validation Summary:")
     click.echo(f"   Tests passed: {passed}/{total}")
-
-    if passed == total and total > 0:
+    if total == 0:
+        click.echo("[ERROR] Nothing to validate: set an API key or DATABASE_URL.")
+    elif passed == total:
         click.echo("[SUCCESS] All tests passed! nlp2sql is ready to use!")
     elif passed > 0:
         click.echo("[WARNING] Some tests passed. Check failures above.")
     else:
         click.echo("[ERROR] All tests failed. Please check your configuration.")
+    return total > 0 and passed == total
 
 
 async def _test_database(db_url: str, verbose: bool = False):
@@ -848,29 +868,16 @@ def providers_list():
     click.echo("AI: Available AI Providers")
     click.echo("=" * 30)
 
-    default_models = ProviderConfig.DEFAULT_MODELS
+    contexts = {"openai": "1.05M tokens (922K input)", "anthropic": "1M tokens", "gemini": "1M tokens"}
     providers_info = [
         {
-            "name": "OpenAI",
-            "provider": "openai",
-            "env_var": "OPENAI_API_KEY",
-            "models": f"default: {default_models['openai']}",
-            "context": "1.05M tokens (922K input)",
-        },
-        {
-            "name": "Anthropic",
-            "provider": "anthropic",
-            "env_var": "ANTHROPIC_API_KEY",
-            "models": f"default: {default_models['anthropic']}",
-            "context": "1M tokens",
-        },
-        {
-            "name": "Google",
-            "provider": "gemini",
-            "env_var": "GOOGLE_API_KEY",
-            "models": f"default: {default_models['gemini']}",
-            "context": "1M tokens",
-        },
+            "name": name,
+            "provider": provider,
+            "env_var": ProviderConfig.API_KEY_ENV_VARS[provider],
+            "models": f"default: {ProviderConfig.DEFAULT_MODELS[provider]}",
+            "context": contexts[provider],
+        }
+        for provider, name in PROVIDER_NAMES.items()
     ]
 
     for provider in providers_info:
@@ -886,57 +893,27 @@ def providers_list():
 
 
 @providers.command("test")
-@click.option("--provider", help="Test specific provider (openai, anthropic, gemini)")
+@click.option(
+    "--provider",
+    type=click.Choice(sorted(ProviderConfig.SUPPORTED_PROVIDERS)),
+    help="Test one provider (default: every provider with an API key set)",
+)
 def providers_test(provider):
-    """Test AI provider connections."""
+    """Check AI providers with one small SQL generation request each (exit 1 if any fails)."""
+    if provider and not provider_api_key(provider):
+        click.echo(f"[ERROR] {PROVIDER_NAMES[provider]}: no API key. Set {ProviderConfig.API_KEY_ENV_VARS[provider]}")
+        sys.exit(1)
+    providers_to_test = [provider] if provider else configured_providers()
+    if not providers_to_test:
+        env_vars = ", ".join(ProviderConfig.API_KEY_ENV_VARS.values())
+        click.echo(f"[ERROR] No providers configured. Set one of: {env_vars}")
+        sys.exit(1)
 
-    async def _test():
-        providers_to_test = []
-
-        if provider:
-            providers_to_test = [provider]
-        else:
-            # Test all configured providers
-            all_providers = ["openai", "anthropic", "gemini"]
-            env_vars = ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY"]
-
-            for p, env_var in zip(all_providers, env_vars):
-                if os.getenv(env_var):
-                    providers_to_test.append(p)
-
-        if not providers_to_test:
-            click.echo("[ERROR] No providers configured or specified")
-            return
-
-        click.echo("🧪 Testing AI Providers")
-        click.echo("=" * 25)
-
-        for p in providers_to_test:
-            click.echo(f"\nInfo: Testing {p.title()}...")
-
-            try:
-                # Map provider to correct environment variable
-                env_var_mapping = {
-                    "openai": "OPENAI_API_KEY",
-                    "anthropic": "ANTHROPIC_API_KEY",
-                    "gemini": "GOOGLE_API_KEY",
-                }
-                env_var = env_var_mapping.get(p, f"{p.upper()}_API_KEY")
-
-                create_query_service(
-                    database_url="postgresql://test:test@localhost/test", ai_provider=p, api_key=os.getenv(env_var)
-                )
-
-                click.echo(f"   [OK] {p.title()}: Connection successful")
-                click.echo("   [STATS] Provider initialized and ready")
-
-            except ImportError:
-                click.echo(f"   [ERROR] {p.title()}: Missing dependency")
-                click.echo(f"   Hint: Install with: pip install nlp2sql[{p}]")
-            except Exception as e:
-                click.echo(f"   [ERROR] {p.title()}: {e!s}")
-
-    asyncio.run(_test())
+    click.echo("🧪 Testing AI Providers")
+    click.echo("=" * 25)
+    results = asyncio.run(run_provider_checks(providers_to_test))
+    if not all(results):
+        sys.exit(1)
 
 
 @cli.command()
@@ -1003,19 +980,8 @@ def benchmark(
                 click.echo(f"[ERROR] Questions file not found: {questions}", err=True)
                 return
 
-        # Determine providers to test
-        if providers:
-            test_providers = providers.split(",")
-        else:
-            # Test all configured providers
-            test_providers = []
-            for p, env_var in [
-                ("openai", "OPENAI_API_KEY"),
-                ("anthropic", "ANTHROPIC_API_KEY"),
-                ("gemini", "GOOGLE_API_KEY"),
-            ]:
-                if os.getenv(env_var):
-                    test_providers.append(p)
+        # The listed providers, else every provider with an API key set
+        test_providers = providers.split(",") if providers else configured_providers()
 
         if not test_providers:
             click.echo("[ERROR] No providers configured", err=True)
@@ -1041,10 +1007,7 @@ def benchmark(
                 "confidences": [],
             }
 
-            # Map provider to correct environment variable
-            env_var_mapping = {"openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY", "gemini": "GOOGLE_API_KEY"}
-            env_var = env_var_mapping.get(provider, f"{provider.upper()}_API_KEY")
-            api_key = os.getenv(env_var)
+            api_key = provider_api_key(provider)
 
             try:
                 if embedding_provider == "none":
