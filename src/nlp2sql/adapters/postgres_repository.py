@@ -27,7 +27,13 @@ logger = get_logger(__name__)
 
 # Cache configuration
 SCHEMA_CACHE_TTL_HOURS = int(os.getenv("NLP2SQL_SCHEMA_CACHE_TTL_HOURS", "24"))
-SCHEMA_CACHE_VERSION = "2.0"  # v2: pg_catalog queries replace information_schema (Issue #32)
+SCHEMA_CACHE_VERSION = "2.1"  # v2: pg_catalog queries (Issue #32); v2.1: row_count is estimated rows
+
+# row_count is the planner's estimate, pg_class.reltuples: kept current by autovacuum and
+# ANALYZE, and replicated to read replicas. A table never analyzed has none (-1 since
+# PostgreSQL 14, 0 before), so it falls back to the live-row counter of pg_stat_user_tables,
+# which a replica or a crash recovery resets to 0. It used to be n_tup_ins + n_tup_upd +
+# n_tup_del: writes since the last statistics reset, not rows.
 
 
 class PostgreSQLRepository(SchemaRepositoryPort):
@@ -282,7 +288,7 @@ class PostgreSQLRepository(SchemaRepositoryPort):
                 n.nspname AS table_schema,
                 obj_description(c.oid) AS table_comment,
                 pg_total_relation_size(c.oid) AS size_bytes,
-                COALESCE(s.n_tup_ins + s.n_tup_upd + s.n_tup_del, 0) AS row_count
+                CASE WHEN c.reltuples > 0 THEN c.reltuples::bigint ELSE COALESCE(s.n_live_tup, 0) END AS row_count
             FROM pg_class c
             JOIN pg_namespace n ON n.oid = c.relnamespace
             LEFT JOIN pg_stat_user_tables s ON s.relid = c.oid
@@ -485,7 +491,7 @@ class PostgreSQLRepository(SchemaRepositoryPort):
                 obj_description(c.oid) AS table_comment,
                 pg_size_pretty(pg_total_relation_size(c.oid)) AS table_size,
                 pg_total_relation_size(c.oid) AS size_bytes,
-                COALESCE(s.n_tup_ins + s.n_tup_upd + s.n_tup_del, 0) AS row_count
+                CASE WHEN c.reltuples > 0 THEN c.reltuples::bigint ELSE COALESCE(s.n_live_tup, 0) END AS row_count
             FROM pg_class c
             JOIN pg_namespace n ON n.oid = c.relnamespace
             LEFT JOIN pg_stat_user_tables s ON s.relid = c.oid
@@ -518,7 +524,7 @@ class PostgreSQLRepository(SchemaRepositoryPort):
             obj_description(c.oid) AS table_comment,
             pg_size_pretty(pg_total_relation_size(c.oid)) AS table_size,
             pg_total_relation_size(c.oid) AS size_bytes,
-            COALESCE(s.n_tup_ins + s.n_tup_upd + s.n_tup_del, 0) AS row_count
+            CASE WHEN c.reltuples > 0 THEN c.reltuples::bigint ELSE COALESCE(s.n_live_tup, 0) END AS row_count
         FROM pg_class c
         JOIN pg_namespace n ON n.oid = c.relnamespace
         LEFT JOIN pg_stat_user_tables s ON s.relid = c.oid
@@ -584,7 +590,7 @@ class PostgreSQLRepository(SchemaRepositoryPort):
             obj_description(tc.oid) AS table_comment,
             pg_size_pretty(pg_total_relation_size(tc.oid)) AS table_size,
             pg_total_relation_size(tc.oid) AS size_bytes,
-            COALESCE(s.n_tup_ins + s.n_tup_upd + s.n_tup_del, 0) AS row_count
+            CASE WHEN tc.reltuples > 0 THEN tc.reltuples::bigint ELSE COALESCE(s.n_live_tup, 0) END AS row_count
         FROM related_tables rt
         JOIN pg_class tc ON tc.relname = rt.related_table
         JOIN pg_namespace tn ON tn.oid = tc.relnamespace AND tn.nspname = rt.related_schema
@@ -646,8 +652,8 @@ class PostgreSQLRepository(SchemaRepositoryPort):
         """Drop the cached table list so the next get_tables() reads the database again.
 
         Runs nothing against the database. It used to run ANALYZE on the whole
-        database, which changed nothing nlp2sql reads: row_count comes from the
-        pg_stat_user_tables activity counters, which ANALYZE does not update.
+        database: slow on a large database, refused for tables the user does not own,
+        and the job of autovacuum, which keeps the row estimates current.
         """
         cache_path = self._get_tables_cache_path(self.schema_name)
         try:
