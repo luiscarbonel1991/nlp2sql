@@ -7,6 +7,7 @@ import logging
 import os
 import sys
 import time
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, TextIO
@@ -35,12 +36,13 @@ from .utils.artifact_loader import (
     load_semantic_context,
 )
 from .utils.redaction import mask_database_url
-
-
-def get_embeddings_dir() -> Path:
-    """Get the embeddings directory path from environment variable."""
-    embeddings_dir = os.getenv("NLP2SQL_EMBEDDINGS_DIR", "./embeddings")
-    return Path(embeddings_dir)
+from .utils.storage import (
+    EMBEDDINGS_LOCATION,
+    EXAMPLES_LOCATION,
+    existing_data_directories,
+    index_directory_name,
+    tables_cache_directory_name,
+)
 
 
 class _StderrHandler(logging.StreamHandler):
@@ -1112,144 +1114,167 @@ def benchmark(
 
 @cli.group()
 def cache():
-    """Manage nlp2sql cache and embeddings."""
+    """Inspect or clear the caches nlp2sql keeps on disk."""
     pass
 
 
+SCHEMA_INDEX_FILES = ("schema_index.faiss", "schema_metadata.pkl")
+EXAMPLE_INDEX_FILES = ("examples_index.faiss", "examples_metadata.pkl")
+
+
+@dataclass
+class CacheFiles:
+    """The caches found where the library writes them (see utils/storage.py)."""
+
+    bases: list[Path]
+    schema_indexes: list[Path]
+    example_indexes: list[Path]
+    tables_caches: list[Path]
+
+
+def _index_directories(bases: list[Path], file_names: tuple[str, ...], name: Optional[str]) -> list[Path]:
+    """Directories holding an index: ``base/name`` for one database, else every subdirectory.
+
+    Without a database, the base itself is included: an ExampleStore created without a
+    database_url writes its index there.
+    """
+    candidates: list[Path] = []
+    for base in bases:
+        if name is not None:
+            candidates.append(base / name)
+        else:
+            candidates.extend([base, *sorted(path for path in base.iterdir() if path.is_dir())])
+    return [directory for directory in candidates if any((directory / f).is_file() for f in file_names)]
+
+
+def find_cache_files(database_url: Optional[str] = None, schema: str = "public") -> CacheFiles:
+    """Find schema indexes, example indexes and table caches, for one database or all."""
+    embedding_bases = existing_data_directories(*EMBEDDINGS_LOCATION)
+    example_bases = existing_data_directories(*EXAMPLES_LOCATION)
+    index_name = index_directory_name(database_url, schema) if database_url else None
+
+    if database_url:
+        tables_dir = tables_cache_directory_name(database_url)
+        tables_caches = [base / tables_dir / f"tables_cache_{schema}.pkl" for base in embedding_bases]
+        tables_caches = [path for path in tables_caches if path.is_file()]
+    else:
+        tables_caches = sorted(path for base in embedding_bases for path in base.glob("*/tables_cache_*.pkl"))
+
+    return CacheFiles(
+        bases=embedding_bases + example_bases,
+        schema_indexes=_index_directories(embedding_bases, SCHEMA_INDEX_FILES, index_name),
+        example_indexes=_index_directories(example_bases, EXAMPLE_INDEX_FILES, index_name),
+        tables_caches=tables_caches,
+    )
+
+
+def _size_of(paths: list[Path]) -> str:
+    return _format_size(sum(path.stat().st_size for path in paths if path.is_file()))
+
+
+def _echo_index_directories(title: str, directories: list[Path], file_names: tuple[str, ...]) -> None:
+    click.echo(f"\n{title}: {len(directories) or 'none found'}")
+    for directory in directories:
+        files = [directory / name for name in file_names if (directory / name).is_file()]
+        click.echo(f"   {directory.resolve()}: {', '.join(f.name for f in files)} ({_size_of(files)})")
+
+
+def _echo_tables_caches(paths: list[Path]) -> None:
+    import pickle
+
+    click.echo(f"\nTable caches: {len(paths) or 'none found'}")
+    for path in paths:
+        try:
+            with open(path, "rb") as f:
+                cache_data = pickle.load(f)
+        except Exception as e:
+            click.echo(f"   {path.resolve()}: [ERROR] {e}")
+            continue
+        created_at = cache_data.get("created_at")
+        age = f", age: {(datetime.now() - created_at).total_seconds() / 3600:.1f}h" if created_at else ""
+        tables = cache_data.get("table_count", 0)
+        click.echo(f"   {path.resolve()}: {tables} tables (schema: {cache_data.get('schema_name', '?')}{age})")
+
+
+def _delete_files(paths: list[Path], keep_directories: list[Path]) -> list[Path]:
+    """Delete ``paths``, then their directory when it is left empty and is not a base directory."""
+    deleted = []
+    for path in paths:
+        try:
+            path.unlink()
+        except OSError as e:
+            click.echo(f"   [ERROR] Failed to delete {path}: {e}", err=True)
+            continue
+        deleted.append(path)
+        parent = path.parent
+        if parent not in keep_directories and not any(parent.iterdir()):
+            parent.rmdir()
+    return deleted
+
+
 @cache.command("clear")
-@click.option("--all", "clear_all", is_flag=True, help="Clear all cache files")
-@click.option("--embeddings", is_flag=True, help="Clear embeddings cache")
-@click.option("--queries", is_flag=True, help="Clear query cache")
-@click.option("--tables", is_flag=True, help="Clear tables cache (forces re-fetch from database)")
-def cache_clear(clear_all: bool, embeddings: bool, queries: bool, tables: bool):
-    """Clear various cache files.
+@click.option("--all", "clear_all", is_flag=True, help="Clear schema indexes, example indexes and table caches")
+@click.option("--embeddings", is_flag=True, help="Clear schema and example indexes (rebuilt on the next connect)")
+@click.option("--tables", is_flag=True, help="Clear table caches (re-read from the database on the next connect)")
+@click.option("--queries", is_flag=True, help="Kept for compatibility: nlp2sql keeps no query cache on disk")
+@click.option("--database-url", callback=validate_database_url, help="Clear only this database's caches")
+@click.option("--schema", default="public", show_default=True, help="Schema, used with --database-url")
+def cache_clear(  # noqa: PLR0913 — one keyword per option
+    clear_all: bool, embeddings: bool, tables: bool, queries: bool, database_url: Optional[str], schema: str
+):
+    """Clear the caches nlp2sql keeps on disk.
 
     Examples:
-        nlp2sql cache clear --tables       # Clear tables cache only
-        nlp2sql cache clear --embeddings   # Clear embeddings cache only
-        nlp2sql cache clear --all          # Clear all caches
+        nlp2sql cache clear --tables       # Clear table caches only
+        nlp2sql cache clear --embeddings   # Clear schema and example indexes
+        nlp2sql cache clear --all --database-url postgresql://...   # One database only
     """
-    if not any([clear_all, embeddings, queries, tables]):
-        click.echo("[ERROR] Specify what to clear: --all, --embeddings, --queries, or --tables")
-        return
+    if not any([clear_all, embeddings, tables, queries]):
+        click.echo("[ERROR] Specify what to clear: --all, --embeddings, --tables or --queries", err=True)
+        sys.exit(1)
 
-    # Get embeddings directory from environment variable
-    embeddings_dir = get_embeddings_dir()
-
-    cleared = []
-
-    if clear_all:
-        embeddings = queries = tables = True
-
-    if embeddings:
-        click.echo("Clearing embeddings cache...")
-        cache_paths = [str(embeddings_dir) + "/", "schema_embeddings.pkl", "schema_index.faiss"]
-        for path in cache_paths:
-            if Path(path).exists():
-                if Path(path).is_dir():
-                    import shutil
-
-                    shutil.rmtree(path)
-                else:
-                    Path(path).unlink()
-                cleared.append(path)
-
+    found = find_cache_files(database_url, schema)
+    to_delete: list[Path] = []
+    if clear_all or embeddings:
+        for directories, names in (
+            (found.schema_indexes, SCHEMA_INDEX_FILES),
+            (found.example_indexes, EXAMPLE_INDEX_FILES),
+        ):
+            to_delete += [d / name for d in directories for name in names if (d / name).is_file()]
+    if clear_all or tables:
+        to_delete += found.tables_caches
     if queries:
-        click.echo("Clearing query cache...")
-        cache_paths = ["query_cache.db", ".nlp2sql_cache/"]
-        for path in cache_paths:
-            if Path(path).exists():
-                if Path(path).is_dir():
-                    import shutil
+        click.echo("Query cache: nlp2sql keeps no query cache on disk, nothing to clear")
 
-                    shutil.rmtree(path)
-                else:
-                    Path(path).unlink()
-                cleared.append(path)
-
-    if tables:
-        click.echo("Clearing tables cache...")
-        # Tables cache files are stored as tables_cache_*.pkl in embeddings subdirectories
-        if embeddings_dir.exists():
-            for cache_file in embeddings_dir.rglob("tables_cache_*.pkl"):
-                try:
-                    cache_file.unlink()
-                    cleared.append(str(cache_file))
-                    click.echo(f"   Deleted: {cache_file}")
-                except Exception as e:
-                    click.echo(f"   [ERROR] Failed to delete {cache_file}: {e}", err=True)
-
-    if cleared:
-        click.echo(f"[OK] Cleared {len(cleared)} cache file(s)")
-    else:
+    deleted = _delete_files(to_delete, found.bases)
+    for path in deleted:
+        click.echo(f"   Deleted: {path.resolve()}")
+    if deleted:
+        click.echo(f"[OK] Cleared {len(deleted)} cache file(s)")
+    elif not to_delete:
         click.echo("No cache files found to clear")
+    if len(deleted) < len(to_delete):
+        sys.exit(1)
 
 
 @cache.command("info")
-def cache_info():
-    """Show cache information and statistics."""
-    import pickle
+@click.option("--database-url", callback=validate_database_url, help="Show only this database's caches")
+@click.option("--schema", default="public", show_default=True, help="Schema, used with --database-url")
+def cache_info(database_url: Optional[str], schema: str):
+    """Show the caches nlp2sql keeps on disk, where they are and their size."""
+    found = find_cache_files(database_url, schema)
 
     click.echo("[STATS] Cache Information")
     click.echo("=" * 25)
+    if database_url:
+        click.echo(f"Database: {mask_database_url(database_url)} (schema: {schema})")
+    for env_var, *_ in (EMBEDDINGS_LOCATION, EXAMPLES_LOCATION):
+        click.echo(f"{env_var}: {os.getenv(env_var) or 'not set (./ or /tmp fallback)'}")
 
-    # Check embeddings cache using environment variable
-    embeddings_path = get_embeddings_dir()
-    if embeddings_path.exists():
-        size = sum(f.stat().st_size for f in embeddings_path.rglob("*") if f.is_file())
-        files = len([f for f in embeddings_path.rglob("*") if f.is_file()])
-        click.echo("Embeddings cache:")
-        click.echo(f"   Location: {embeddings_path.absolute()}")
-        click.echo(f"   Size: {size / 1024 / 1024:.2f} MB")
-        click.echo(f"   Files: {files}")
-    else:
-        click.echo("Embeddings cache: Not found")
-
-    # Check tables cache
-    tables_caches = list(embeddings_path.rglob("tables_cache_*.pkl")) if embeddings_path.exists() else []
-    if tables_caches:
-        click.echo("\nTables cache:")
-        total_tables = 0
-        for cache_file in tables_caches:
-            try:
-                with open(cache_file, "rb") as f:
-                    cache_data = pickle.load(f)
-                table_count = cache_data.get("table_count", 0)
-                created_at = cache_data.get("created_at")
-                schema_name = cache_data.get("schema_name", "unknown")
-                total_tables += table_count
-
-                age_str = ""
-                if created_at:
-                    age_hours = (datetime.now() - created_at).total_seconds() / 3600
-                    age_str = f", age: {age_hours:.1f}h"
-
-                click.echo(f"   {cache_file.name}: {table_count} tables (schema: {schema_name}{age_str})")
-            except Exception as e:
-                click.echo(f"   {cache_file.name}: [ERROR] {e}")
-        click.echo(f"   Total cached tables: {total_tables}")
-    else:
-        click.echo("\nTables cache: Not found")
-
-    # Check FAISS index
-    faiss_path = Path("schema_index.faiss")
-    if faiss_path.exists():
-        size = faiss_path.stat().st_size
-        click.echo("\nFAISS index:")
-        click.echo(f"   Location: {faiss_path.absolute()}")
-        click.echo(f"   Size: {size / 1024 / 1024:.2f} MB")
-    else:
-        click.echo("\nFAISS index: Not found")
-
-    # Check query cache
-    query_cache_path = Path("query_cache.db")
-    if query_cache_path.exists():
-        size = query_cache_path.stat().st_size
-        click.echo("\nQuery cache:")
-        click.echo(f"   📁 Location: {query_cache_path.absolute()}")
-        click.echo(f"   [STATS] Size: {size / 1024:.2f} KB")
-    else:
-        click.echo("💾 Query cache: Not found")
+    _echo_index_directories("Schema indexes", found.schema_indexes, SCHEMA_INDEX_FILES)
+    _echo_tables_caches(found.tables_caches)
+    _echo_index_directories("Example indexes", found.example_indexes, EXAMPLE_INDEX_FILES)
+    click.echo("\nQuery cache: none (nlp2sql does not cache generated queries on disk)")
 
 
 def main():

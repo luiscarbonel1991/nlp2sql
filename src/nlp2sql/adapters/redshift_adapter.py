@@ -1,7 +1,6 @@
 """Amazon Redshift repository for schema management."""
 
 import asyncio
-import hashlib
 import os
 import pickle
 import time
@@ -21,6 +20,7 @@ from ..ports.schema_repository import (
     TableInfo,
 )
 from ..utils.logger import get_logger
+from ..utils.storage import EMBEDDINGS_LOCATION, get_data_directory, tables_cache_directory_name
 
 logger = get_logger(__name__)
 
@@ -53,9 +53,9 @@ class RedshiftRepository(SchemaRepositoryPort):
     def _get_cache_dir(self) -> Path:
         """Get the cache directory for this database connection."""
         if self._cache_dir is None:
-            url_hash = hashlib.md5(self.connection_string.encode()).hexdigest()[:12]
-            base_dir = Path(os.getenv("NLP2SQL_EMBEDDINGS_DIR", "./embeddings"))
-            self._cache_dir = base_dir / url_hash
+            # Same base directory as the schema index, with its /tmp fallback
+            base_dir = get_data_directory(*EMBEDDINGS_LOCATION)
+            self._cache_dir = base_dir / tables_cache_directory_name(self.connection_string)
             self._cache_dir.mkdir(parents=True, exist_ok=True)
         return self._cache_dir
 
