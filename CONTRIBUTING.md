@@ -16,7 +16,7 @@ nlp2sql is built with enterprise production environments in mind:
 
 ### Prerequisites
 
-- Python 3.9+
+- Python 3.10+
 - UV package manager (recommended) or pip
 - PostgreSQL (for testing)
 - Docker & Docker Compose (for test databases)

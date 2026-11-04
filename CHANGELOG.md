@@ -22,6 +22,12 @@ pre-1.0.
 
 ## [Unreleased]
 
+### Changed
+- **Requires Python 3.10 or later.** The package declared Python 3.9, which installed
+  but failed on `import nlp2sql` (`TypeError` on `X | None` annotations), and CI tested
+  only 3.12. CI now runs the unit tests on 3.10 and 3.12. Python 3.9 reached end of life
+  in October 2025.
+
 ## [0.2.0rc18] - 2026-11-04
 
 ### Added

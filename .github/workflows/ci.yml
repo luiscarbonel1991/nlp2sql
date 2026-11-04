@@ -12,15 +12,20 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        # The declared floor (requires-python) and the version the other jobs use
+        python-version: ['3.10', '3.12']
 
     steps:
     - name: Checkout
       uses: actions/checkout@v7
 
-    - name: Set up Python 3.12
+    - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v7
       with:
-        python-version: '3.12'
+        python-version: ${{ matrix.python-version }}
 
     - name: Install uv
       run: python -m pip install uv
