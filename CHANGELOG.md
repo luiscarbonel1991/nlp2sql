@@ -22,6 +22,8 @@ pre-1.0.
 
 ## [Unreleased]
 
+## [0.2.0rc18] - 2026-11-04
+
 ### Added
 - `QueryResult.validation` (the checks behind `is_valid`: `errors`, `warnings`,
   `column_errors`, ...), and `QueryResult.rows` and `QueryResult.columns` when the query
