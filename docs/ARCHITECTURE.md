@@ -14,7 +14,7 @@ It is now modeled as:
 
 ```mermaid
 flowchart TD
-    userCode[User code or CLI] --> dsl[connect() / ask()]
+    userCode[User code or CLI] --> dsl["connect() / ask()"]
     dsl --> qgs[QueryGenerationService]
     qgs --> analysis[Query analysis]
     analysis --> semantic[SemanticResolutionService]
