@@ -22,11 +22,26 @@ pre-1.0.
 
 ## [Unreleased]
 
+## [0.2.0rc19] - 2026-11-05
+
+### Added
+- `CODE_OF_CONDUCT.md` (Contributor Covenant 2.1) and a pull request template.
+
 ### Changed
 - **Requires Python 3.10 or later.** The package declared Python 3.9, which installed
   but failed on `import nlp2sql` (`TypeError` on `X | None` annotations), and CI tested
   only 3.12. CI now runs the unit tests on 3.10 and 3.12. Python 3.9 reached end of life
   in October 2025.
+
+### Fixed
+- The logo on the PyPI page was broken: the README used a relative path
+  (`assets/nlp2sql-logo.png`) that PyPI cannot resolve. The README hero is now an SVG
+  with an absolute `raw.githubusercontent.com` URL, with a dark variant on GitHub.
+- `SECURITY.md` pointed reporters to a placeholder address. Reports now go through
+  GitHub's private vulnerability reporting.
+- `CONTRIBUTING.md` listed test directories that don't exist (`tests/unit/`,
+  `tests/e2e/`) and a `make quality` target with no Makefile. It now shows the pytest
+  markers CI uses.
 
 ## [0.2.0rc18] - 2026-11-04
 

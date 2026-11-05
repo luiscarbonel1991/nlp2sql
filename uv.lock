@@ -1837,7 +1837,7 @@ wheels = [
 
 [[package]]
 name = "nlp2sql"
-version = "0.2.0rc18"
+version = "0.2.0rc19"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
