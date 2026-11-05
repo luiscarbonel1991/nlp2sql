@@ -2,6 +2,8 @@
 
 Thank you for your interest in contributing to nlp2sql! This project follows enterprise development practices to ensure high quality, maintainability, and reliability.
 
+By taking part in this project you agree to follow its [Code of Conduct](CODE_OF_CONDUCT.md).
+
 ## Development Philosophy
 
 nlp2sql is built with enterprise production environments in mind:
@@ -32,7 +34,7 @@ cd nlp2sql
 ./install-dev.sh
 
 # Set up test databases
-cd docker && docker-compose up -d
+cd docker && docker compose up -d
 
 # Set environment variables
 export OPENAI_API_KEY=your-test-key
@@ -59,9 +61,6 @@ uv run ruff check .
 
 # Type checking
 uv run mypy src/
-
-# Run all quality checks
-make quality  # or run individually
 ```
 
 ### 2. Testing Requirements
@@ -69,17 +68,17 @@ make quality  # or run individually
 All contributions must include comprehensive tests:
 
 ```bash
-# Run unit tests
-uv run pytest tests/unit/
+# Unit tests: no database and no API keys (the first CI job runs these)
+uv run pytest -m "not integration and not llm"
 
-# Run integration tests
-uv run pytest tests/integration/
+# Integration tests, against the Docker databases (cd docker && docker compose up -d)
+uv run pytest -m integration
 
-# Run end-to-end tests
-uv run pytest tests/e2e/
+# Tests that call real LLM providers (need API keys and spend tokens)
+uv run pytest -m llm
 
-# Run all tests with coverage
-uv run pytest --cov=nlp2sql --cov-report=html
+# Unit tests with a coverage report
+uv run pytest -m "not integration and not llm" --cov=nlp2sql --cov-report=html
 ```
 
 ### 3. Architecture Guidelines
@@ -187,10 +186,10 @@ Priority areas for enterprise contributions:
 ### 1. Before Submitting
 
 - [ ] Create/update tests for your changes
-- [ ] Run full test suite (`uv run pytest`)
+- [ ] Run the unit tests (`uv run pytest -m "not integration and not llm"`)
 - [ ] Check code quality (`uv run ruff check .`)
 - [ ] Update documentation if needed
-- [ ] Test with example databases (`docker-compose up -d`)
+- [ ] Test with example databases (`cd docker && docker compose up -d`, then `uv run pytest -m integration`)
 
 ### 2. PR Requirements
 
