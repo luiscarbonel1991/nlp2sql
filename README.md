@@ -1,5 +1,8 @@
 <p align="center">
-  <img src="assets/nlp2sql-logo.png" alt="nlp2sql logo" width="400">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/luiscarbonel1991/nlp2sql/main/assets/nlp2sql-hero-dark.svg">
+    <img src="https://raw.githubusercontent.com/luiscarbonel1991/nlp2sql/main/assets/nlp2sql-hero-light.svg" alt="nlp2sql: natural language to SQL, with pluggable databases and LLMs" width="100%">
+  </picture>
 </p>
 
 <p align="center">
@@ -11,7 +14,7 @@
 
 # nlp2sql
 
-**DSL-first natural language to SQL for PostgreSQL and Redshift**
+**DSL-first natural language to SQL, with pluggable databases and LLM providers**
 
 `nlp2sql` turns a natural language question into SQL through a reusable Python DSL:
 
@@ -30,8 +33,8 @@ The library is designed for both simple schemas and large warehouses, but all pu
 - **Execution modes**: generate only, generate plus validate, and generate plus validate plus repair
 - **Few-shot examples**: pass example lists directly or use an example repository implementation
 - **Large schema support**: FAISS plus TF-IDF hybrid retrieval, schema filters, and disk-backed caches
-- **Multiple providers**: OpenAI, Anthropic, and Gemini
-- **Database support**: PostgreSQL and Amazon Redshift
+- **Multiple providers**: OpenAI, Anthropic, and Gemini built in, or your own `AIProviderPort` passed to `QueryGenerationService`
+- **Database support**: PostgreSQL and Amazon Redshift built in; register a `SchemaRepositoryPort` implementation with `RepositoryFactory.register()` and pass `database_type=` to `connect()` to add another database
 - **Async by default**: built for services, APIs, notebooks, and workers
 
 ## Documentation
