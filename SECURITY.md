@@ -17,8 +17,7 @@ We take security vulnerabilities seriously. If you discover a security issue, pl
 ### How to Report
 
 1. **DO NOT** open a public GitHub issue for security vulnerabilities
-2. Email the maintainers directly at [security contact email]
-3. Or use GitHub's private vulnerability reporting feature (Security tab > Report a vulnerability)
+2. Report it privately through [GitHub's private vulnerability reporting](https://github.com/luiscarbonel1991/nlp2sql/security/advisories/new) (Security tab > Report a vulnerability)
 
 ### What to Include
 
