@@ -42,6 +42,13 @@ pre-1.0.
 - `apply_row_limit` added `LIMIT` after a trailing `-- comment`, where it became part of the
   comment, and skipped it when `LIMIT` appeared inside a `$$...$$` literal or a comment. A
   query that ended with a comment returned every row instead of the limit.
+- **Queries run in read-only transactions** on PostgreSQL and Redshift, so the database
+  refuses a write that the check misses. Before, a write was undone only because the
+  connection closed without a commit: a `COMMIT` inside the query kept what followed it,
+  and `nextval()` moved a sequence for good. Every connection now asks for read-only
+  transactions, and on PostgreSQL `default_transaction_read_only` is also set for the
+  query's session, so a transaction started after a `COMMIT` is read-only too. `SECURITY.md`
+  shows how to create a database user that can only read, which is still the strongest guard.
 
 ## [0.2.0rc19] - 2026-11-05
 

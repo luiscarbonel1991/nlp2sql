@@ -175,8 +175,11 @@ class RedshiftRepository(SchemaRepositoryPort):
         }
 
     def _get_connection(self):
-        """Create a new database connection."""
-        return psycopg2.connect(**self._connection_params)
+        """Create a new database connection whose transactions are read-only."""
+        conn = psycopg2.connect(**self._connection_params)
+        # nlp2sql only reads: Redshift refuses a write the SQL safety check misses (BEGIN READ ONLY)
+        conn.set_session(readonly=True)
+        return conn
 
     async def initialize(self) -> None:
         """Initialize database connections and detect available system views."""
@@ -716,13 +719,7 @@ class RedshiftRepository(SchemaRepositoryPort):
                     "execution_time_ms": execution_time_ms,
                 }
             finally:
-                # Reset statement timeout before closing (match PostgreSQL behavior)
-                try:
-                    cursor = conn.cursor()
-                    cursor.execute("SET statement_timeout TO 0")
-                    cursor.close()
-                except Exception:
-                    pass  # Best effort reset
+                # Closing rolls the transaction back and ends the session with its settings
                 conn.close()
 
         try:

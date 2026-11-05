@@ -84,8 +84,11 @@ class PostgreSQLRepository(SchemaRepositoryPort):
         return params
 
     def _get_connection(self):
-        """Create a new database connection."""
-        return psycopg2.connect(**self._connection_params)
+        """Create a new database connection whose transactions are read-only."""
+        conn = psycopg2.connect(**self._connection_params)
+        # nlp2sql only reads: the database refuses a write the SQL safety check misses
+        conn.set_session(readonly=True)
+        return conn
 
     def _execute_query(self, query: str, params=None) -> List[Dict]:
         """Execute a query and return results as list of dicts."""
@@ -895,6 +898,9 @@ class PostgreSQLRepository(SchemaRepositoryPort):
                     psycopg2_sql.SQL("SET search_path TO {}, public").format(psycopg2_sql.Identifier(self.schema_name))
                 )
                 cursor.execute(f"SET statement_timeout TO {timeout_seconds * 1000}")
+                # set_session(readonly=True) covers only the transaction it begins; a COMMIT
+                # inside the query would start one that can write, unless this is the default
+                cursor.execute("SET default_transaction_read_only = on")
                 cursor.close()
 
                 # Execute the actual query
@@ -913,12 +919,7 @@ class PostgreSQLRepository(SchemaRepositoryPort):
                     "execution_time_ms": execution_time_ms,
                 }
             finally:
-                try:
-                    cursor = conn.cursor()
-                    cursor.execute("SET statement_timeout TO 0")
-                    cursor.close()
-                except Exception:
-                    pass
+                # Closing rolls the transaction back and ends the session with its settings
                 conn.close()
 
         try:

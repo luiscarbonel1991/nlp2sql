@@ -58,7 +58,18 @@ Security issues relevant to this project include:
 When using nlp2sql in production:
 
 1. **Never commit `.env` files** - Use environment variables or secret management
-2. **Use read-only database credentials** when possible
+2. **Connect with a database user that can only read** - nlp2sql checks every query it executes and runs it in a read-only transaction, but the database's own permissions are the guarantee that holds if a check is ever bypassed. In PostgreSQL:
+
+   ```sql
+   CREATE ROLE nlp2sql_reader LOGIN PASSWORD '...';
+   GRANT CONNECT ON DATABASE mydb TO nlp2sql_reader;
+   GRANT USAGE ON SCHEMA public TO nlp2sql_reader;
+   GRANT SELECT ON ALL TABLES IN SCHEMA public TO nlp2sql_reader;
+   ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO nlp2sql_reader;
+   ALTER ROLE nlp2sql_reader SET default_transaction_read_only = on;
+   ```
+
+   Do not use a superuser: it can read server files (`pg_read_file`) and end other sessions.
 3. **Enable query validation** to prevent dangerous SQL execution
 4. **Review generated SQL** before executing on sensitive data
 5. **Keep dependencies updated** - Run `uv sync` regularly

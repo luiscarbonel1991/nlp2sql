@@ -31,6 +31,7 @@ The library is designed for both simple schemas and large warehouses, but all pu
 - **DSL-first API**: `connect()` returns an `NLP2SQL` client with `ask()`, `validate()`, `explain()`, and `suggest()`
 - **Business-aware generation**: optional `SemanticContext` adds canonical tables, metrics, dimensions, rules, and mappings
 - **Execution modes**: generate only, generate plus validate, and generate plus validate plus repair
+- **Read-only execution**: queries pass a safety check and run in read-only transactions; connect with a database user that can only read (see [SECURITY.md](https://github.com/luiscarbonel1991/nlp2sql/blob/main/SECURITY.md#security-best-practices))
 - **Few-shot examples**: pass example lists directly or use an example repository implementation
 - **Large schema support**: FAISS plus TF-IDF hybrid retrieval, schema filters, and disk-backed caches
 - **Multiple providers**: OpenAI, Anthropic, and Gemini built in, or your own `AIProviderPort` passed to `QueryGenerationService`
