@@ -22,6 +22,27 @@ pre-1.0.
 
 ## [Unreleased]
 
+### Security
+- **The read-only check reads literals and comments the way PostgreSQL does.**
+  `is_safe_query` removed string literals with a regex that knew only `'...'` and
+  `"..."`. A query could hide another statement, or a prohibited function, inside a
+  dollar-quoted (`$$...$$`) or `E'...'` literal, and the check passed it: `ask(validate=True)`,
+  `execute_query()` and the MCP server's `run_sql` then ran it. The query is now split into
+  tokens like PostgreSQL's lexer does, and the checks look only at its code. Affects every
+  earlier release.
+  - `SELECT ... INTO` is rejected (it creates a table).
+  - Prohibited functions are found when quoted (`"pg_sleep"(1)`) or schema-qualified, and
+    `query_to_xml`, `query_to_xml_and_xmlschema`, `query_to_xmlschema` and `ts_stat` are
+    prohibited: they run SQL given as a string, which the check cannot see into.
+  - Rejected because servers read them differently: a string literal whose end depends on
+    whether `\` escapes the next character (`'it\'s'`, `'C:\'`; write quotes as `''`),
+    nested `/* */` comments and Unicode-escaped identifiers (`U&"..."`). Unterminated
+    literals, quoted names and comments are rejected too.
+  - A leading comment (`-- top customers` before `SELECT`) is now allowed.
+- `apply_row_limit` added `LIMIT` after a trailing `-- comment`, where it became part of the
+  comment, and skipped it when `LIMIT` appeared inside a `$$...$$` literal or a comment. A
+  query that ended with a comment returned every row instead of the limit.
+
 ## [0.2.0rc19] - 2026-11-05
 
 ### Added
