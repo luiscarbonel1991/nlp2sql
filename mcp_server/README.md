@@ -367,6 +367,10 @@ All SQL execution goes through security validation:
 - `COPY`, `EXEC`, `CALL`
 - Multiple statements (`;` injection)
 
+### Read-only Transactions
+
+Queries run in read-only transactions (PostgreSQL and Redshift), so the database refuses a write even if the check above missed it. Configure the server with a database user that can only read; see [SECURITY.md](https://github.com/luiscarbonel1991/nlp2sql/blob/main/SECURITY.md#security-best-practices).
+
 ### Row Limits
 
 - Default: 100 rows
