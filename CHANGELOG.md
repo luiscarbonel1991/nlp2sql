@@ -22,6 +22,8 @@ pre-1.0.
 
 ## [Unreleased]
 
+## [0.2.0rc20] - 2026-11-08
+
 ### Security
 - **The read-only check reads literals and comments the way PostgreSQL does.**
   `is_safe_query` removed string literals with a regex that knew only `'...'` and

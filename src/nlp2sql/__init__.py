@@ -49,7 +49,7 @@ from .schema.example_store import ExampleStore
 from .services.query_service import QueryGenerationService
 from .utils.logger import get_logger
 
-__version__ = "0.2.0rc19"
+__version__ = "0.2.0rc20"
 
 # Silent unless the application configures logging (the logging HOWTO's advice for libraries)
 _logging.getLogger(__name__).addHandler(_logging.NullHandler())
