@@ -88,8 +88,6 @@ dev-dependencies = [
     "pytest-mock>=3.11.0",
     "ruff>=0.1.0",
     "mypy>=1.7.0",
-    "ipython>=8.0.0",
-    "notebook>=7.0.0",
 ]
 
 
