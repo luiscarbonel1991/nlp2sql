@@ -27,7 +27,7 @@ from nlp2sql.ports.ai_provider import QueryContext
 EXPECTED_DEFAULTS = {
     "openai": "gpt-5.6-luna",
     "anthropic": "claude-sonnet-5",
-    "gemini": "gemini-3.6-flash",
+    "gemini": "gemini-3.8-flash",
 }
 
 SCHEMA = "CREATE TABLE users (id INT PRIMARY KEY, email TEXT, is_active BOOLEAN);"

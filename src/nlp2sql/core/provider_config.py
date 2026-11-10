@@ -34,7 +34,7 @@ class ProviderConfig:
     DEFAULT_MODELS: ClassVar[dict[str, str]] = {
         "openai": "gpt-5.6-luna",
         "anthropic": "claude-sonnet-5",
-        "gemini": "gemini-3.6-flash",
+        "gemini": "gemini-3.8-flash",
     }
 
     # Environment variable each provider's API key is read from

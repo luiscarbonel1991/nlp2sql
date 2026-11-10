@@ -60,8 +60,8 @@ DEFAULT_CONTEXT_LIMIT = 32_768
 
 # Thinking level sent per model; models not listed keep their own default (medium for
 # 3.6 and 3.8). The accepted levels differ by model: gemini-3.8-flash takes low, medium
-# and high ("minimal" is an error). Google's pages disagree on whether gemini-3.6-flash
-# takes "low", so it is not listed.
+# and high ("minimal" is an error). gemini-3.6-flash also accepts "low" (live gate G4,
+# 2026-11-10), but its SQL was measured only at its default, so it keeps it.
 THINKING_LEVELS: Dict[str, types.ThinkingLevel] = {
     "gemini-3.8-flash": types.ThinkingLevel.LOW,
 }

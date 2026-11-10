@@ -35,6 +35,9 @@ pre-1.0.
   - The adapter still runs requests in a worker thread. The SDK's async client keeps
     connections bound to the event loop that opened them, so one adapter used from two
     `asyncio.run()` calls failed with "Event loop is closed".
+- **The default Gemini model is `gemini-3.8-flash`**, with `thinking_level="low"`. Other
+  models keep their own thinking default; `gemini-3.6-flash` and other models can still be
+  pinned with `ProviderConfig(model=...)`.
 - **Behavior change:** the Gemini adapter no longer sends `temperature` or `candidate_count`.
   Google deprecated `temperature` for Gemini 3.6 and later (ignored now, an error in future
   models), and `candidate_count` is unsupported since Gemini 3. A `temperature` passed to
