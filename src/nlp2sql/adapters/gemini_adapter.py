@@ -1,17 +1,27 @@
 """Google Gemini adapter for query generation.
 
-Uses the legacy ``google-generativeai`` SDK, which is end-of-life and hardwired
-to the ``v1beta`` API version (it cannot pin ``v1``) and cannot configure or
-observe Gemini 3.x thinking. Thinking tokens count against
-``max_output_tokens``, so a too-small response budget surfaces as an empty
-candidate; the adapter reports that as an actionable error.
+Uses the ``google-genai`` SDK and the stateless ``generateContent`` endpoint, pinned to
+the stable ``v1`` API version. The SDK's own default depends on its release (``v1beta``
+up to 2.x, ``v1`` from 3.0), and pip picks the release by Python version, so without the
+pin the same nlp2sql would call different API versions on Python 3.10 and 3.12.
+
+Requests run on the SDK's synchronous client in a worker thread. The asynchronous
+client keeps pooled keep-alive connections bound to the event loop that opened them:
+reusing one adapter across ``asyncio.run()`` calls failed with "Event loop is closed"
+(the same class of bug as issue #35).
+
+Not sent: ``temperature`` (Gemini 3.6 and later ignore it) and ``candidate_count``
+(Gemini 3 does not support it). Thinking tokens count against ``max_output_tokens``, so
+a too-small response budget surfaces as a truncated or empty answer; the adapter
+reports that as an actionable error.
 """
 
 import asyncio
 import json
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, NamedTuple, Optional
 
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from ..config.settings import settings
@@ -25,9 +35,12 @@ from ._provider_errors import TRANSIENT_PROVIDER_ERRORS, call_with_format_retry,
 
 logger = get_logger(__name__)
 
+GEMINI_API_VERSION = "v1"
+
 # Maximum input tokens per model. Legacy rows are kept so users who pin an
 # older (or retired) model keep an accurate budget.
 CONTEXT_LIMITS: Dict[str, int] = {
+    "gemini-3.8-flash": 1_048_576,
     "gemini-3.6-flash": 1_048_576,
     "gemini-3.1-flash-lite": 1_048_576,
     "gemini-2.5-pro": 1_048_576,
@@ -45,12 +58,36 @@ GEMINI_FAMILY_CONTEXT_LIMIT = 1_048_576
 # tuned models). The previous 30,720 fallback was wrong for every Gemini model.
 DEFAULT_CONTEXT_LIMIT = 32_768
 
+# Thinking level sent per model; models not listed keep their own default (medium for
+# 3.6 and 3.8). The accepted levels differ by model: gemini-3.8-flash takes low, medium
+# and high ("minimal" is an error). Google's pages disagree on whether gemini-3.6-flash
+# takes "low", so it is not listed.
+THINKING_LEVELS: Dict[str, types.ThinkingLevel] = {
+    "gemini-3.8-flash": types.ThinkingLevel.LOW,
+}
+
 # Finish reasons where Gemini withheld the answer; asking again would not help.
 _BLOCKED_FINISH_REASONS = {"SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII"}
 
+VALIDATION_MAX_TOKENS = 1000
+
+
+class UsageTokens(NamedTuple):
+    prompt: int
+    output: int
+    thinking: int
+
+    @property
+    def total(self) -> int:
+        return self.prompt + self.output + self.thinking
+
 
 class GeminiAdapter(AIProviderPort):
-    """Google Gemini adapter for natural language to SQL generation."""
+    """Google Gemini adapter for natural language to SQL generation.
+
+    A ``temperature`` passed to the constructor is kept for backward compatibility but
+    not forwarded: Gemini 3.6 and later models ignore it.
+    """
 
     DEFAULT_MODEL = ProviderConfig.DEFAULT_MODELS["gemini"]
     DEFAULT_MAX_TOKENS = 2000
@@ -67,22 +104,29 @@ class GeminiAdapter(AIProviderPort):
         if not self.api_key:
             raise ProviderException("Google API key is required")
 
-        resolved_model = model or self.DEFAULT_MODEL
+        self.model_name = model or self.DEFAULT_MODEL
         self.max_tokens = first_not_none(max_tokens, self.DEFAULT_MAX_TOKENS)
         self.temperature = first_not_none(temperature, self.DEFAULT_TEMPERATURE)
+        self._max_context_size = self._resolve_context_limit(self.model_name)
+        self._thinking_level = THINKING_LEVELS.get(self._normalize_model_name(self.model_name))
 
-        # Configure Gemini
-        genai.configure(api_key=self.api_key)
-        self.model_name = resolved_model
-        self.model = genai.GenerativeModel(resolved_model)
-        self._max_context_size = self._resolve_context_limit(resolved_model)
+        if temperature is not None:
+            # INFO, not WARNING: the CLI always forwards its --temperature default.
+            logger.info(
+                "Gemini adapter does not forward temperature (ignored by Gemini 3.6+ models)",
+                model=self.model_name,
+                temperature=temperature,
+            )
+
+        self.client = genai.Client(api_key=self.api_key, http_options=types.HttpOptions(api_version=GEMINI_API_VERSION))
 
         logger.debug(
             "Provider configured",
             provider="gemini",
             model=self.model_name,
+            api_version=GEMINI_API_VERSION,
             max_tokens=self.max_tokens,
-            temperature=self.temperature,
+            thinking_level=self._thinking_level.value if self._thinking_level else None,
             context_limit=self._max_context_size,
         )
 
@@ -92,7 +136,7 @@ class GeminiAdapter(AIProviderPort):
 
     @staticmethod
     def _normalize_model_name(model_name: str) -> str:
-        """The SDK accepts both ``gemini-x`` and ``models/gemini-x``; look up the bare name."""
+        """The API accepts both ``gemini-x`` and ``models/gemini-x``; look up the bare name."""
         return model_name[len("models/") :] if model_name.startswith("models/") else model_name
 
     @classmethod
@@ -117,32 +161,53 @@ class GeminiAdapter(AIProviderPort):
         return DEFAULT_CONTEXT_LIMIT
 
     def get_token_count(self, text: str) -> int:
-        """Estimate token count for Gemini models."""
-        try:
-            result = self.model.count_tokens(text)
-            return result.total_tokens
-        except Exception:
-            # Fallback estimation
-            return len(text) // 4
+        """Estimate token count for Gemini models (about 4 characters per token).
+
+        A local estimate, like the Anthropic adapter: the API's countTokens would add a
+        network round trip to every question, and the API enforces the real limit.
+        """
+        return len(text) // 4
 
     def get_max_context_size(self) -> int:
         """Get maximum input context size for the model."""
         return self._max_context_size
 
-    @staticmethod
-    def _extract_text(response: Any) -> str:
-        """Return the first candidate's text, or raise an actionable error.
+    def _generation_config(self, system_instruction: str, max_output_tokens: int) -> types.GenerateContentConfig:
+        thinking_config = types.ThinkingConfig(thinking_level=self._thinking_level) if self._thinking_level else None
+        return types.GenerateContentConfig(
+            system_instruction=system_instruction,
+            max_output_tokens=max_output_tokens,
+            response_mime_type="application/json",
+            thinking_config=thinking_config,
+        )
 
-        ``response.text`` raises a bare ``ValueError`` when the candidate has no
-        parts, which happens when thinking tokens exhaust ``max_output_tokens``
-        or a safety filter fires.
+    async def _generate(self, prompt: str, config: types.GenerateContentConfig) -> types.GenerateContentResponse:
+        return await asyncio.to_thread(
+            self.client.models.generate_content, model=self.model_name, contents=prompt, config=config
+        )
+
+    @staticmethod
+    def _finish_name(candidate: types.Candidate) -> Optional[str]:
+        finish_reason = getattr(candidate, "finish_reason", None)
+        return getattr(finish_reason, "name", finish_reason)
+
+    @classmethod
+    def _extract_text(cls, response: types.GenerateContentResponse) -> str:
+        """Return the first candidate's answer text, or raise an actionable error.
+
+        Thought parts are skipped. A candidate has no text when thinking tokens exhaust
+        ``max_output_tokens`` or a safety filter fires.
         """
         candidates = getattr(response, "candidates", None) or []
         if not candidates:
+            feedback = getattr(response, "prompt_feedback", None)
+            block_reason = getattr(feedback, "block_reason", None)
+            if block_reason:
+                block_name = getattr(block_reason, "name", block_reason)
+                raise ProviderRequestError(f"Gemini blocked the prompt (block_reason={block_name})")
             raise ProviderException("Gemini returned no response candidates")
         candidate = candidates[0]
-        finish_reason = getattr(candidate, "finish_reason", None)
-        finish_name = getattr(finish_reason, "name", finish_reason)
+        finish_name = cls._finish_name(candidate)
         if finish_name == "MAX_TOKENS":
             # An answer cut at max_tokens would be cut again, so it is not retried.
             raise ProviderException(
@@ -153,23 +218,28 @@ class GeminiAdapter(AIProviderPort):
             raise ProviderRequestError(f"Gemini blocked the response (finish_reason={finish_name})")
         content = getattr(candidate, "content", None)
         parts = getattr(content, "parts", None) or []
-        if not parts:
+        text = "".join(part.text for part in parts if part.text and not part.thought)
+        if not text.strip():
             raise ProviderResponseFormatError(f"Gemini returned no content (finish_reason={finish_name})")
-        return str(response.text).strip()
+        return text.strip()
 
-    def _usage_tokens(self, response: Any, prompt: str) -> Tuple[int, int]:
-        """Prompt and output tokens: the usage reported by the API, else estimates."""
+    def _usage_tokens(self, response: types.GenerateContentResponse, prompt: str) -> UsageTokens:
+        """Prompt, answer and thinking tokens: the usage reported by the API, else estimates.
+
+        Thinking tokens are billed as output but not included in ``candidates_token_count``.
+        """
         usage = getattr(response, "usage_metadata", None)
-        prompt_tokens = getattr(usage, "prompt_token_count", None) if usage is not None else None
-        output_tokens = getattr(usage, "candidates_token_count", None) if usage is not None else None
+        prompt_tokens = getattr(usage, "prompt_token_count", None)
+        output_tokens = getattr(usage, "candidates_token_count", None)
+        thinking_tokens = getattr(usage, "thoughts_token_count", None) or 0
         if prompt_tokens is None:
             prompt_tokens = self.get_token_count(prompt)
         if output_tokens is None:
             try:
                 output_tokens = self.get_token_count(self._extract_text(response))
-            except (ProviderException, ValueError):
+            except ProviderException:
                 output_tokens = 0
-        return prompt_tokens, output_tokens
+        return UsageTokens(prompt_tokens, output_tokens, thinking_tokens)
 
     @retry(
         stop=stop_after_attempt(3),
@@ -183,32 +253,27 @@ class GeminiAdapter(AIProviderPort):
             # Validate token count
             await self._validate_token_count(context)
 
-            # Build prompt
-            full_prompt = self._build_full_prompt(context)
-
-            # Configure generation
-            generation_config = genai.types.GenerationConfig(
-                temperature=context.temperature, max_output_tokens=context.max_tokens, candidate_count=1
-            )
+            system_prompt = self._get_system_prompt(context.database_type)
+            prompt = self._build_prompt(context)
+            config = self._generation_config(system_prompt, context.max_tokens)
 
             # Generate content; malformed output is asked for again once
             generation = await call_with_format_retry(
-                lambda: asyncio.to_thread(
-                    self.model.generate_content, full_prompt, generation_config=generation_config
-                ),
+                lambda: self._generate(prompt, config),
                 self._parse_response,
-                lambda response: sum(self._usage_tokens(response, full_prompt)),
+                lambda response: self._usage_tokens(response, system_prompt + prompt).total,
                 provider=self.provider_type.value,
             )
             response, result = generation.response, generation.result
-            prompt_tokens, output_tokens = self._usage_tokens(response, full_prompt)
+            usage = self._usage_tokens(response, system_prompt + prompt)
 
             # Create QueryResponse
             metadata = {
                 "model": self.model_name,
-                "prompt_tokens": prompt_tokens,
-                "output_tokens": output_tokens,
-                "finish_reason": getattr(response.candidates[0], "finish_reason", None),
+                "prompt_tokens": usage.prompt,
+                "output_tokens": usage.output,
+                "thinking_tokens": usage.thinking,
+                "finish_reason": self._finish_name(response.candidates[0]),
                 "format_retries": generation.format_retries,
             }
 
@@ -231,13 +296,6 @@ class GeminiAdapter(AIProviderPort):
             if error is e:
                 raise
             raise error from e
-
-    def _build_full_prompt(self, context: QueryContext) -> str:
-        """Build complete prompt including system instructions."""
-        system_prompt = self._get_system_prompt(context.database_type)
-        user_prompt = self._build_prompt(context)
-
-        return f"{system_prompt}\n\n{user_prompt}"
 
     def _build_prompt(self, context: QueryContext) -> str:
         """Build prompt for query generation."""
@@ -324,21 +382,24 @@ Ensure the JSON is properly formatted with no syntax errors. Escape any quotes i
 
         return f"{base_prompt} {specific_prompt}"
 
-    def _parse_response(self, response) -> Dict[str, Any]:
+    @staticmethod
+    def _strip_code_fence(content: str) -> str:
+        if content.startswith("```json"):
+            return content.replace("```json", "").replace("```", "").strip()
+        if content.startswith("```"):
+            return content.replace("```", "").strip()
+        return content
+
+    def _parse_response(self, response: types.GenerateContentResponse) -> Dict[str, Any]:
         """Parse Gemini response."""
+        content = ""
         try:
             raw_content = self._extract_text(response)
-            content = raw_content
 
-            # Log the raw response for debugging
-            logger.debug("Raw Gemini response", content=content)
+            # The model output can quote user data: DEBUG only
+            logger.debug("Raw Gemini response", content=raw_content)
 
-            # Try to extract JSON if wrapped in markdown
-            if content.startswith("```json"):
-                content = content.replace("```json", "").replace("```", "").strip()
-            elif content.startswith("```"):
-                content = content.replace("```", "").strip()
-
+            content = self._strip_code_fence(raw_content)
             result = json.loads(content)
 
             # Validate required fields
@@ -357,7 +418,6 @@ Ensure the JSON is properly formatted with no syntax errors. Escape any quotes i
         except ProviderException:
             raise
         except json.JSONDecodeError as e:
-            # Log the problematic content
             # The model output can quote user data: DEBUG only
             logger.debug("JSON parsing failed", content=content, error=str(e))
             raise ProviderResponseFormatError(f"Invalid JSON response: {e!s}") from e
@@ -367,11 +427,9 @@ Ensure the JSON is properly formatted with no syntax errors. Escape any quotes i
 
     async def _validate_token_count(self, context: QueryContext) -> None:
         """Validate that context doesn't exceed token limits."""
-        # Build prompt to count tokens
-        full_prompt = self._build_full_prompt(context)
-
-        # Count tokens
-        total_tokens = self.get_token_count(full_prompt)
+        prompt_tokens = self.get_token_count(self._build_prompt(context))
+        system_tokens = self.get_token_count(self._get_system_prompt(context.database_type))
+        total_tokens = prompt_tokens + system_tokens
 
         # Check against limits
         max_context = self.get_max_context_size()
@@ -412,20 +470,12 @@ Check for:
 4. Appropriate GROUP BY usage
 5. Proper aggregate function usage"""
 
-            generation_config = genai.types.GenerationConfig(temperature=0.1, max_output_tokens=1000, candidate_count=1)
-
-            response = await asyncio.to_thread(
-                self.model.generate_content, validation_prompt, generation_config=generation_config
+            config = self._generation_config(
+                "You are a SQL validation expert. Respond with valid JSON only.", VALIDATION_MAX_TOKENS
             )
+            response = await self._generate(validation_prompt, config)
 
-            # Parse response
-            content = self._extract_text(response)
-            if content.startswith("```json"):
-                content = content.replace("```json", "").replace("```", "").strip()
-            elif content.startswith("```"):
-                content = content.replace("```", "").strip()
-
-            result = json.loads(content)
+            result = json.loads(self._strip_code_fence(self._extract_text(response)))
 
             # Set defaults
             result.setdefault("is_valid", True)

@@ -3,7 +3,9 @@
 The AI adapters retry only transient failures. Before, every exception was retried
 three times with backoff, so an invalid API key took about 8 seconds to surface.
 Works without importing any SDK: OpenAI and Anthropic errors carry ``status_code``,
-google.api_core errors carry an integer ``code``.
+``google.genai`` errors carry an integer ``code``. Network failures are recognized by
+class name, including httpx/httpx2 ``TransportError`` subclasses (``ConnectError``,
+``ReadError``), which the ``google-genai`` SDK raises unwrapped.
 
 Output that is not the expected JSON is a different failure: the request worked, the
 model answered badly. ``call_with_format_retry`` asks again once, without waiting,
@@ -41,8 +43,8 @@ def _http_status(exc: BaseException) -> Optional[int]:
 def _is_transport_error(exc: BaseException) -> bool:
     if isinstance(exc, (TimeoutError, ConnectionError)):
         return True
-    name = type(exc).__name__
-    return "Timeout" in name or "Connection" in name
+    names = [cls.__name__ for cls in type(exc).__mro__]
+    return any("Timeout" in name or "Connection" in name or name == "TransportError" for name in names)
 
 
 def classify_provider_error(exc: BaseException, message: str) -> ProviderException:

@@ -3,6 +3,7 @@
 No network access: adapters are built with fake keys and SDK clients are mocked.
 """
 
+import asyncio
 import logging
 from contextlib import contextmanager
 from pathlib import Path
@@ -10,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from click.testing import CliRunner
+from google.genai import types
 
 from nlp2sql.adapters import anthropic_adapter as anthropic_module
 from nlp2sql.adapters import gemini_adapter as gemini_module
@@ -19,7 +21,7 @@ from nlp2sql.adapters.gemini_adapter import GeminiAdapter
 from nlp2sql.adapters.openai_adapter import OpenAIAdapter
 from nlp2sql.config.settings import settings
 from nlp2sql.core.provider_config import ProviderConfig
-from nlp2sql.exceptions import ProviderException
+from nlp2sql.exceptions import ProviderException, ProviderRequestError, ProviderResponseFormatError
 from nlp2sql.ports.ai_provider import QueryContext
 
 EXPECTED_DEFAULTS = {
@@ -284,22 +286,124 @@ class TestAnthropicRequestKwargs:
 # ── Gemini response guards ─────────────────────────────────────────────────
 
 
-class TestGeminiResponseGuards:
-    @patch("nlp2sql.adapters.gemini_adapter.genai")
-    def test_empty_candidate_is_actionable(self, mock_genai):
-        adapter = GeminiAdapter(api_key="test-key")
-        candidate = MagicMock()
-        candidate.content.parts = []
-        candidate.finish_reason.name = "MAX_TOKENS"
-        response = MagicMock()
-        response.candidates = [candidate]
-        with pytest.raises(ProviderException, match="MAX_TOKENS"):
-            adapter._parse_response(response)
+def _gemini_response(parts=None, finish_reason="STOP", block_reason=None) -> types.GenerateContentResponse:
+    """A real SDK response object, as ``generate_content`` returns it."""
+    if block_reason:
+        return types.GenerateContentResponse(
+            prompt_feedback=types.GenerateContentResponsePromptFeedback(block_reason=block_reason)
+        )
+    content = types.Content(role="model", parts=parts) if parts is not None else None
+    return types.GenerateContentResponse(candidates=[types.Candidate(content=content, finish_reason=finish_reason)])
 
-    @patch("nlp2sql.adapters.gemini_adapter.genai")
-    def test_no_candidates_is_actionable(self, mock_genai):
+
+class TestGeminiResponseGuards:
+    def test_empty_candidate_is_actionable(self):
         adapter = GeminiAdapter(api_key="test-key")
-        response = MagicMock()
-        response.candidates = []
+        with pytest.raises(ProviderException, match="MAX_TOKENS"):
+            adapter._parse_response(_gemini_response(parts=None, finish_reason="MAX_TOKENS"))
+
+    def test_no_candidates_is_actionable(self):
+        adapter = GeminiAdapter(api_key="test-key")
         with pytest.raises(ProviderException, match="no response candidates"):
-            adapter._parse_response(response)
+            adapter._parse_response(types.GenerateContentResponse(candidates=[]))
+
+    def test_blocked_prompt_is_a_request_error(self):
+        adapter = GeminiAdapter(api_key="test-key")
+        with pytest.raises(ProviderRequestError, match="blocked the prompt"):
+            adapter._parse_response(_gemini_response(block_reason="SAFETY"))
+
+    def test_thought_parts_are_not_part_of_the_answer(self):
+        adapter = GeminiAdapter(api_key="test-key")
+        parts = [
+            types.Part(text="Let me think about the schema.", thought=True),
+            types.Part(text='{"sql": "SELECT 1"}'),
+        ]
+        assert adapter._parse_response(_gemini_response(parts=parts))["sql"] == "SELECT 1"
+
+    def test_only_thoughts_is_a_format_error(self):
+        adapter = GeminiAdapter(api_key="test-key")
+        parts = [types.Part(text="Still thinking.", thought=True)]
+        with pytest.raises(ProviderResponseFormatError, match="no content"):
+            adapter._parse_response(_gemini_response(parts=parts))
+
+
+# ── Gemini request (real google-genai SDK against a local fake API) ─────────
+
+
+class TestGeminiRequest:
+    @pytest.mark.asyncio
+    async def test_request_shape(self, fake_gemini):
+        adapter = GeminiAdapter(api_key="test-key", model="gemini-3.8-flash")
+
+        response = await adapter.generate_query(_context(max_tokens=1500))
+
+        request = fake_gemini.last()
+        assert request["version"] == gemini_module.GEMINI_API_VERSION == "v1"
+        assert request["model"] == "gemini-3.8-flash"
+        assert request["api_key"] == "test-key"
+        config = request["body"]["generationConfig"]
+        assert config["maxOutputTokens"] == 1500
+        assert config["responseMimeType"] == "application/json"
+        assert config["thinkingConfig"] == {"thinking_level": "LOW"}
+        for not_sent in ("temperature", "candidateCount", "topP", "topK"):
+            assert not_sent not in config
+        assert request["body"]["systemInstruction"]["parts"][0]["text"].startswith("You are an expert SQL")
+        assert "Question: How many active users are there?" in request["prompt"]
+        assert response.sql == fake_gemini.sql
+        # Only generateContent: no countTokens round trip before the question
+        assert [entry["kind"] for entry in fake_gemini.requests] == ["generate"]
+
+    @pytest.mark.asyncio
+    async def test_thinking_tokens_are_counted(self, fake_gemini):
+        fake_gemini.thoughts_tokens = 40
+        adapter = GeminiAdapter(api_key="test-key")
+
+        response = await adapter.generate_query(_context())
+
+        usage = fake_gemini.last()["usage"]
+        assert response.metadata["thinking_tokens"] == 40
+        assert response.metadata["prompt_tokens"] == usage["promptTokenCount"]
+        assert response.metadata["output_tokens"] == usage["candidatesTokenCount"]
+        assert response.tokens_used == usage["totalTokenCount"]
+        assert response.metadata["finish_reason"] == "STOP"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("model", ["gemini-3.6-flash", "gemini-2.5-flash", "models/gemini-3.6-flash"])
+    async def test_models_without_a_known_level_keep_their_default(self, fake_gemini, model):
+        adapter = GeminiAdapter(api_key="test-key", model=model)
+
+        await adapter.generate_query(_context())
+
+        assert "thinkingConfig" not in fake_gemini.last()["body"]["generationConfig"]
+
+    @pytest.mark.asyncio
+    async def test_explicit_temperature_is_logged_and_not_sent(self, fake_gemini):
+        with capture_logs() as logs:
+            adapter = GeminiAdapter(api_key="test-key", temperature=0.0)
+        assert adapter.temperature == 0.0
+        assert any(e["log_level"] == "info" and "does not forward temperature" in e["event"] for e in logs)
+
+        await adapter.generate_query(_context(temperature=0.0))
+        assert "temperature" not in fake_gemini.last()["body"]["generationConfig"]
+
+        with capture_logs() as logs:
+            GeminiAdapter(api_key="test-key")
+        assert not any("does not forward temperature" in e["event"] for e in logs)
+
+    @pytest.mark.asyncio
+    async def test_validate_query_reports_its_tokens(self, fake_gemini):
+        adapter = GeminiAdapter(api_key="test-key")
+
+        result = await adapter.validate_query("SELECT COUNT(*) FROM users", SCHEMA)
+
+        assert result["is_valid"] is True
+        assert result["_tokens_used"] == fake_gemini.last("validate")["usage"]["totalTokenCount"]
+        assert fake_gemini.last("validate")["body"]["generationConfig"]["maxOutputTokens"] == 1000
+
+    def test_one_adapter_works_across_event_loops(self, fake_gemini):
+        """Regression: the SDK's async client failed the 2nd asyncio.run() with "Event loop is closed"."""
+        adapter = GeminiAdapter(api_key="test-key")
+
+        for _ in range(3):
+            assert asyncio.run(adapter.generate_query(_context())).sql == fake_gemini.sql
+        assert fake_gemini.calls("generate") == 3

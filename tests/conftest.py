@@ -159,6 +159,17 @@ def fake_openai(monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.fixture
+def fake_gemini(monkeypatch: pytest.MonkeyPatch):
+    """Point the real google-genai SDK at a local fake API (see tests/fakes/fake_gemini.py)."""
+    from fakes.fake_gemini import FakeGemini
+
+    fake = FakeGemini().start()
+    monkeypatch.setenv("GOOGLE_GEMINI_BASE_URL", fake.base_url)
+    yield fake
+    fake.stop()
+
+
+@pytest.fixture
 def isolated_caches(monkeypatch: pytest.MonkeyPatch, tmp_path):
     """Keep schema indexes, table caches and example indexes out of the working tree."""
     monkeypatch.setenv("NLP2SQL_EMBEDDINGS_DIR", str(tmp_path / "embeddings"))
