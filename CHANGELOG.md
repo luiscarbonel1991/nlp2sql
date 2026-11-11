@@ -22,6 +22,40 @@ pre-1.0.
 
 ## [Unreleased]
 
+### Changed
+- **The Gemini adapter uses the `google-genai` SDK** (`google-genai>=1.51.0`) instead of
+  `google-generativeai`, which Google has deprecated. The dependency is still part
+  of the core install and of the `gemini` and `all-providers` extras. Installs no longer
+  pull `grpcio`, `protobuf` or `google-api-core`. Pip installs `google-genai` 2.33 on
+  Python 3.10 and 3.0 or later on Python 3.11 and up.
+  - Requests go to the stable `v1` API version on every SDK release. The SDK's own default
+    is `v1beta` up to 2.x and `v1` from 3.0.
+  - The system prompt is sent as a system instruction, and the answer is requested as JSON
+    (`response_mime_type="application/json"`).
+  - The adapter still runs requests in a worker thread. The SDK's async client keeps
+    connections bound to the event loop that opened them, so one adapter used from two
+    `asyncio.run()` calls failed with "Event loop is closed".
+- **The default Gemini model is `gemini-3.8-flash`**, with `thinking_level="low"`. Other
+  models keep their own thinking default; `gemini-3.6-flash` and other models can still be
+  pinned with `ProviderConfig(model=...)`.
+- **Behavior change:** the Gemini adapter no longer sends `temperature` or `candidate_count`.
+  Google deprecated `temperature` for Gemini 3.6 and later (ignored now, an error in future
+  models), and `candidate_count` is unsupported since Gemini 3. A `temperature` passed to
+  `GeminiAdapter` is kept and logged at INFO, like the Anthropic adapter does.
+- The Gemini adapter estimates prompt tokens locally (about 4 characters per token), like the
+  Anthropic adapter. It called the countTokens API before every question, a blocking network
+  round trip inside `generate_query`.
+
+### Fixed
+- Gemini thinking tokens are counted. `tokens_used` now includes them, and the response
+  metadata reports `thinking_tokens`. They are billed as output, but the old adapter counted
+  only prompt and answer tokens.
+- Network failures that httpx reports as `ConnectError`, `ReadError` or `RemoteProtocolError`
+  are treated as transient and retried. Their class names do not contain "Connection", so
+  they ended the question at once. The `google-genai` SDK raises them unwrapped.
+- A Gemini prompt blocked by a safety filter raises `ProviderRequestError` that names the
+  block reason, instead of "Gemini returned no response candidates".
+
 ## [0.2.0rc20] - 2026-11-08
 
 ### Security

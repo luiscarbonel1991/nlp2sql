@@ -272,7 +272,7 @@ postgresql://testuser:testpass@localhost:5432/testdb
 |----------|---------------|--------------|------------|----------|
 | OpenAI | `gpt-5.6-luna` | 1.05M (922K input) | 128K | Fast, low-cost general purpose usage |
 | Anthropic | `claude-sonnet-5` | 1M | 128K | Larger schemas and long prompts |
-| Gemini | `gemini-3.6-flash` | 1M | 64K | High-volume and very large contexts |
+| Gemini | `gemini-3.8-flash` | 1M | 64K | High-volume and very large contexts |
 
 Defaults are pinned snapshot IDs, not floating aliases. Override any of them through `ProviderConfig(model=...)`; for example `gpt-5.6-terra` is the higher-quality OpenAI option.
 

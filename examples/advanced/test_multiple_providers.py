@@ -155,12 +155,12 @@ async def demo_provider_selection():
     print("Cost Comparison (approx, per 1M tokens in/out, default models):")
     print("   OpenAI gpt-5.6-luna: $0.20 / $1.20")
     print("   Anthropic claude-sonnet-5: $2 / $10")
-    print("   Google gemini-3.6-flash: $0.75 / $3.75")
+    print("   Google gemini-3.8-flash: $0.75 / $3.75 (through 2026; $1.50 / $7.50 from 2027)")
     print()
     print("Context Limits (default models):")
     print("   OpenAI gpt-5.6-luna: 1.05M tokens (922K input)")
     print("   Anthropic claude-sonnet-5: 1M tokens")
-    print("   Google gemini-3.6-flash: 1M tokens")
+    print("   Google gemini-3.8-flash: 1M tokens")
 
 
 if __name__ == "__main__":

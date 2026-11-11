@@ -136,7 +136,7 @@ jobs:
       run: |
         python -m venv "$RUNNER_TEMP/clean"
         "$RUNNER_TEMP/clean/bin/pip" install dist/*.whl
-        "$RUNNER_TEMP/clean/bin/pip" list | grep -iE "^(openai|anthropic|google-generativeai|pyyaml) "
+        "$RUNNER_TEMP/clean/bin/pip" list | grep -iE "^(openai|anthropic|google-genai|pyyaml) "
 
     - name: Import the package and run the CLI
       working-directory: ${{ runner.temp }}

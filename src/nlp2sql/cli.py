@@ -542,7 +542,7 @@ def inspect(
 @click.option(
     "--model",
     default=None,
-    help="AI model name (default depends on provider; e.g., gpt-5.6-terra, claude-sonnet-5, gemini-3.1-flash-lite)",
+    help="AI model name (default depends on provider; e.g., gpt-5.6-terra, claude-sonnet-5, gemini-3.6-flash)",
 )
 @click.option("--explain", is_flag=True, help="Include detailed explanation")
 @click.option("--temperature", type=float, default=0.1, help="Model temperature (0.0-1.0)")

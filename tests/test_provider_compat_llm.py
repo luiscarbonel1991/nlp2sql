@@ -182,59 +182,121 @@ class TestAnthropicCompat:
         _report(f"A5 {ANTHROPIC_MODEL}: ok; output_tokens={response.metadata['output_tokens']} sql={response.sql!r}")
 
 
-# ── Gemini (legacy google-generativeai SDK, v1beta) ────────────────────────
+# ── Gemini (google-genai SDK, API version v1) ──────────────────────────────
+
+# G3 decides whether the candidate replaces the baseline as the default model.
+GEMINI_BASELINE_MODEL = "gemini-3.6-flash"
+GEMINI_CANDIDATE_MODEL = "gemini-3.8-flash"
+G3_RUNS = 5
 
 
 class TestGeminiCompat:
     @pytest.fixture
-    def model(self):
-        import google.generativeai as genai
+    def client(self):
+        from google import genai
+        from google.genai import types
 
-        genai.configure(api_key=_require_key("GOOGLE_API_KEY"))
-        return genai.GenerativeModel(GEMINI_MODEL)
+        from nlp2sql.adapters.gemini_adapter import GEMINI_API_VERSION
 
-    def test_g1_model_available_on_legacy_sdk(self, model):
-        """404/400 here means the legacy SDK cannot use the default model: migrate to google-genai."""
-        import google.generativeai as genai
-
-        response = model.generate_content(
-            JSON_ONLY, generation_config=genai.types.GenerationConfig(max_output_tokens=256, temperature=0.1)
+        return genai.Client(
+            api_key=_require_key("GOOGLE_API_KEY"), http_options=types.HttpOptions(api_version=GEMINI_API_VERSION)
         )
-        assert response.candidates and response.candidates[0].content.parts, "empty candidate"
-        assert json.loads(response.text.strip()) == {"ok": True}
 
-    def test_g4_count_tokens(self, model):
-        assert model.count_tokens("hello").total_tokens > 0
+    @staticmethod
+    def _adapter(model: str = GEMINI_MODEL):
+        from nlp2sql.adapters.gemini_adapter import GeminiAdapter
+
+        return GeminiAdapter(api_key=_require_key("GOOGLE_API_KEY"), model=model)
+
+    def test_g1_adapter_config_accepted_on_v1(self, client):
+        """The exact config the adapter sends (system instruction, JSON mode, thinking level) works on v1."""
+        config = self._adapter()._generation_config("You are a JSON-only responder.", 256)
+        response = client.models.generate_content(model=GEMINI_MODEL, contents=JSON_ONLY, config=config)
+        assert response.candidates, "no candidates"
+        assert json.loads(response.text) == {"ok": True}
 
     @pytest.mark.asyncio
     async def test_g2_adapter_generates_sql_within_budget(self):
-        """Thinking cannot be capped on the legacy SDK; the budget must still leave room for the answer."""
-        from nlp2sql.adapters.gemini_adapter import GeminiAdapter
-
-        adapter = GeminiAdapter(api_key=_require_key("GOOGLE_API_KEY"))
+        """Thinking tokens count against max_tokens; the budget must still leave room for the answer."""
+        adapter = self._adapter()
         outcomes = {}
         for budget in (1000, 2000):
             response = await adapter.generate_query(_context(max_tokens=budget))
             assert response.sql, f"empty SQL at max_tokens={budget}"
             outcomes[budget] = {
-                "finish_reason": str(response.metadata.get("finish_reason")),
-                "prompt_tokens": response.metadata.get("prompt_tokens"),
-                "output_tokens": response.metadata.get("output_tokens"),
+                key: response.metadata.get(key)
+                for key in ("finish_reason", "prompt_tokens", "output_tokens", "thinking_tokens")
             }
         _report(f"G2 {GEMINI_MODEL}: ok; {outcomes}")
 
-    def test_g3_json_mode_diagnostic(self, model):
-        """Is response_mime_type=application/json accepted? (optional adapter improvement)"""
-        import google.generativeai as genai
+    @pytest.mark.asyncio
+    async def test_g3_candidate_model_beats_baseline(self):
+        """Decision gate for the default model, fixed before running.
 
+        gemini-3.8-flash (thinking_level low) is the default only if, over G3_RUNS questions:
+        every answer is valid SQL (passes is_safe_query and reads users.is_active), its median
+        tokens_used is not above gemini-3.6-flash's (default thinking), and its median latency is
+        at most 1.5 times gemini-3.6-flash's. Otherwise the default goes back to gemini-3.6-flash.
+        """
+        import statistics
+        import time
+
+        from nlp2sql.core.sql_safety import is_safe_query
+
+        results = {}
+        for model in (GEMINI_BASELINE_MODEL, GEMINI_CANDIDATE_MODEL):
+            adapter = self._adapter(model)
+            runs = []
+            for _ in range(G3_RUNS):
+                started = time.perf_counter()
+                response = await adapter.generate_query(_context(max_tokens=2000))
+                elapsed = time.perf_counter() - started
+                sql = response.sql.lower()
+                valid = is_safe_query(response.sql)[0] and "users" in sql and "is_active" in sql
+                runs.append({"valid": valid, "tokens": response.tokens_used, "seconds": elapsed, "sql": response.sql})
+            results[model] = {
+                "valid": sum(run["valid"] for run in runs),
+                "median_tokens": statistics.median(run["tokens"] for run in runs),
+                "median_seconds": round(statistics.median(run["seconds"] for run in runs), 2),
+                "invalid_sql": [run["sql"] for run in runs if not run["valid"]],
+            }
+        default, baseline = results[GEMINI_CANDIDATE_MODEL], results[GEMINI_BASELINE_MODEL]
+        summary = f"G3 runs={G3_RUNS} {results}"
+        assert default["valid"] == G3_RUNS, summary
+        assert default["median_tokens"] <= baseline["median_tokens"], summary
+        assert default["median_seconds"] <= 1.5 * baseline["median_seconds"], summary
+        _report(f"{summary}: {GEMINI_CANDIDATE_MODEL} can be the default")
+
+    def test_g4_baseline_thinking_low_diagnostic(self, client):
+        """Google's pages disagree on whether gemini-3.6-flash takes thinking_level "low"."""
+        from google.genai import types
+
+        config = types.GenerateContentConfig(
+            max_output_tokens=256,
+            response_mime_type="application/json",
+            thinking_config=types.ThinkingConfig(thinking_level=types.ThinkingLevel.LOW),
+        )
         try:
-            response = model.generate_content(
-                JSON_ONLY,
-                generation_config=genai.types.GenerationConfig(
-                    max_output_tokens=256, temperature=0.1, response_mime_type="application/json"
-                ),
-            )
-            json.loads(response.text.strip())
+            client.models.generate_content(model=GEMINI_BASELINE_MODEL, contents=JSON_ONLY, config=config)
         except Exception as exc:
-            _report(f"G3 {GEMINI_MODEL}: response_mime_type REJECTED: {exc}")
-        _report(f"G3 {GEMINI_MODEL}: response_mime_type=application/json ACCEPTED")
+            _report(f"G4 {GEMINI_BASELINE_MODEL}: thinking_level=low REJECTED (keep it off THINKING_LEVELS): {exc}")
+        _report(f"G4 {GEMINI_BASELINE_MODEL}: thinking_level=low ACCEPTED (it could join THINKING_LEVELS)")
+
+    def test_g5_temperature_diagnostic(self, client):
+        """Google documents temperature as ignored now and an error in future generations."""
+        from google.genai import types
+
+        config = types.GenerateContentConfig(max_output_tokens=256, temperature=0.1)
+        try:
+            client.models.generate_content(model=GEMINI_MODEL, contents=JSON_ONLY, config=config)
+        except Exception as exc:
+            _report(f"G5 {GEMINI_MODEL}: temperature=0.1 REJECTED (adapter omits it): {exc}")
+        _report(f"G5 {GEMINI_MODEL}: temperature=0.1 ACCEPTED (ignored; adapter omits it)")
+
+    def test_g6_one_adapter_across_event_loops(self):
+        """One adapter answers from two asyncio.run() calls (the SDK's async client failed the second)."""
+        import asyncio
+
+        adapter = self._adapter()
+        for _ in range(2):
+            assert asyncio.run(adapter.generate_query(_context(max_tokens=2000))).sql

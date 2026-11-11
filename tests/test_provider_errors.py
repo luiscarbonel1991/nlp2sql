@@ -8,14 +8,15 @@ Output that is not the expected JSON is asked for again once, without waiting, a
 tokens of both answers are reported. An answer cut at max_tokens is not asked for again.
 """
 
+import socket
 import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import anthropic
 import httpx
 import openai
 import pytest
-from google.api_core import exceptions as google_exceptions
+from google.genai import errors as genai_errors
 from tenacity import wait_none
 
 from nlp2sql.adapters._provider_errors import TRANSIENT_PROVIDER_ERRORS, classify_provider_error
@@ -40,6 +41,23 @@ def _status(sdk, error_class: str, status: int) -> Exception:
     return getattr(sdk, error_class)("provider error", response=httpx.Response(status, request=REQUEST), body=None)
 
 
+def _genai_body(code: int, status: str, message: str, reason: str = "") -> dict:
+    """The error body the Gemini API sends."""
+    error = {"code": code, "message": message, "status": status}
+    if reason:
+        error["details"] = [{"@type": "type.googleapis.com/google.rpc.ErrorInfo", "reason": reason}]
+    return {"error": error}
+
+
+def _genai(error_class, code: int, status: str, message: str, reason: str = "") -> Exception:
+    return error_class(code, _genai_body(code, status, message, reason))
+
+
+API_KEY_INVALID_BODY = _genai_body(
+    400, "INVALID_ARGUMENT", "API key not valid. Please pass a valid API key.", "API_KEY_INVALID"
+)
+
+
 @pytest.mark.parametrize(
     ("error", "expected"),
     [
@@ -54,16 +72,20 @@ def _status(sdk, error_class: str, status: int) -> Exception:
         (_status(anthropic, "AuthenticationError", 401), ProviderAuthenticationError),
         (_status(anthropic, "RateLimitError", 429), ProviderRateLimitError),
         (_status(anthropic, "InternalServerError", 529), ProviderUnavailableError),
-        (google_exceptions.Unauthenticated("bad key"), ProviderAuthenticationError),
-        (google_exceptions.InvalidArgument("bad model"), ProviderRequestError),
+        (_genai(genai_errors.ClientError, 401, "UNAUTHENTICATED", "bad credentials"), ProviderAuthenticationError),
+        (_genai(genai_errors.ClientError, 403, "PERMISSION_DENIED", "no access"), ProviderAuthenticationError),
+        (_genai(genai_errors.ClientError, 400, "INVALID_ARGUMENT", "bad request"), ProviderRequestError),
+        (_genai(genai_errors.ClientError, 404, "NOT_FOUND", "no such model"), ProviderRequestError),
         # What Gemini answers to an invalid API key (seen with nlp2sql setup)
-        (
-            google_exceptions.InvalidArgument('API key not valid. [reason: "API_KEY_INVALID"]'),
-            ProviderAuthenticationError,
-        ),
-        (google_exceptions.ResourceExhausted("quota"), ProviderRateLimitError),
-        (google_exceptions.ServiceUnavailable("down"), ProviderUnavailableError),
-        (google_exceptions.DeadlineExceeded("slow"), ProviderUnavailableError),
+        (genai_errors.ClientError(400, API_KEY_INVALID_BODY), ProviderAuthenticationError),
+        (_genai(genai_errors.ClientError, 429, "RESOURCE_EXHAUSTED", "quota"), ProviderRateLimitError),
+        (_genai(genai_errors.ServerError, 503, "UNAVAILABLE", "down"), ProviderUnavailableError),
+        (_genai(genai_errors.ServerError, 504, "DEADLINE_EXCEEDED", "slow"), ProviderUnavailableError),
+        # google-genai raises httpx transport errors unwrapped
+        (httpx.ConnectError("connection refused", request=REQUEST), ProviderUnavailableError),
+        (httpx.ReadError("connection reset", request=REQUEST), ProviderUnavailableError),
+        (httpx.RemoteProtocolError("server disconnected", request=REQUEST), ProviderUnavailableError),
+        (httpx.ReadTimeout("timed out", request=REQUEST), ProviderUnavailableError),
         (ValueError("unexpected"), ProviderException),
     ],
 )
@@ -223,37 +245,16 @@ def test_anthropic_missing_sql_is_a_format_error_with_its_own_message():
         adapter._parse_response(_anthropic_message('{"query": "SELECT 1"}'))
 
 
-def _gemini_response(text: str, finish_reason: str = "STOP") -> MagicMock:
-    candidate = MagicMock()
-    candidate.finish_reason.name = finish_reason
-    candidate.content.parts = [MagicMock()]
-    response = MagicMock()
-    response.candidates = [candidate]
-    response.text = text
-    response.usage_metadata.prompt_token_count = 10
-    response.usage_metadata.candidates_token_count = 5
-    return response
-
-
-@pytest.fixture
-def gemini_adapter(monkeypatch):
-    with patch("nlp2sql.adapters.gemini_adapter.genai"):
-        adapter = GeminiAdapter(api_key="test-key")
-    monkeypatch.setattr(adapter, "get_token_count", lambda text: len(text) // 4)
-    return adapter
-
-
 @pytest.mark.asyncio
-async def test_gemini_asks_again_once_and_counts_both_answers(gemini_adapter):
-    gemini_adapter.model.generate_content = MagicMock(
-        side_effect=[_gemini_response("SELECT COUNT(*) FROM users"), _gemini_response('{"sql": "SELECT 1"}')]
-    )
+async def test_gemini_asks_again_once_and_counts_both_answers(fake_gemini):
+    fake_gemini.contents = ["SELECT COUNT(*) FROM users", '{"sql": "SELECT 1"}']
+    adapter = GeminiAdapter(api_key="test-key")
 
-    response = await gemini_adapter.generate_query(_context())
+    response = await adapter.generate_query(_context())
 
     assert response.sql == "SELECT 1"
-    assert gemini_adapter.model.generate_content.call_count == 2
-    assert response.tokens_used == 30
+    assert fake_gemini.calls("generate") == 2
+    assert response.tokens_used == sum(request["usage"]["totalTokenCount"] for request in fake_gemini.requests)
     assert response.metadata["format_retries"] == 1
 
 
@@ -262,11 +263,57 @@ async def test_gemini_asks_again_once_and_counts_both_answers(gemini_adapter):
     ("finish_reason", "error", "match"),
     [("MAX_TOKENS", ProviderException, "max_tokens"), ("SAFETY", ProviderRequestError, "blocked")],
 )
-async def test_gemini_truncated_or_blocked_output_is_not_asked_for_again(gemini_adapter, finish_reason, error, match):
-    gemini_adapter.model.generate_content = MagicMock(return_value=_gemini_response('{"sql": "SEL', finish_reason))
+async def test_gemini_truncated_or_blocked_output_is_not_asked_for_again(fake_gemini, finish_reason, error, match):
+    fake_gemini.contents = ['{"sql": "SEL']
+    fake_gemini.finish_reason = finish_reason
+    adapter = GeminiAdapter(api_key="test-key")
 
     with pytest.raises(error, match=match) as raised:
-        await gemini_adapter.generate_query(_context())
+        await adapter.generate_query(_context())
 
     assert not isinstance(raised.value, ProviderResponseFormatError)
-    assert gemini_adapter.model.generate_content.call_count == 1
+    assert fake_gemini.calls("generate") == 1
+
+
+@pytest.mark.asyncio
+async def test_gemini_invalid_key_fails_fast_without_retries(fake_gemini):
+    fake_gemini.status = 400
+    fake_gemini.error_body = API_KEY_INVALID_BODY
+    adapter = GeminiAdapter(api_key="not-a-real-key")
+
+    started = time.perf_counter()
+    with pytest.raises(ProviderAuthenticationError) as raised:
+        await adapter.generate_query(_context())
+
+    assert time.perf_counter() - started < 2
+    assert fake_gemini.calls("generate") == 1
+    assert isinstance(raised.value.__cause__, genai_errors.ClientError)
+
+
+@pytest.mark.asyncio
+async def test_gemini_transient_errors_are_retried(fake_gemini, monkeypatch):
+    monkeypatch.setattr(GeminiAdapter.generate_query.retry, "wait", wait_none())
+    fake_gemini.status = 503
+    adapter = GeminiAdapter(api_key="test-key")
+
+    with pytest.raises(ProviderUnavailableError):
+        await adapter.generate_query(_context())
+
+    assert fake_gemini.calls("generate") == 3
+
+
+@pytest.mark.asyncio
+async def test_gemini_unreachable_api_is_transient(monkeypatch):
+    """httpx's ConnectError has no "Connection" in its name; it used to end the question at once."""
+    monkeypatch.setattr(GeminiAdapter.generate_query.retry, "wait", wait_none())
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        closed_port = probe.getsockname()[1]
+    monkeypatch.setenv("GOOGLE_GEMINI_BASE_URL", f"http://127.0.0.1:{closed_port}")
+    adapter = GeminiAdapter(api_key="test-key")
+
+    with pytest.raises(ProviderUnavailableError) as raised:
+        await adapter.generate_query(_context())
+
+    assert type(raised.value.__cause__).__name__ == "ConnectError"
+    assert GeminiAdapter.generate_query.statistics["attempt_number"] == 3
