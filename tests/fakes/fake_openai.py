@@ -6,7 +6,8 @@ inspect every request the library sends.
 
 - ``/v1/chat/completions`` answers SQL generation with ``{"sql": fake.sql, ...}`` and
   SQL validation with ``{"is_valid": true, ...}``. ``chat_contents`` queues raw answers
-  for the next generation calls (malformed output), ``finish_reason`` sets how they end.
+  for the next generation calls (malformed output), ``finish_reason`` sets how they end,
+  and ``validation_content`` replaces the answer to validation calls.
 - ``/v1/embeddings`` returns deterministic bag-of-words vectors (feature hashing), so
   word overlap between a question and a table description gives real similarity.
 """
@@ -45,6 +46,7 @@ class FakeOpenAI:
     sql: str = "SELECT COUNT(*) AS user_count FROM users;"
     chat_status: Optional[int] = None
     chat_contents: list[str] = field(default_factory=list)
+    validation_content: str | None = None
     finish_reason: str = "stop"
     requests: list[dict[str, Any]] = field(default_factory=list)
     _server: Optional[ThreadingHTTPServer] = None
@@ -115,7 +117,9 @@ class FakeOpenAI:
                     )
                 finish_reason = "stop"
                 if kind == "validate":
-                    content = json.dumps({"is_valid": True, "errors": [], "warnings": [], "suggestions": []})
+                    content = fake.validation_content
+                    if content is None:
+                        content = json.dumps({"is_valid": True, "errors": [], "warnings": [], "suggestions": []})
                 else:
                     content = fake._next_generation_content()
                     finish_reason = fake.finish_reason

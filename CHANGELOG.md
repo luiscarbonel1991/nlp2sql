@@ -82,6 +82,13 @@ pre-1.0.
   review is on.
 - `nlp2sql query` prints the errors of an invalid query. It printed an empty list unless
   the Anthropic or Gemini review was on, because it read `issues`.
+- The three provider adapters answer `validate_query` by the port's contract when they are
+  called directly too. The Anthropic and Gemini adapters reported a failed call as valid,
+  and treated a JSON answer without `is_valid` as valid. An answer that is not JSON, or has
+  no boolean `is_valid`, is now a review that could not be done, and its tokens are still
+  counted. `OpenAIAdapter` reports a failed call the same way: `llm_validation_error`, and
+  "LLM validation unavailable: ..." in `errors` instead of "Validation failed: ...". The
+  Anthropic and Gemini adapters no longer add default `suggestions` and `complexity` keys.
 
 ## [0.2.0rc20] - 2026-11-08
 

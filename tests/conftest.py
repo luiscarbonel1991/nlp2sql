@@ -80,7 +80,7 @@ class MockAIProvider(AIProviderPort):
         )
 
     async def validate_query(self, sql: str, schema_context: str) -> dict[str, Any]:
-        return {"is_valid": True, "issues": []}
+        return {"is_valid": True, "errors": [], "warnings": []}
 
     def get_token_count(self, text: str) -> int:
         return len(text.split())

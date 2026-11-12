@@ -12,11 +12,12 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 from ..config.settings import settings
 from ..core.provider_config import ProviderConfig
 from ..exceptions import ProviderException, ProviderResponseFormatError, TokenLimitException
-from ..ports.ai_provider import AIProviderPort, AIProviderType, QueryContext, QueryResponse
+from ..ports.ai_provider import AIProviderPort, AIProviderType, QueryContext, QueryResponse, validation_unavailable
 from ..utils.helpers import first_not_none
 from ..utils.logger import get_logger
 from ..utils.semantic_prompt import format_semantic_context_lines, format_sql_intent_plan_lines
 from ._provider_errors import TRANSIENT_PROVIDER_ERRORS, call_with_format_retry, classify_provider_error
+from ._provider_validation import validation_from_json
 
 logger = get_logger(__name__)
 
@@ -285,14 +286,12 @@ class OpenAIAdapter(AIProviderPort):
             )
 
             content = response.choices[0].message.content or ""
-            result = json.loads(content)
-            # Reported so the service can account for every LLM call of a question
-            result["_tokens_used"] = getattr(response.usage, "total_tokens", 0) or 0
-            return result
+            # The tokens are reported so the service can account for every LLM call of a question
+            return validation_from_json(content, getattr(response.usage, "total_tokens", 0) or 0)
 
         except Exception as e:
             logger.error("OpenAI query validation failed", error=str(e))
-            return {"is_valid": False, "errors": [f"Validation failed: {e!s}"], "warnings": []}
+            return validation_unavailable(str(e))
 
     def _build_prompt(self, context: QueryContext) -> str:
         """Build prompt for query generation."""
