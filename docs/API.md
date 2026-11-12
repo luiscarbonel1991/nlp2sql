@@ -167,7 +167,7 @@ If you do not pass `execution_mode`, the library infers it from `validate` and `
 | `generation_time_ms` | `float`             | End-to-end generation time                     |
 | `examples_used`      | `int`               | Count of selected examples                     |
 | `metadata`           | `dict[str, object]` | Runtime metadata for debugging and integration |
-| `validation`         | `dict[str, object]` | The checks behind `is_valid`: `errors`, `warnings`, `column_errors`, `dialect_issues`, `semantic_validation`, `llm_validation` |
+| `validation`         | `dict[str, object]` | The checks behind `is_valid`: `errors`, `warnings`, `column_errors`, `dialect_issues`, `semantic_validation`, `llm_validation`, and `llm_validation_error` when the LLM review could not be done |
 | `rows`               | `list[dict] | None`  | Result rows when the query was executed (`validate=True`) and succeeded; at most 100, values as returned by the database driver |
 | `columns`            | `list[str] | None`  | Column names of `rows`                         |
 

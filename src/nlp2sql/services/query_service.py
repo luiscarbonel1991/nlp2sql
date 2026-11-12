@@ -20,7 +20,13 @@ from ..core.entities import (
 )
 from ..core.sql_safety import is_safe_query
 from ..exceptions import QueryGenerationException, ValidationException
-from ..ports.ai_provider import AIProviderPort, QueryContext, QueryResponse
+from ..ports.ai_provider import (
+    AIProviderPort,
+    QueryContext,
+    QueryResponse,
+    checked_validation,
+    validation_unavailable,
+)
 from ..ports.cache import CachePort
 from ..ports.embedding_provider import EmbeddingProviderPort
 from ..ports.error_classifier import ErrorClassifierPort
@@ -248,8 +254,7 @@ class QueryGenerationService:
             columns = execution_validation.pop("_columns", None)
 
             if execution_validation.get("enabled") and execution_validation.get("success") is False:
-                issues_key = "errors" if "errors" in validation_result else "issues"
-                validation_result.setdefault(issues_key, []).append(
+                validation_result["errors"].append(
                     f"Execution failed: {execution_validation.get('error') or 'unknown error'}"
                 )
                 validation_result["is_valid"] = False
@@ -316,7 +321,7 @@ class QueryGenerationService:
                 sql, database_type, settings.max_schema_tokens
             )
             # An explicit validate() request always asks the LLM, regardless of llm_validation
-            validation_result = await self.ai_provider.validate_query(sql, schema_context)
+            validation_result = await self._llm_validation(sql, schema_context)
             validation_result["tokens_used"] = validation_result.pop("_tokens_used", 0)
             validation_result["column_errors"] = await self._validate_column_names(sql)
             validation_result["dialect_issues"] = self._validate_dialect_rules(sql, database_type)
@@ -572,6 +577,19 @@ class QueryGenerationService:
                 "repaired_response": repaired_response,
             }
 
+    async def _llm_validation(self, sql: str, schema_context: str) -> dict[str, Any]:
+        """The provider's review of ``sql``, held to the ``validate_query`` contract.
+
+        A provider that raises has not approved the query: the review is reported as
+        unavailable, and the question keeps its SQL.
+        """
+        try:
+            answer = await self.ai_provider.validate_query(sql, schema_context)
+        except Exception as e:
+            logger.error("LLM validation failed", error=str(e), error_type=type(e).__name__)
+            return validation_unavailable(str(e))
+        return checked_validation(answer)
+
     async def _validate_generated_sql(
         self,
         sql: str,
@@ -582,7 +600,7 @@ class QueryGenerationService:
         token_usage: _TokenUsage | None = None,
     ) -> dict[str, Any]:
         if self.llm_validation:
-            validation_result = await self.ai_provider.validate_query(sql, schema_context)
+            validation_result = await self._llm_validation(sql, schema_context)
             if token_usage is not None:
                 token_usage.add_validation(validation_result.pop("_tokens_used", 0))
         else:
@@ -594,20 +612,17 @@ class QueryGenerationService:
         dialect_issues = self._validate_dialect_rules(sql, database_type)
         semantic_validation = await self.semantic_validation_service.validate(sql, semantic_context, sql_intent_plan)
 
-        issues_key = "errors" if "errors" in validation_result else "issues"
-        validation_result.setdefault(issues_key, [])
-        validation_result.setdefault("warnings", [])
         validation_result["column_errors"] = column_errors
         validation_result["dialect_issues"] = dialect_issues
         validation_result["semantic_validation"] = semantic_validation.to_metadata()
 
         if column_errors:
-            validation_result[issues_key].extend(column_errors)
+            validation_result["errors"].extend(column_errors)
             validation_result["is_valid"] = False
         if dialect_issues:
             validation_result["warnings"].extend(dialect_issues)
         if semantic_validation.issues:
-            validation_result[issues_key].extend(issue.message for issue in semantic_validation.issues)
+            validation_result["errors"].extend(issue.message for issue in semantic_validation.issues)
             validation_result["is_valid"] = False
         if semantic_validation.warnings:
             validation_result["warnings"].extend(semantic_validation.warnings)
@@ -615,7 +630,7 @@ class QueryGenerationService:
         # Checked in every mode: generate_only results must never look valid when they write
         is_safe, safety_error = is_safe_query(sql)
         if not is_safe:
-            validation_result[issues_key].append(f"Not a read-only query: {safety_error}")
+            validation_result["errors"].append(f"Not a read-only query: {safety_error}")
             validation_result["is_valid"] = False
 
         return validation_result

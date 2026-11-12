@@ -45,6 +45,12 @@ pre-1.0.
 - The Gemini adapter estimates prompt tokens locally (about 4 characters per token), like the
   Anthropic adapter. It called the countTokens API before every question, a blocking network
   round trip inside `generate_query`.
+- **Behavior change:** the LLM review of a query (`llm_validation=True`, or `validate()`)
+  gives a result with the same keys for every provider: `is_valid`, `errors` and
+  `warnings`. With the Anthropic and Gemini adapters the problems were listed under
+  `issues`. They are now under `errors`, as with OpenAI and as `docs/API.md` says.
+  `AIProviderPort.validate_query` documents this contract, and the service holds every
+  provider's answer to it. A custom provider that answers with `issues` keeps working.
 
 ### Fixed
 - Gemini thinking tokens are counted. `tokens_used` now includes them, and the response
@@ -64,6 +70,18 @@ pre-1.0.
   worker thread, like the Gemini adapter. Cancelling a question no longer cancels its HTTP
   request, which runs to the end in the thread. Code that replaced `adapter.client` should
   pass an `openai.OpenAI` or `anthropic.Anthropic` client instead of the async one.
+- An LLM review that could not be done is no longer reported as an approval. When the
+  validation call of the Anthropic or Gemini adapter failed (a network error, a rate limit,
+  an answer that was not JSON), the result said `is_valid: True`, `nlp2sql query` printed
+  "SQL validation: Passed", and in `generate_only` mode the result was cached as valid.
+  The result is now `is_valid: False`, with the reason in `errors` and in the new
+  `validation["llm_validation_error"]`. The question keeps its SQL.
+- A custom provider that raises from `validate_query` no longer fails the whole question,
+  and `validate()` returns the result above instead of raising `ValidationException`.
+- `result.validation["errors"]` no longer raises `KeyError` when the Anthropic or Gemini
+  review is on.
+- `nlp2sql query` prints the errors of an invalid query. It printed an empty list unless
+  the Anthropic or Gemini review was on, because it read `issues`.
 
 ## [0.2.0rc20] - 2026-11-08
 

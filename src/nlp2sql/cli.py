@@ -694,7 +694,7 @@ def query(
                 if validation["is_valid"]:
                     click.echo("[OK] SQL validation: Passed")
                 else:
-                    click.echo(f"[WARNING] SQL validation issues: {validation.get('issues', [])}")
+                    click.echo(f"[WARNING] SQL validation issues: {validation.get('errors', [])}")
 
             echo_runtime_metadata(
                 result,
