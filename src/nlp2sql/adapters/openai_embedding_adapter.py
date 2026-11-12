@@ -1,9 +1,10 @@
 """OpenAI embedding adapter."""
 
+import asyncio
 from typing import List
 
 import numpy as np
-from openai import AsyncOpenAI
+from openai import OpenAI
 
 from ..exceptions import ProviderException
 from ..ports.embedding_provider import EmbeddingProviderPort
@@ -29,7 +30,10 @@ class OpenAIEmbeddingAdapter(EmbeddingProviderPort):
         if not api_key:
             raise ProviderException("OpenAI API key is required for OpenAI embeddings")
 
-        self.client = AsyncOpenAI(api_key=api_key)
+        # The SDK's sync client, called in a worker thread: the async client keeps keep-alive
+        # connections bound to the event loop that opened them, so one adapter used from a
+        # second event loop failed with "Event loop is closed" (issue #66).
+        self.client = OpenAI(api_key=api_key)
         self.model = model
 
         # Embedding dimensions for different models
@@ -85,7 +89,7 @@ class OpenAIEmbeddingAdapter(EmbeddingProviderPort):
 
             for i in range(0, len(processed_texts), batch_size):
                 batch = processed_texts[i : i + batch_size]
-                response = await self.client.embeddings.create(model=self.model, input=batch)
+                response = await asyncio.to_thread(self.client.embeddings.create, model=self.model, input=batch)
                 all_embeddings.extend(item.embedding for item in response.data)
 
             embeddings_array = np.array(all_embeddings)

@@ -33,6 +33,11 @@ def _embed(text: str) -> list[float]:
     return [value / norm for value in vector]
 
 
+class _Server(ThreadingHTTPServer):
+    # Room for a burst of concurrent connections; the default backlog of 5 resets the rest
+    request_queue_size = 64
+
+
 @dataclass
 class FakeOpenAI:
     """Configure ``sql`` (and optionally ``chat_status``) before each call; read ``requests``."""
@@ -61,6 +66,9 @@ class FakeOpenAI:
         fake = self
 
         class Handler(BaseHTTPRequestHandler):
+            # Keep-alive, like the real API: the SDK reuses pooled connections
+            protocol_version = "HTTP/1.1"
+
             def log_message(self, *args: Any) -> None:
                 pass
 
@@ -132,7 +140,7 @@ class FakeOpenAI:
                     },
                 )
 
-        self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self._server = _Server(("127.0.0.1", 0), Handler)
         threading.Thread(target=self._server.serve_forever, daemon=True).start()
         return self
 

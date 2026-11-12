@@ -170,6 +170,17 @@ def fake_gemini(monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.fixture
+def fake_anthropic(monkeypatch: pytest.MonkeyPatch):
+    """Point the real Anthropic SDK at a local fake API (see tests/fakes/fake_anthropic.py)."""
+    from fakes.fake_anthropic import FakeAnthropic
+
+    fake = FakeAnthropic().start()
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", fake.base_url)
+    yield fake
+    fake.stop()
+
+
+@pytest.fixture
 def isolated_caches(monkeypatch: pytest.MonkeyPatch, tmp_path):
     """Keep schema indexes, table caches and example indexes out of the working tree."""
     monkeypatch.setenv("NLP2SQL_EMBEDDINGS_DIR", str(tmp_path / "embeddings"))

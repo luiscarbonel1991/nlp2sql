@@ -55,6 +55,15 @@ pre-1.0.
   they ended the question at once. The `google-genai` SDK raises them unwrapped.
 - A Gemini prompt blocked by a safety filter raises `ProviderRequestError` that names the
   block reason, instead of "Gemini returned no response candidates".
+- The OpenAI, OpenAI embedding and Anthropic adapters work when one adapter is used from
+  more than one event loop, for example with one `asyncio.run()` per question. With
+  `openai` 3.x and `anthropic` 2.x, the SDKs' async clients keep connections bound to the
+  event loop that opened them. The OpenAI adapters failed every other call with "Event loop
+  is closed". The Anthropic adapter lost one attempt and a retry delay on each new loop, and
+  failed when the SDK's retries were off. The adapters now call the SDKs' sync clients in a
+  worker thread, like the Gemini adapter. Cancelling a question no longer cancels its HTTP
+  request, which runs to the end in the thread. Code that replaced `adapter.client` should
+  pass an `openai.OpenAI` or `anthropic.Anthropic` client instead of the async one.
 
 ## [0.2.0rc20] - 2026-11-08
 

@@ -7,7 +7,7 @@ import asyncio
 import logging
 from contextlib import contextmanager
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from click.testing import CliRunner
@@ -219,7 +219,7 @@ class TestOpenAIRequestKwargs:
         fake.usage.completion_tokens = 5
         fake.usage.total_tokens = 15
         fake.usage.completion_tokens_details.reasoning_tokens = 3
-        adapter.client.chat.completions.create = AsyncMock(return_value=fake)
+        adapter.client.chat.completions.create = MagicMock(return_value=fake)
 
         response = await adapter.generate_query(_context())
 
@@ -252,7 +252,7 @@ class TestAnthropicRequestKwargs:
         generation.content = [MagicMock(text='{"sql": "SELECT COUNT(*) FROM users", "confidence": 0.9}')]
         generation.usage.input_tokens = 10
         generation.usage.output_tokens = 5
-        adapter.client.messages.create = AsyncMock(return_value=generation)
+        adapter.client.messages.create = MagicMock(return_value=generation)
 
         response = await adapter.generate_query(_context())
         kwargs = adapter.client.messages.create.call_args.kwargs
@@ -265,7 +265,7 @@ class TestAnthropicRequestKwargs:
 
         validation = MagicMock()
         validation.content = [MagicMock(text='{"is_valid": true, "issues": []}')]
-        adapter.client.messages.create = AsyncMock(return_value=validation)
+        adapter.client.messages.create = MagicMock(return_value=validation)
 
         result = await adapter.validate_query("SELECT 1", SCHEMA)
         kwargs = adapter.client.messages.create.call_args.kwargs

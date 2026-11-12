@@ -131,6 +131,20 @@ class TestOpenAICompat:
             f"completion_tokens={response.metadata.get('completion_tokens')} sql={response.sql!r}"
         )
 
+    def test_o7_one_adapter_across_event_loops(self, monkeypatch):
+        """One adapter answers from two asyncio.run() calls (the SDK's async client failed the second)."""
+        import asyncio
+
+        from tenacity import stop_after_attempt
+
+        from nlp2sql.adapters.openai_adapter import OpenAIAdapter
+
+        monkeypatch.setattr(OpenAIAdapter.generate_query.retry, "stop", stop_after_attempt(1))
+        adapter = OpenAIAdapter(api_key=_require_key("OPENAI_API_KEY"), model=OPENAI_MODEL)
+        adapter.client = adapter.client.with_options(max_retries=0)
+        for _ in range(2):
+            assert asyncio.run(adapter.generate_query(_context(max_tokens=1000))).sql
+
 
 # ── Anthropic ──────────────────────────────────────────────────────────────
 
@@ -180,6 +194,20 @@ class TestAnthropicCompat:
         response = await adapter.generate_query(_context(max_tokens=1000))
         assert response.sql
         _report(f"A5 {ANTHROPIC_MODEL}: ok; output_tokens={response.metadata['output_tokens']} sql={response.sql!r}")
+
+    def test_a6_one_adapter_across_event_loops(self, monkeypatch):
+        """One adapter answers from two asyncio.run() calls with no retries (the async client needed one)."""
+        import asyncio
+
+        from tenacity import stop_after_attempt
+
+        from nlp2sql.adapters.anthropic_adapter import AnthropicAdapter
+
+        monkeypatch.setattr(AnthropicAdapter.generate_query.retry, "stop", stop_after_attempt(1))
+        adapter = AnthropicAdapter(api_key=_require_key("ANTHROPIC_API_KEY"))
+        adapter.client = adapter.client.with_options(max_retries=0)
+        for _ in range(2):
+            assert asyncio.run(adapter.generate_query(_context(max_tokens=1000))).sql
 
 
 # ── Gemini (google-genai SDK, API version v1) ──────────────────────────────

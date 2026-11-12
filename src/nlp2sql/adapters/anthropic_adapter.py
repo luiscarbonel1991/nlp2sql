@@ -1,5 +1,6 @@
 """Anthropic Claude adapter for query generation."""
 
+import asyncio
 import json
 from typing import Any, Dict, Optional
 
@@ -73,7 +74,10 @@ class AnthropicAdapter(AIProviderPort):
                 temperature=temperature,
             )
 
-        self.client = anthropic.AsyncAnthropic(api_key=self.api_key)
+        # The SDK's sync client, called in a worker thread: the async client keeps keep-alive
+        # connections bound to the event loop that opened them, so one adapter used from a
+        # second event loop failed with "Event loop is closed" (issue #66).
+        self.client = anthropic.Anthropic(api_key=self.api_key)
 
         logger.debug(
             "Provider configured",
@@ -120,6 +124,13 @@ class AnthropicAdapter(AIProviderPort):
         """Get maximum input context size for the model."""
         return self._max_context_size
 
+    async def _create_message(
+        self, *, system: str, messages: list[dict[str, str]], max_tokens: int
+    ) -> anthropic.types.Message:
+        return await asyncio.to_thread(
+            self.client.messages.create, model=self.model, max_tokens=max_tokens, system=system, messages=messages
+        )
+
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=4, max=10),
@@ -142,8 +153,7 @@ class AnthropicAdapter(AIProviderPort):
             # Call Claude API (no sampling parameters: see class docstring); malformed
             # output is asked for again once
             generation = await call_with_format_retry(
-                lambda: self.client.messages.create(
-                    model=self.model,
+                lambda: self._create_message(
                     max_tokens=context.max_tokens,
                     system=system_prompt,
                     messages=messages,
@@ -386,8 +396,7 @@ Check for:
 4. Appropriate GROUP BY usage
 5. Proper aggregate function usage"""
 
-            message = await self.client.messages.create(
-                model=self.model,
+            message = await self._create_message(
                 max_tokens=1000,
                 system="You are a SQL validation expert. Analyze the given SQL query and provide validation results in JSON format only.",
                 messages=[{"role": "user", "content": validation_prompt}],
