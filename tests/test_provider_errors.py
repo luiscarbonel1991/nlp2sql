@@ -10,7 +10,7 @@ tokens of both answers are reported. An answer cut at max_tokens is not asked fo
 
 import socket
 import time
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import anthropic
 import httpx
@@ -210,14 +210,14 @@ def _anthropic_message(text: str, stop_reason: str = "end_turn") -> MagicMock:
 @pytest.mark.asyncio
 async def test_anthropic_asks_again_once_and_counts_both_answers():
     adapter = AnthropicAdapter(api_key="test-key")
-    adapter.client.messages.create = AsyncMock(
+    adapter.client.messages.create = MagicMock(
         side_effect=[_anthropic_message("SELECT COUNT(*) FROM users"), _anthropic_message('{"sql": "SELECT 1"}')]
     )
 
     response = await adapter.generate_query(_context())
 
     assert response.sql == "SELECT 1"
-    assert adapter.client.messages.create.await_count == 2
+    assert adapter.client.messages.create.call_count == 2
     assert response.tokens_used == 30
     assert response.metadata["format_retries"] == 1
 
@@ -229,13 +229,13 @@ async def test_anthropic_asks_again_once_and_counts_both_answers():
 )
 async def test_anthropic_truncated_or_refused_output_is_not_asked_for_again(stop_reason, error, match):
     adapter = AnthropicAdapter(api_key="test-key")
-    adapter.client.messages.create = AsyncMock(return_value=_anthropic_message('{"sql": "SELECT', stop_reason))
+    adapter.client.messages.create = MagicMock(return_value=_anthropic_message('{"sql": "SELECT', stop_reason))
 
     with pytest.raises(error, match=match) as raised:
         await adapter.generate_query(_context())
 
     assert not isinstance(raised.value, ProviderResponseFormatError)
-    assert adapter.client.messages.create.await_count == 1
+    assert adapter.client.messages.create.call_count == 1
 
 
 def test_anthropic_missing_sql_is_a_format_error_with_its_own_message():

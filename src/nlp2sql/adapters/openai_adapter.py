@@ -1,10 +1,12 @@
 """OpenAI adapter for query generation."""
 
+import asyncio
 import json
 from typing import Any, Dict, Optional, Tuple
 
 import tiktoken
-from openai import AsyncOpenAI
+from openai import OpenAI
+from openai.types.chat import ChatCompletion
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from ..config.settings import settings
@@ -88,7 +90,10 @@ class OpenAIAdapter(AIProviderPort):
         self.temperature = first_not_none(temperature, self.DEFAULT_TEMPERATURE)
         self.reasoning_effort = first_not_none(reasoning_effort, self.DEFAULT_REASONING_EFFORT)
 
-        self.client = AsyncOpenAI(api_key=self.api_key)
+        # The SDK's sync client, called in a worker thread: the async client keeps keep-alive
+        # connections bound to the event loop that opened them, so one adapter used from a
+        # second event loop failed with "Event loop is closed" (issue #66).
+        self.client = OpenAI(api_key=self.api_key)
 
         self.encoding = self._resolve_encoding(self.model)
         self._max_context_size = self._resolve_context_limit(self.model)
@@ -190,6 +195,11 @@ class OpenAIAdapter(AIProviderPort):
 
     # ── Generation ─────────────────────────────────────────────────────
 
+    async def _create_completion(
+        self, messages: list[dict[str, str]], completion_kwargs: dict[str, Any]
+    ) -> ChatCompletion:
+        return await asyncio.to_thread(self.client.chat.completions.create, messages=messages, **completion_kwargs)
+
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=4, max=10),
@@ -213,7 +223,7 @@ class OpenAIAdapter(AIProviderPort):
             ]
             completion_kwargs = self._completion_kwargs(max_tokens=context.max_tokens, temperature=context.temperature)
             generation = await call_with_format_retry(
-                lambda: self.client.chat.completions.create(messages=messages, **completion_kwargs),
+                lambda: self._create_completion(messages, completion_kwargs),
                 self._parse_response,
                 self._total_tokens,
                 provider=self.provider_type.value,
@@ -263,15 +273,15 @@ class OpenAIAdapter(AIProviderPort):
         try:
             validation_prompt = self._build_validation_prompt(sql, schema_context)
 
-            response = await self.client.chat.completions.create(
-                messages=[
+            response = await self._create_completion(
+                [
                     {
                         "role": "system",
                         "content": "You are a SQL validation expert. Analyze the given SQL query and provide validation results in JSON format.",
                     },
                     {"role": "user", "content": validation_prompt},
                 ],
-                **self._completion_kwargs(max_tokens=1000, temperature=0),
+                self._completion_kwargs(max_tokens=1000, temperature=0),
             )
 
             content = response.choices[0].message.content or ""
