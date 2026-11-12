@@ -81,6 +81,12 @@ dev = [
 nlp2sql = "nlp2sql.cli:main"
 
 [tool.uv]
+# Dev lock only; not part of the published package. The filelock fixes (4.2.1 and later)
+# need Python 3.11, and 4.1.0, the last release for 3.10, is affected by more advisories
+# than 3.20.3. Remove this with Python 3.10.
+constraint-dependencies = [
+    "filelock<3.20.4; python_full_version < '3.11'",
+]
 dev-dependencies = [
     "pytest>=7.4.0",
     "pytest-asyncio>=0.21.0",
