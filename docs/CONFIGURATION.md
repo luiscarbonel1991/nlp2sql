@@ -191,6 +191,10 @@ doubles the latency of each question, and executing the query against the databa
 stronger signal. Turn it on with `connect(..., llm_validation=True)`,
 `NLP2SQL_LLM_VALIDATION=true` or `nlp2sql query --llm-validation`.
 
+A review that cannot be done is not an approval. If the call fails, or the model's answer
+cannot be read, the result is not valid, `validation["llm_validation_error"]` says why, and
+the question keeps its SQL.
+
 ### Python
 
 ```python

@@ -89,6 +89,120 @@ class TestValidity:
         assert result["validation"]["is_valid"] is True
 
 
+# What the Anthropic and Gemini adapters answer when their validation call fails
+SWALLOWED_FAILURE = {
+    "is_valid": True,
+    "issues": [],
+    "suggestions": [],
+    "complexity": "moderate",
+    "error": "Validation error: Connection error.",
+}
+
+
+class TestLlmValidationFailsClosed:
+    """A review the provider could not do is never an approval."""
+
+    @staticmethod
+    def _reviewing_service(
+        answer: object = None, error: Exception | None = None, sql: str = "SELECT COUNT(*) FROM users"
+    ) -> QueryGenerationService:
+        service = _service(sql=sql)
+        service.llm_validation = True
+        service.ai_provider.validate_query = AsyncMock(return_value=answer, side_effect=error)
+        return service
+
+    @pytest.mark.asyncio
+    async def test_a_provider_that_raises_does_not_approve_the_query(self) -> None:
+        service = self._reviewing_service(error=RuntimeError("connection refused"))
+
+        result = await service.generate_sql("How many users are there?", DatabaseType.POSTGRES)
+
+        assert result["sql"] == "SELECT COUNT(*) FROM users"
+        assert result["validation"]["is_valid"] is False
+        assert result["validation"]["llm_validation_error"] == "connection refused"
+        assert result["validation"]["errors"] == ["LLM validation unavailable: connection refused"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "answer",
+        [None, "not json", {}, {"errors": []}, {"is_valid": "true"}],
+        ids=["none", "text", "empty", "no-verdict", "string-verdict"],
+    )
+    async def test_an_answer_without_a_verdict_does_not_approve_the_query(self, answer: object) -> None:
+        service = self._reviewing_service(answer=answer)
+
+        result = await service.generate_sql("How many users are there?", DatabaseType.POSTGRES)
+
+        assert result["sql"] == "SELECT COUNT(*) FROM users"
+        assert result["validation"]["is_valid"] is False
+        assert result["validation"]["llm_validation_error"]
+
+    @pytest.mark.asyncio
+    async def test_a_swallowed_failure_does_not_approve_the_query(self) -> None:
+        service = self._reviewing_service(answer=dict(SWALLOWED_FAILURE))
+
+        result = await service.generate_sql("How many users are there?", DatabaseType.POSTGRES)
+
+        assert result["validation"]["is_valid"] is False
+        assert result["validation"]["llm_validation_error"] == "Validation error: Connection error."
+
+    @pytest.mark.asyncio
+    async def test_an_unreviewed_query_is_not_cached(self) -> None:
+        service = self._reviewing_service(answer=dict(SWALLOWED_FAILURE))
+        service.cache = MagicMock()
+        service.cache.get = AsyncMock(return_value=None)
+        service.cache.set = AsyncMock()
+
+        await service.generate_sql("How many users are there?", DatabaseType.POSTGRES)
+
+        service.cache.set.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_errors_is_there_whatever_the_provider_calls_it(self) -> None:
+        service = self._reviewing_service(answer={"is_valid": True, "issues": [], "suggestions": []})
+
+        result = await service.generate_sql("How many users are there?", DatabaseType.POSTGRES)
+
+        assert result["validation"]["is_valid"] is True
+        assert result["validation"]["errors"] == []
+        assert "llm_validation_error" not in result["validation"]
+
+    @pytest.mark.asyncio
+    async def test_the_providers_issues_and_the_service_checks_share_errors(self) -> None:
+        service = self._reviewing_service(
+            answer={"is_valid": False, "issues": ["users has no column deleted_at"]},
+            sql="DELETE FROM users WHERE is_active = false",
+        )
+
+        result = await service.generate_sql("Remove inactive users", DatabaseType.POSTGRES)
+
+        errors = result["validation"]["errors"]
+        assert errors[0] == "users has no column deleted_at"
+        assert any("Not a read-only query" in error for error in errors)
+        assert "issues" not in result["validation"]
+
+    @pytest.mark.asyncio
+    async def test_validate_reports_a_failed_review_instead_of_raising(self) -> None:
+        service = _service()
+        service.ai_provider.validate_query = AsyncMock(side_effect=RuntimeError("connection refused"))
+
+        result = await service.validate_sql("SELECT COUNT(*) FROM users", DatabaseType.POSTGRES)
+
+        assert result["is_valid"] is False
+        assert result["llm_validation_error"] == "connection refused"
+        assert result["tokens_used"] == 0
+
+    @pytest.mark.asyncio
+    async def test_validate_does_not_trust_a_swallowed_failure(self) -> None:
+        service = _service()
+        service.ai_provider.validate_query = AsyncMock(return_value=dict(SWALLOWED_FAILURE))
+
+        result = await service.validate_sql("SELECT COUNT(*) FROM users", DatabaseType.POSTGRES)
+
+        assert result["is_valid"] is False
+        assert result["errors"] == ["LLM validation unavailable: Validation error: Connection error."]
+
+
 class TestLlmValidationAndTokenUsage:
     """LLM validation is opt-in, and tokens_used covers every LLM call of a question."""
 

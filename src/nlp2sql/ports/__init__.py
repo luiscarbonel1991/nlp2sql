@@ -1,6 +1,13 @@
 """Ports (interfaces) for nlp2sql."""
 
-from .ai_provider import AIProviderPort, AIProviderType, QueryContext, QueryResponse
+from .ai_provider import (
+    AIProviderPort,
+    AIProviderType,
+    QueryContext,
+    QueryResponse,
+    checked_validation,
+    validation_unavailable,
+)
 from .cache import CachePort
 from .embedding_provider import EmbeddingProviderPort
 from .query_optimizer import OptimizationLevel, OptimizationResult, QueryAnalysis, QueryOptimizerPort
@@ -13,6 +20,8 @@ __all__ = [
     "AIProviderType",
     "QueryContext",
     "QueryResponse",
+    "checked_validation",
+    "validation_unavailable",
     # Cache
     "CachePort",
     # Embedding Provider
