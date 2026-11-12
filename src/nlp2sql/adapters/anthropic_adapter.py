@@ -10,11 +10,12 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 from ..config.settings import settings
 from ..core.provider_config import ProviderConfig
 from ..exceptions import ProviderException, ProviderRequestError, ProviderResponseFormatError, TokenLimitException
-from ..ports.ai_provider import AIProviderPort, AIProviderType, QueryContext, QueryResponse
+from ..ports.ai_provider import AIProviderPort, AIProviderType, QueryContext, QueryResponse, validation_unavailable
 from ..utils.helpers import first_not_none
 from ..utils.logger import get_logger
 from ..utils.semantic_prompt import format_semantic_context_lines, format_sql_intent_plan_lines
 from ._provider_errors import TRANSIENT_PROVIDER_ERRORS, call_with_format_retry, classify_provider_error
+from ._provider_validation import validation_from_json
 
 logger = get_logger(__name__)
 
@@ -416,29 +417,12 @@ Check for:
             content = re.sub(r"\n\s+", " ", content)  # Replace actual newlines
             content = re.sub(r"\s+", " ", content)  # Normalize multiple spaces
 
-            result = json.loads(content)
-
-            # Set defaults
-            result.setdefault("is_valid", True)
-            result.setdefault("issues", [])
-            result.setdefault("suggestions", [])
-            result.setdefault("complexity", "moderate")
-            # Reported so the service can account for every LLM call of a question
+            # The tokens are reported so the service can account for every LLM call of a question
             usage = getattr(message, "usage", None)
             input_tokens = getattr(usage, "input_tokens", 0) or 0
             output_tokens = getattr(usage, "output_tokens", 0) or 0
-            result["_tokens_used"] = input_tokens + output_tokens
-
-            return result
+            return validation_from_json(content, input_tokens + output_tokens)
 
         except Exception as e:
             logger.error("Query validation failed", error=str(e))
-            logger.debug("Query validation output", content=content if "content" in locals() else None)
-            # Return a basic validation result on error
-            return {
-                "is_valid": True,
-                "issues": [],
-                "suggestions": [],
-                "complexity": "moderate",
-                "error": f"Validation error: {e!s}",
-            }
+            return validation_unavailable(str(e))

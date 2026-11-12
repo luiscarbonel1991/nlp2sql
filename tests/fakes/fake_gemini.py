@@ -31,6 +31,7 @@ class FakeGemini:
     status: Optional[int] = None
     error_body: Optional[dict[str, Any]] = None
     contents: list[str] = field(default_factory=list)
+    validation_content: str | None = None
     finish_reason: str = "STOP"
     thoughts_tokens: int = 7
     requests: list[dict[str, Any]] = field(default_factory=list)
@@ -91,7 +92,9 @@ class FakeGemini:
                     return self._send(fake.status, error)
                 finish_reason = "STOP"
                 if kind == "validate":
-                    text = json.dumps({"is_valid": True, "issues": [], "suggestions": [], "complexity": "simple"})
+                    text = fake.validation_content
+                    if text is None:
+                        text = json.dumps({"is_valid": True, "issues": [], "suggestions": [], "complexity": "simple"})
                 else:
                     text = fake._next_generation_content()
                     finish_reason = fake.finish_reason

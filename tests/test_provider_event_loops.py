@@ -77,6 +77,6 @@ def test_anthropic_adapter_works_across_event_loops(fake_anthropic: FakeAnthropi
         assert asyncio.run(adapter.generate_query(_context())).sql == fake_anthropic.sql
     for _ in range(RUNS):
         result = asyncio.run(adapter.validate_query("SELECT 1", "Table: users"))
-        # Anthropic's validate_query returns is_valid=True on errors too, with an "error" key
-        assert "error" not in result
+        # is_valid alone is not enough: the review has to have been done
+        assert "llm_validation_error" not in result
         assert result["is_valid"] is True

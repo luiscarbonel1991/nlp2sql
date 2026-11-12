@@ -5,7 +5,8 @@ the adapter exactly as a user would (SDK, request body) without keys or cost, an
 inspect every request the library sends.
 
 - ``POST /v1/messages`` answers SQL generation with ``{"sql": fake.sql, ...}`` and SQL
-  validation with ``{"is_valid": true, ...}``.
+  validation with ``{"is_valid": true, ...}``. ``validation_content`` replaces the answer
+  to validation calls, and ``status`` makes every call fail with that code.
 """
 
 import json
@@ -24,9 +25,11 @@ class _Server(ThreadingHTTPServer):
 
 @dataclass
 class FakeAnthropic:
-    """Configure ``sql`` before each call; read ``requests``."""
+    """Configure ``sql`` (and optionally ``status``) before each call; read ``requests``."""
 
     sql: str = "SELECT COUNT(*) AS user_count FROM users;"
+    status: int | None = None
+    validation_content: str | None = None
     requests: list[dict[str, Any]] = field(default_factory=list)
     _server: ThreadingHTTPServer | None = None
     _lock: threading.Lock = field(default_factory=threading.Lock)
@@ -65,12 +68,18 @@ class FakeAnthropic:
                     )
                 system = body.get("system") or ""
                 kind = "validate" if system.startswith(VALIDATION_SYSTEM_PREFIX) else "generate"
-                if kind == "validate":
-                    text = json.dumps({"is_valid": True, "errors": [], "warnings": [], "suggestions": []})
-                else:
-                    text = json.dumps({"sql": fake.sql, "explanation": "Counts users.", "confidence": 0.9})
                 with fake._lock:
                     fake.requests.append({"kind": kind, "body": body})
+                if fake.status:
+                    error = {"type": "api_error", "message": f"fake {fake.status}"}
+                    return self._send(fake.status, {"type": "error", "error": error})
+                if kind == "validate":
+                    text = fake.validation_content
+                    if text is None:
+                        # The keys the adapter's validation prompt asks for
+                        text = json.dumps({"is_valid": True, "issues": [], "suggestions": [], "complexity": "simple"})
+                else:
+                    text = json.dumps({"sql": fake.sql, "explanation": "Counts users.", "confidence": 0.9})
                 return self._send(
                     200,
                     {
