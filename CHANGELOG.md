@@ -22,6 +22,17 @@ pre-1.0.
 
 ## [Unreleased]
 
+### Added
+- `OpenAIAdapter` takes `base_url`, or a ready-made `client`, to use another server that
+  speaks the Chat Completions API, such as Ollama, vLLM or a gateway.
+  - The OpenAI key of the environment is not sent to that server. Only an `api_key` passed
+    together with `base_url` is, and a placeholder when there is none.
+  - OpenAI model names keep their request parameters. Any other name is treated as an open
+    model and is sent `temperature` and `max_tokens`, the parameters every compatible
+    server implements. Pass `reasoning_effort` to say that it is a reasoning model.
+  - `client` is the SDK's sync client (`openai.OpenAI`). An `AsyncOpenAI` client is rejected.
+  - Token counts use an OpenAI tokenizer, so for other models they are an estimate.
+
 ### Changed
 - **The Gemini adapter uses the `google-genai` SDK** (`google-genai>=1.51.0`) instead of
   `google-generativeai`, which Google has deprecated. The dependency is still part

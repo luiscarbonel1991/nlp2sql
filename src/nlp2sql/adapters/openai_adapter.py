@@ -5,7 +5,7 @@ import json
 from typing import Any, Dict, Optional, Tuple
 
 import tiktoken
-from openai import OpenAI
+from openai import AsyncOpenAI, OpenAI
 from openai.types.chat import ChatCompletion
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
@@ -47,6 +47,14 @@ DEFAULT_CONTEXT_LIMIT = 128_000
 # as a reasoning model, which is what every OpenAI chat model since gpt-5 is.
 SAMPLING_MODEL_PREFIXES: Tuple[str, ...] = ("gpt-3.5", "gpt-4", "chatgpt-4o", "ft:gpt-3.5", "ft:gpt-4")
 
+# OpenAI's reasoning models by name. Only read for another endpoint, where a name
+# that is not one of these is not assumed to be a reasoning model.
+REASONING_MODEL_PREFIXES: tuple[str, ...] = ("gpt-5", "o1", "o3", "o4")
+
+# The key sent to an endpoint that was given without one. The SDK needs a value, and
+# servers that take no key, such as Ollama, ignore it.
+PLACEHOLDER_API_KEY = "not-needed"
+
 # tiktoken has no mapping for several current IDs (its prefix rule is "gpt-5-"
 # while the IDs are "gpt-5."). All post-2024 OpenAI models use o200k_base.
 ENCODING_BY_PREFIX: Tuple[Tuple[str, str], ...] = (
@@ -67,6 +75,16 @@ class OpenAIAdapter(AIProviderPort):
     Reasoning models (the default family) receive ``max_completion_tokens`` and
     ``reasoning_effort`` and never ``temperature``; the legacy sampling families
     (``gpt-3.5``, ``gpt-4``, ``chatgpt-4o``) keep receiving ``temperature``.
+
+    ``base_url``, or a ready-made ``client``, points the adapter at another server that
+    speaks the Chat Completions API, such as Ollama, vLLM or a gateway:
+
+    - The OpenAI key of the environment is not sent there. Only an ``api_key`` passed
+      together with ``base_url`` is, and a placeholder when there is none.
+    - OpenAI model names keep their parameters. Any other name is sent ``temperature``
+      and ``max_tokens``, like the open models those servers run. Pass
+      ``reasoning_effort`` to say that it is a reasoning model.
+    - Token counts use an OpenAI tokenizer, so for other models they are an estimate.
     """
 
     DEFAULT_MODEL = ProviderConfig.DEFAULT_MODELS["openai"]
@@ -81,23 +99,21 @@ class OpenAIAdapter(AIProviderPort):
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
         reasoning_effort: Optional[str] = None,
+        *,
+        base_url: str | None = None,
+        client: OpenAI | None = None,
     ):
-        self.api_key = api_key or settings.openai_api_key
-        if not self.api_key:
-            raise ProviderException("OpenAI API key is required")
+        self._other_endpoint = bool(base_url) or client is not None
+        self._reasoning_effort_given = reasoning_effort is not None
+        self.client, self.api_key = self._resolve_client(api_key, base_url, client)
 
         self.model = model or self.DEFAULT_MODEL
         self.max_tokens = first_not_none(max_tokens, self.DEFAULT_MAX_TOKENS)
         self.temperature = first_not_none(temperature, self.DEFAULT_TEMPERATURE)
         self.reasoning_effort = first_not_none(reasoning_effort, self.DEFAULT_REASONING_EFFORT)
 
-        # The SDK's sync client, called in a worker thread: the async client keeps keep-alive
-        # connections bound to the event loop that opened them, so one adapter used from a
-        # second event loop failed with "Event loop is closed" (issue #66).
-        self.client = OpenAI(api_key=self.api_key)
-
-        self.encoding = self._resolve_encoding(self.model)
-        self._max_context_size = self._resolve_context_limit(self.model)
+        self.encoding = self._resolve_encoding(self.model, on_openai=not self._other_endpoint)
+        self._max_context_size = self._resolve_context_limit(self.model, on_openai=not self._other_endpoint)
 
         logger.debug(
             "Provider configured",
@@ -107,6 +123,7 @@ class OpenAIAdapter(AIProviderPort):
             temperature=self.temperature,
             reasoning_effort=self.reasoning_effort,
             uses_sampling_params=self._uses_sampling_params(),
+            other_endpoint=self._other_endpoint,
             encoding=self.encoding.name,
             context_limit=self._max_context_size,
         )
@@ -115,14 +132,54 @@ class OpenAIAdapter(AIProviderPort):
     def provider_type(self) -> AIProviderType:
         return AIProviderType.OPENAI
 
+    @staticmethod
+    def _resolve_client(api_key: str | None, base_url: str | None, client: OpenAI | None) -> tuple[OpenAI, str | None]:
+        """The SDK client the adapter calls, and the key it was built with (None for a ready client).
+
+        The client is the SDK's sync one, called in a worker thread: the async client keeps
+        keep-alive connections bound to the event loop that opened them, so one adapter used
+        from a second event loop failed with "Event loop is closed" (issue #66).
+        """
+        if client is not None:
+            if api_key or base_url:
+                raise ProviderException(
+                    "Pass a ready client, or api_key and base_url, not both: the client has its own endpoint and key"
+                )
+            if isinstance(client, AsyncOpenAI):
+                raise ProviderException(
+                    "OpenAIAdapter needs the synchronous client (openai.OpenAI): "
+                    "it runs each request in a worker thread"
+                )
+            return client, None
+        if base_url:
+            # The OpenAI key of the environment stays out of requests to another server
+            key = api_key or PLACEHOLDER_API_KEY
+            return OpenAI(api_key=key, base_url=base_url), key
+        key = api_key or settings.openai_api_key
+        if not key:
+            raise ProviderException("OpenAI API key is required")
+        return OpenAI(api_key=key), key
+
     # ── Model capability resolution ────────────────────────────────────
+
+    def _is_open_model(self) -> bool:
+        """Whether this is a model of another endpoint that is not one of OpenAI's.
+
+        On OpenAI, every name that is not a sampling model is a reasoning model. On another
+        endpoint such a name is most likely an open model, unless the caller passed
+        ``reasoning_effort``. It gets the parameters every compatible server implements:
+        ``temperature`` and ``max_tokens``.
+        """
+        if not self._other_endpoint or self._reasoning_effort_given:
+            return False
+        return not self.model.startswith(SAMPLING_MODEL_PREFIXES + REASONING_MODEL_PREFIXES)
 
     def _uses_sampling_params(self) -> bool:
         """Whether the model accepts temperature (and rejects reasoning_effort)."""
-        return self.model.startswith(SAMPLING_MODEL_PREFIXES)
+        return self.model.startswith(SAMPLING_MODEL_PREFIXES) or self._is_open_model()
 
     @staticmethod
-    def _resolve_encoding(model: str) -> tiktoken.Encoding:
+    def _resolve_encoding(model: str, *, on_openai: bool = True) -> tiktoken.Encoding:
         """Pick the tokenizer for a model, never silently using cl100k_base."""
         try:
             return tiktoken.encoding_for_model(model)
@@ -136,7 +193,9 @@ class OpenAIAdapter(AIProviderPort):
                     encoding=encoding_name,
                 )
                 return tiktoken.get_encoding(encoding_name)
-        logger.warning(
+        # On another endpoint the fallback is the expected case, not something to fix
+        log = logger.warning if on_openai else logger.debug
+        log(
             "tiktoken has no mapping for model; using fallback encoding",
             model=model,
             encoding=FALLBACK_ENCODING,
@@ -144,7 +203,7 @@ class OpenAIAdapter(AIProviderPort):
         return tiktoken.get_encoding(FALLBACK_ENCODING)
 
     @staticmethod
-    def _resolve_context_limit(model: str) -> int:
+    def _resolve_context_limit(model: str, *, on_openai: bool = True) -> int:
         """Exact match, then longest model-family prefix, then a logged fallback."""
         if model in CONTEXT_LIMITS:
             return CONTEXT_LIMITS[model]
@@ -158,6 +217,13 @@ class OpenAIAdapter(AIProviderPort):
                 context_limit=CONTEXT_LIMITS[family],
             )
             return CONTEXT_LIMITS[family]
+        if not on_openai:
+            logger.debug(
+                "Model of another endpoint; using fallback context limit",
+                model=model,
+                context_limit=DEFAULT_CONTEXT_LIMIT,
+            )
+            return DEFAULT_CONTEXT_LIMIT
         logger.warning(
             "Unknown OpenAI model; using fallback context limit",
             model=model,
@@ -178,14 +244,15 @@ class OpenAIAdapter(AIProviderPort):
         """Build the model-family-appropriate kwargs for ``chat.completions.create``.
 
         ``max_completion_tokens`` replaced the deprecated ``max_tokens`` and is
-        accepted by every Chat Completions model. Reasoning models reject
-        non-default ``temperature`` values and take ``reasoning_effort`` instead.
-        Built as a plain dict because the SDK types ``reasoning_effort`` as a
-        Literal that lags behind the API.
+        accepted by every OpenAI Chat Completions model. Other servers may know only
+        ``max_tokens`` (Ollama documents that one), so an open model gets the older
+        name. Reasoning models reject non-default ``temperature`` values and take
+        ``reasoning_effort`` instead. Built as a plain dict because the SDK types
+        ``reasoning_effort`` as a Literal that lags behind the API.
         """
         kwargs: Dict[str, Any] = {
             "model": self.model,
-            "max_completion_tokens": max_tokens,
+            "max_tokens" if self._is_open_model() else "max_completion_tokens": max_tokens,
             "response_format": {"type": "json_object"},
         }
         if self._uses_sampling_params():
