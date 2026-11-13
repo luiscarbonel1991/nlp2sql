@@ -32,6 +32,17 @@ pre-1.0.
     server implements. Pass `reasoning_effort` to say that it is a reasoning model.
   - `client` is the SDK's sync client (`openai.OpenAI`). An `AsyncOpenAI` client is rejected.
   - Token counts use an OpenAI tokenizer, so for other models they are an estimate.
+- `ProviderConfig` takes `base_url`, so `connect()` and `create_ai_provider` reach those
+  servers too: `ProviderConfig(provider="openai", base_url="http://localhost:11434/v1",
+  model="llama3.1")`. It is only accepted for the `openai` provider.
+- `connect(provider=...)` also takes a ready AI provider, such as `OpenAIAdapter(client=...)`
+  or your own `AIProviderPort`. So does the `ai_provider` argument of
+  `create_and_initialize_service`, `create_query_service` and `generate_sql_from_db`.
+  - With `base_url` or a ready provider, `connect()` does not default to OpenAI embeddings,
+    and the chat key is never sent to OpenAI. It uses local embeddings when
+    `nlp2sql[embeddings-local]` is installed, and none otherwise.
+- Docs: [OpenAI-compatible endpoints](https://github.com/luiscarbonel1991/nlp2sql/blob/main/docs/CONFIGURATION.md#openai-compatible-endpoints),
+  with an Ollama example and how to set the context size of a local model.
 
 ### Changed
 - **The Gemini adapter uses the `google-genai` SDK** (`google-genai>=1.51.0`) instead of

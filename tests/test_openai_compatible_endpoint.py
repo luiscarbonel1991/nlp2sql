@@ -1,7 +1,8 @@
 """OpenAIAdapter against an endpoint that is not api.openai.com (a local fake API).
 
 ``base_url``, or a ready-made client, points the adapter at any server that speaks the
-Chat Completions API, such as Ollama, vLLM or a gateway.
+Chat Completions API, such as Ollama, vLLM or a gateway. ``ProviderConfig(base_url=...)``
+is the same option where a provider is created from a config.
 """
 
 import logging
@@ -12,6 +13,7 @@ import pytest
 from fakes.fake_openai import FakeOpenAI
 from openai import AsyncOpenAI, OpenAI
 
+from nlp2sql import ProviderConfig, create_ai_provider
 from nlp2sql.adapters.openai_adapter import OpenAIAdapter
 from nlp2sql.config.settings import settings
 from nlp2sql.exceptions import ProviderException
@@ -19,6 +21,7 @@ from nlp2sql.ports.ai_provider import QueryContext
 
 ENVIRONMENT_KEY = "sk-key-from-the-environment"
 LOCAL_MODEL = "llama3.1"
+OLLAMA_URL = "http://localhost:11434/v1"
 
 
 @pytest.fixture
@@ -179,7 +182,41 @@ class TestReadyClient:
         with pytest.raises(ProviderException, match="synchronous"):
             OpenAIAdapter(client=AsyncOpenAI(api_key="client-key"))
 
-    @pytest.mark.parametrize("extra", [{"base_url": "http://localhost:11434/v1"}, {"api_key": "another-key"}])
+    @pytest.mark.parametrize("extra", [{"base_url": OLLAMA_URL}, {"api_key": "another-key"}])
     def test_a_client_already_has_its_endpoint_and_key(self, extra: dict[str, str]) -> None:
         with pytest.raises(ProviderException, match="client"):
             OpenAIAdapter(client=OpenAI(api_key="client-key"), **extra)
+
+
+class TestProviderConfig:
+    """``base_url`` in a ``ProviderConfig`` reaches the adapter that ``create_ai_provider`` builds."""
+
+    @pytest.mark.asyncio
+    async def test_base_url_reaches_the_adapter(self, endpoint: FakeOpenAI) -> None:
+        config = ProviderConfig(provider="openai", base_url=endpoint.base_url, model=LOCAL_MODEL)
+
+        response = await create_ai_provider(config).generate_query(_context())
+
+        request = _last_request(endpoint)
+        assert response.sql == endpoint.sql
+        assert request["body"]["model"] == LOCAL_MODEL
+        assert request["body"]["max_tokens"] == _context().max_tokens
+        assert ENVIRONMENT_KEY not in request["authorization"]
+
+    @pytest.mark.asyncio
+    async def test_its_api_key_is_the_key_of_that_endpoint(self, endpoint: FakeOpenAI) -> None:
+        config = ProviderConfig(provider="openai", base_url=endpoint.base_url, api_key="gateway-key", model=LOCAL_MODEL)
+
+        await create_ai_provider(config).generate_query(_context())
+
+        assert _last_request(endpoint)["authorization"] == "Bearer gateway-key"
+
+    @pytest.mark.parametrize("provider", ["anthropic", "gemini"])
+    def test_base_url_is_only_for_openai(self, provider: str) -> None:
+        with pytest.raises(ValueError, match="only supported for provider 'openai'"):
+            ProviderConfig(provider=provider, base_url=OLLAMA_URL)
+
+    def test_only_openai_without_base_url_targets_openai(self) -> None:
+        assert ProviderConfig(provider="openai").targets_openai is True
+        assert ProviderConfig(provider="openai", base_url=OLLAMA_URL).targets_openai is False
+        assert ProviderConfig(provider="anthropic").targets_openai is False

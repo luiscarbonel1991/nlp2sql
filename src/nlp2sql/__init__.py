@@ -198,6 +198,11 @@ def create_ai_provider(provider_config: ProviderConfig) -> AIProviderPort:
 
     Example:
         provider = create_ai_provider(ProviderConfig(provider="anthropic", api_key=key))
+
+        # A local model served by Ollama, through its OpenAI-compatible API
+        provider = create_ai_provider(
+            ProviderConfig(provider="openai", base_url="http://localhost:11434/v1", model="llama3.1")
+        )
     """
     adapter_kwargs: dict[str, Any] = {"api_key": provider_config.api_key}
     for field_name in ("model", "temperature", "max_tokens"):
@@ -206,7 +211,7 @@ def create_ai_provider(provider_config: ProviderConfig) -> AIProviderPort:
             adapter_kwargs[field_name] = value
 
     if provider_config.provider == "openai":
-        return OpenAIAdapter(**adapter_kwargs)
+        return OpenAIAdapter(**adapter_kwargs, base_url=provider_config.base_url)
     if provider_config.provider == "anthropic":
         from .adapters.anthropic_adapter import AnthropicAdapter
 
@@ -219,6 +224,32 @@ def create_ai_provider(provider_config: ProviderConfig) -> AIProviderPort:
     raise NotImplementedError(
         f"AI provider '{provider_config.provider}' not supported. Available: {available_providers}"
     )
+
+
+def _resolve_ai_provider(
+    ai_provider: str | AIProviderPort,
+    api_key: str | None,
+    model: str | None,
+    provider_config: ProviderConfig | None,
+) -> tuple[AIProviderPort, ProviderConfig | None]:
+    """The AI provider of a service, and the config it was built from (None for a ready one).
+
+    ``ai_provider`` is a ready provider, or a name. A name is read, with ``api_key`` and
+    ``model``, only when there is no ``provider_config``.
+    """
+    if isinstance(ai_provider, AIProviderPort):
+        if provider_config is not None or api_key or model:
+            raise ValueError(
+                "Pass a ready AI provider, or provider_config, or a provider name with api_key and model: "
+                "a ready provider has its own key and model"
+            )
+        return ai_provider, None
+    if provider_config is None:
+        if ai_provider not in ProviderConfig.SUPPORTED_PROVIDERS:
+            available_providers = sorted(ProviderConfig.SUPPORTED_PROVIDERS)
+            raise NotImplementedError(f"AI provider '{ai_provider}' not supported. Available: {available_providers}")
+        provider_config = ProviderConfig(provider=ai_provider, api_key=api_key, model=model)
+    return create_ai_provider(provider_config), provider_config
 
 
 async def create_repository(
@@ -251,7 +282,7 @@ async def create_repository(
 
 def create_query_service(
     database_url: str,
-    ai_provider: str = "openai",
+    ai_provider: str | AIProviderPort = "openai",
     api_key: Optional[str] = None,
     model: Optional[str] = None,
     database_type: DatabaseType = DatabaseType.POSTGRES,
@@ -274,7 +305,9 @@ def create_query_service(
 
     Args:
         database_url: Database connection URL
-        ai_provider: AI provider to use ('openai', 'anthropic', 'gemini', etc.)
+        ai_provider: AI provider to use: a name ('openai', 'anthropic', 'gemini'), or a ready
+            provider such as ``OpenAIAdapter(client=...)``. A ready provider has its own key
+            and model, so it cannot be combined with api_key, model or provider_config.
         api_key: API key for the AI provider
         model: Optional model name for the AI provider (e.g., 'gpt-5.6-luna', 'claude-sonnet-5',
             'gemini-3.6-flash'). If None, uses the provider's default model.
@@ -286,8 +319,8 @@ def create_query_service(
         schema_name: Database schema name (default: 'public')
         example_store: Optional pre-loaded few-shot examples for better SQL generation
         provider_config: Optional ProviderConfig for full control over provider settings
-            (model, temperature, max_tokens, extra_kwargs). Individual kwargs like api_key
-            and model take precedence over values in provider_config.
+            (model, temperature, max_tokens, base_url). When given, the ai_provider name,
+            api_key and model arguments are not read.
         llm_validation: Also ask the LLM to review each generated query (a second call per
             question). If None, uses NLP2SQL_LLM_VALIDATION (default: off).
 
@@ -300,22 +333,21 @@ def create_query_service(
         - Pass embedding_provider_type='local' (requires pip install nlp2sql[embeddings-local])
         - Pass embedding_provider_type='openai' (uses OpenAI embeddings API)
         - Pass a custom embedding_provider instance
+
+        OpenAI embeddings reuse the chat key only when chat goes to OpenAI itself. A key given
+        for another endpoint (``base_url``), or held by a ready provider, is not sent to
+        OpenAI: those embeddings use OPENAI_API_KEY.
+
+    Raises:
+        ValueError: If a ready provider is combined with api_key, model or provider_config.
     """
     _logger = get_logger(__name__)
 
     # Create repository using factory
     repository = RepositoryFactory.create(database_url, schema_name, database_type)
 
-    # Resolve provider configuration
-    if provider_config is None:
-        if ai_provider not in ProviderConfig.SUPPORTED_PROVIDERS:
-            available_providers = sorted(ProviderConfig.SUPPORTED_PROVIDERS)
-            raise NotImplementedError(f"AI provider '{ai_provider}' not supported. Available: {available_providers}")
-        provider_config = ProviderConfig(provider=ai_provider, api_key=api_key, model=model)
-    _provider_name = provider_config.provider
-    _api_key = provider_config.api_key
-
-    provider = create_ai_provider(provider_config)
+    # A ready provider, a ProviderConfig, or a name with api_key and model
+    provider, provider_config = _resolve_ai_provider(ai_provider, api_key, model, provider_config)
 
     # Create embedding provider
     # If embedding_provider_type is explicitly set, create that provider (raises if deps missing)
@@ -323,10 +355,14 @@ def create_query_service(
     if embedding_provider is None:
         if embedding_provider_type is not None:
             # Explicit provider requested - raise error if dependencies missing
-            # Reuse the chat key (from api_key or provider_config) only when chat is also OpenAI
+            # Reuse the chat key only when it is a key for OpenAI itself: one given for another
+            # endpoint (base_url), or held by a ready provider, is never sent to OpenAI
+            reuse_chat_key = (
+                embedding_provider_type == "openai" and provider_config is not None and provider_config.targets_openai
+            )
             embedding_provider = create_embedding_provider(
                 provider=embedding_provider_type,
-                api_key=_api_key if embedding_provider_type == "openai" and _provider_name == "openai" else None,
+                api_key=provider_config.api_key if reuse_chat_key else None,
             )
         else:
             # No explicit provider - try local silently, fallback to None if deps missing
@@ -376,7 +412,7 @@ def create_query_service(
 
 async def create_and_initialize_service(
     database_url: str,
-    ai_provider: str = "openai",
+    ai_provider: str | AIProviderPort = "openai",
     api_key: Optional[str] = None,
     model: Optional[str] = None,
     database_type: DatabaseType = DatabaseType.POSTGRES,
@@ -402,7 +438,8 @@ async def create_and_initialize_service(
 
     Args:
         database_url: Database connection URL
-        ai_provider: AI provider to use ('openai', 'anthropic', 'gemini', etc.)
+        ai_provider: AI provider to use: a name ('openai', 'anthropic', 'gemini'), or a ready
+            provider such as ``OpenAIAdapter(client=...)``
         api_key: API key for the AI provider
         model: Optional model name for the AI provider (e.g., 'gpt-5.6-luna', 'claude-sonnet-5').
             If None, uses the provider's default model.
@@ -454,7 +491,7 @@ async def create_and_initialize_service(
 async def generate_sql_from_db(
     database_url: str,
     question: str,
-    ai_provider: str = "openai",
+    ai_provider: str | AIProviderPort = "openai",
     api_key: Optional[str] = None,
     model: Optional[str] = None,
     database_type: DatabaseType = DatabaseType.POSTGRES,
@@ -481,7 +518,7 @@ async def generate_sql_from_db(
     Args:
         database_url: Database connection URL
         question: Natural language question
-        ai_provider: AI provider to use (default: 'openai')
+        ai_provider: AI provider to use: a name (default: 'openai') or a ready provider
         api_key: API key for the AI provider
         model: Optional model name for the AI provider (e.g., 'gpt-5.6-luna').
             If None, uses the provider's default model.

@@ -15,7 +15,7 @@ Configuration falls into four buckets:
 
 ### Provider Credentials
 
-At least one provider key is required.
+At least one provider key is required, unless the model is served by another [OpenAI-compatible endpoint](#openai-compatible-endpoints).
 
 | Variable | Description |
 |----------|-------------|
@@ -78,6 +78,77 @@ export NLP2SQL_EMBEDDING_PROVIDER=local
 | `NLP2SQL_CACHE_ENABLED` | `true` | Enable or disable query-result caching |
 | `NLP2SQL_ENV` | unset | Optional environment label |
 | `TOKENIZERS_PARALLELISM` | unset | Set to `false` to reduce tokenizer warnings |
+
+## OpenAI-Compatible Endpoints
+
+The OpenAI provider can use any server that speaks OpenAI's Chat Completions API, such as Ollama, vLLM, LiteLLM or another gateway. Pass the server's address as `base_url`:
+
+```python
+import nlp2sql
+from nlp2sql import ProviderConfig
+
+nlp = await nlp2sql.connect(
+    database_url,
+    provider=ProviderConfig(
+        provider="openai",
+        base_url="http://localhost:11434/v1",  # a local Ollama
+        model="llama3.1",
+    ),
+)
+```
+
+If the server needs a key, pass it as `api_key`. `base_url` is only accepted for the `openai` provider.
+
+### A Ready Client
+
+For anything `ProviderConfig` has no field for, such as timeouts, custom headers or a reasoning model, build the adapter yourself and pass it as the provider:
+
+```python
+from openai import OpenAI
+
+import nlp2sql
+from nlp2sql import OpenAIAdapter
+
+client = OpenAI(base_url="https://llm-gateway.example.com/v1", api_key=gateway_key, timeout=120)
+nlp = await nlp2sql.connect(database_url, provider=OpenAIAdapter(client=client, model="my-model"))
+```
+
+`client` is the SDK's synchronous client, `openai.OpenAI`. An `AsyncOpenAI` client is rejected, because the adapter runs each request in a worker thread.
+
+`connect()` takes any `AIProviderPort` implementation this way, not only `OpenAIAdapter`.
+
+### What Is Different on Another Endpoint
+
+| Topic | Behavior |
+|-------|----------|
+| API key | Only the `api_key` passed with `base_url` is sent to that server. `OPENAI_API_KEY` is never sent there. Without a key, the request carries a placeholder, which servers that take no key ignore. |
+| Request parameters | OpenAI model names keep the parameters they get on OpenAI. Any other name is treated as an open model and is sent `temperature` and `max_tokens`. For a reasoning model with another name, build `OpenAIAdapter(base_url=..., model=..., reasoning_effort="low")`: it is then sent `reasoning_effort` and `max_completion_tokens`. |
+| JSON answers | Requests ask for a JSON object through `response_format`, so the server and the model must support JSON mode. |
+| Embeddings | `connect()` does not send that key to OpenAI. It uses local embeddings when `nlp2sql[embeddings-local]` is installed, and no embeddings otherwise. For OpenAI embeddings next to a local chat model, pass `embedding_provider_type="openai"`, which reads `OPENAI_API_KEY`. |
+| Token counts | Prompts are measured with an OpenAI tokenizer, and a model the library does not know is assumed to have a 128K context window. For other models both are estimates. |
+
+### Context Size of Local Models
+
+Each question sends up to `NLP2SQL_MAX_SCHEMA_TOKENS` schema tokens (8000 by default), plus the question, the examples and the instructions. The model needs a context window that fits them. If its window is smaller, lower `NLP2SQL_MAX_SCHEMA_TOKENS` or raise the window.
+
+Ollama's OpenAI-compatible API has no parameter for the context size. Set it in a `Modelfile`:
+
+```text
+FROM llama3.1
+PARAMETER num_ctx 16384
+```
+
+Create a model from it, in the folder that holds the `Modelfile`, and use that name as `model`:
+
+```bash
+ollama create llama3.1-16k
+```
+
+### `OPENAI_BASE_URL`
+
+The OpenAI SDK also reads `OPENAI_BASE_URL`. It redirects every OpenAI request, chat and embeddings, and `OPENAI_API_KEY` goes with them. Use it for a proxy in front of OpenAI: for `nlp2sql` that is still OpenAI, so models keep OpenAI's request parameters.
+
+The CLI and the MCP server build their provider from the environment, so this variable is the only way they reach another address. For a server that is not OpenAI, prefer `base_url` from Python.
 
 ## Semantic Context Guidance
 
