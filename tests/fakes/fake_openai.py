@@ -7,7 +7,8 @@ inspect every request the library sends.
 - ``/v1/chat/completions`` answers SQL generation with ``{"sql": fake.sql, ...}`` and
   SQL validation with ``{"is_valid": true, ...}``. ``chat_contents`` queues raw answers
   for the next generation calls (malformed output), ``finish_reason`` sets how they end,
-  and ``validation_content`` replaces the answer to validation calls.
+  and ``validation_content`` replaces the answer to validation calls. Each recorded chat
+  request keeps its ``Authorization`` header.
 - ``/v1/embeddings`` returns deterministic bag-of-words vectors (feature hashing), so
   word overlap between a question and a table description gives real similarity.
 """
@@ -109,8 +110,9 @@ class FakeOpenAI:
                 system = next((m["content"] for m in messages if m["role"] == "system"), "")
                 user = next((m["content"] for m in messages if m["role"] == "user"), "")
                 kind = "validate" if system.startswith(VALIDATION_SYSTEM_PREFIX) else "generate"
+                auth = self.headers.get("Authorization")
                 if fake.chat_status:
-                    fake._record({"kind": kind, "body": body, "prompt": user, "usage": None})
+                    fake._record({"kind": kind, "body": body, "prompt": user, "usage": None, "authorization": auth})
                     return self._send(
                         fake.chat_status,
                         {"error": {"message": f"fake {fake.chat_status}", "type": "invalid_request_error"}},
@@ -125,7 +127,7 @@ class FakeOpenAI:
                     finish_reason = fake.finish_reason
                 usage = {"prompt_tokens": (len(system) + len(user)) // 4, "completion_tokens": len(content) // 4}
                 usage["total_tokens"] = usage["prompt_tokens"] + usage["completion_tokens"]
-                fake._record({"kind": kind, "body": body, "prompt": user, "usage": usage})
+                fake._record({"kind": kind, "body": body, "prompt": user, "usage": usage, "authorization": auth})
                 return self._send(
                     200,
                     {
