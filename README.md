@@ -34,7 +34,7 @@ The library is designed for both simple schemas and large warehouses, but all pu
 - **Read-only execution**: queries pass a safety check and run in read-only transactions; connect with a database user that can only read (see [SECURITY.md](https://github.com/luiscarbonel1991/nlp2sql/blob/main/SECURITY.md#security-best-practices))
 - **Few-shot examples**: pass example lists directly or use an example repository implementation
 - **Large schema support**: FAISS plus TF-IDF hybrid retrieval, schema filters, and disk-backed caches
-- **Multiple providers**: OpenAI, Anthropic, and Gemini built in, or your own `AIProviderPort` passed to `QueryGenerationService`
+- **Multiple providers**: OpenAI, Anthropic, and Gemini built in; OpenAI-compatible servers such as Ollama and vLLM through `base_url`; or your own `AIProviderPort` passed to `connect()`
 - **Database support**: PostgreSQL and Amazon Redshift built in; register a `SchemaRepositoryPort` implementation with `RepositoryFactory.register()` and pass `database_type=` to `connect()` to add another database
 - **Async by default**: built for services, APIs, notebooks, and workers
 
@@ -275,6 +275,23 @@ postgresql://testuser:testpass@localhost:5432/testdb
 | Gemini | `gemini-3.8-flash` | 1M | 64K | High-volume and very large contexts |
 
 Defaults are pinned snapshot IDs, not floating aliases. Override any of them through `ProviderConfig(model=...)`; for example `gpt-5.6-terra` is the higher-quality OpenAI option.
+
+### Local and Self-Hosted Models
+
+The OpenAI provider can use any server that speaks OpenAI's Chat Completions API, such as Ollama, vLLM or a gateway. Pass its address as `base_url`:
+
+```python
+nlp = await nlp2sql.connect(
+    "postgresql://testuser:testpass@localhost:5432/testdb",
+    provider=ProviderConfig(
+        provider="openai",
+        base_url="http://localhost:11434/v1",  # a local Ollama
+        model="llama3.2",
+    ),
+)
+```
+
+No OpenAI key is needed, and the one in your environment is not sent to that server. See [OpenAI-compatible endpoints](https://github.com/luiscarbonel1991/nlp2sql/blob/main/docs/CONFIGURATION.md#openai-compatible-endpoints) for keys, request parameters, embeddings and the context size of local models.
 
 ## Lower-Level API
 
