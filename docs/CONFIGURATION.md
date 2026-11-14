@@ -92,12 +92,14 @@ nlp = await nlp2sql.connect(
     provider=ProviderConfig(
         provider="openai",
         base_url="http://localhost:11434/v1",  # a local Ollama
-        model="llama3.1",
+        model="llama3.2",
     ),
 )
 ```
 
 If the server needs a key, pass it as `api_key`. `base_url` is only accepted for the `openai` provider.
+
+The notes below were checked against Ollama 0.20.5 with `llama3.2`. Other servers can differ.
 
 ### A Ready Client
 
@@ -122,7 +124,7 @@ nlp = await nlp2sql.connect(database_url, provider=OpenAIAdapter(client=client, 
 | Topic | Behavior |
 |-------|----------|
 | API key | Only the `api_key` passed with `base_url` is sent to that server. `OPENAI_API_KEY` is never sent there. Without a key, the request carries a placeholder, which servers that take no key ignore. |
-| Request parameters | OpenAI model names keep the parameters they get on OpenAI. Any other name is treated as an open model and is sent `temperature` and `max_tokens`. For a reasoning model with another name, build `OpenAIAdapter(base_url=..., model=..., reasoning_effort="low")`: it is then sent `reasoning_effort` and `max_completion_tokens`. |
+| Request parameters | OpenAI model names keep the parameters they get on OpenAI. Any other name is treated as an open model and is sent `temperature` and `max_tokens`. For a reasoning model with another name, build `OpenAIAdapter(base_url=..., model=..., reasoning_effort="low")`: it is then sent `reasoning_effort` and `max_completion_tokens`. Ollama rejects `reasoning_effort` for a model without thinking, and ignores `max_completion_tokens`. |
 | JSON answers | Requests ask for a JSON object through `response_format`, so the server and the model must support JSON mode. |
 | Embeddings | `connect()` does not send that key to OpenAI. It uses local embeddings when `nlp2sql[embeddings-local]` is installed, and no embeddings otherwise. For OpenAI embeddings next to a local chat model, pass `embedding_provider_type="openai"`, which reads `OPENAI_API_KEY`. |
 | Token counts | Prompts are measured with an OpenAI tokenizer, and a model the library does not know is assumed to have a 128K context window. For other models both are estimates. |
@@ -131,24 +133,26 @@ nlp = await nlp2sql.connect(database_url, provider=OpenAIAdapter(client=client, 
 
 Each question sends up to `NLP2SQL_MAX_SCHEMA_TOKENS` schema tokens (8000 by default), plus the question, the examples and the instructions. The model needs a context window that fits them. If its window is smaller, lower `NLP2SQL_MAX_SCHEMA_TOKENS` or raise the window.
 
+A prompt longer than the window is not an error in Ollama. It drops the beginning of the prompt, where the schema is, and answers from the rest. `ollama ps` shows the window a loaded model has.
+
 Ollama's OpenAI-compatible API has no parameter for the context size. Set it in a `Modelfile`:
 
 ```text
-FROM llama3.1
+FROM llama3.2
 PARAMETER num_ctx 16384
 ```
 
 Create a model from it, in the folder that holds the `Modelfile`, and use that name as `model`:
 
 ```bash
-ollama create llama3.1-16k
+ollama create llama3.2-16k
 ```
 
 ### `OPENAI_BASE_URL`
 
 The OpenAI SDK also reads `OPENAI_BASE_URL`. It redirects every OpenAI request, chat and embeddings, and `OPENAI_API_KEY` goes with them. Use it for a proxy in front of OpenAI: for `nlp2sql` that is still OpenAI, so models keep OpenAI's request parameters.
 
-The CLI and the MCP server build their provider from the environment, so this variable is the only way they reach another address. For a server that is not OpenAI, prefer `base_url` from Python.
+It is not a way to reach a local model. A name that is not an OpenAI model is sent `reasoning_effort`, and Ollama answers `400 ... does not support thinking` for a model without thinking. The CLI and the MCP server build their provider from the environment, so they cannot use such a model yet. Use `base_url` from Python.
 
 ## Semantic Context Guidance
 

@@ -201,7 +201,7 @@ def create_ai_provider(provider_config: ProviderConfig) -> AIProviderPort:
 
         # A local model served by Ollama, through its OpenAI-compatible API
         provider = create_ai_provider(
-            ProviderConfig(provider="openai", base_url="http://localhost:11434/v1", model="llama3.1")
+            ProviderConfig(provider="openai", base_url="http://localhost:11434/v1", model="llama3.2")
         )
     """
     adapter_kwargs: dict[str, Any] = {"api_key": provider_config.api_key}

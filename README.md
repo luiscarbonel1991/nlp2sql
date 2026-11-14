@@ -286,7 +286,7 @@ nlp = await nlp2sql.connect(
     provider=ProviderConfig(
         provider="openai",
         base_url="http://localhost:11434/v1",  # a local Ollama
-        model="llama3.1",
+        model="llama3.2",
     ),
 )
 ```

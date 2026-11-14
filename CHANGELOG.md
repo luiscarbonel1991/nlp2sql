@@ -34,7 +34,7 @@ pre-1.0.
   - Token counts use an OpenAI tokenizer, so for other models they are an estimate.
 - `ProviderConfig` takes `base_url`, so `connect()` and `create_ai_provider` reach those
   servers too: `ProviderConfig(provider="openai", base_url="http://localhost:11434/v1",
-  model="llama3.1")`. It is only accepted for the `openai` provider.
+  model="llama3.2")`. It is only accepted for the `openai` provider.
 - `connect(provider=...)` also takes a ready AI provider, such as `OpenAIAdapter(client=...)`
   or your own `AIProviderPort`. So does the `ai_provider` argument of
   `create_and_initialize_service`, `create_query_service` and `generate_sql_from_db`.
