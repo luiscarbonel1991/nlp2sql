@@ -5,7 +5,8 @@ description = "MCP server for nlp2sql - Natural Language to SQL conversion"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "mcp",
+    # server.py uses FastMCP, which mcp 2.x renamed to MCPServer
+    "mcp<2",
 ]
 
 [project.optional-dependencies]

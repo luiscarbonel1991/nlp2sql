@@ -27,11 +27,13 @@ This MCP server provides **5 simple, idiomatic tools** optimized for BI analysts
 
 ```bash
 # Install from PyPI
-pip install nlp2sql mcp
+pip install nlp2sql "mcp<2"
 
 # Or with uv
-uv add nlp2sql mcp
+uv add nlp2sql "mcp<2"
 ```
+
+The server uses the 1.x API of the `mcp` SDK. It does not start with `mcp` 2.x.
 
 ## Configuration
 
