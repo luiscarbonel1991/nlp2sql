@@ -60,7 +60,8 @@ def checked_validation(answer: object) -> dict[str, Any]:
 
     An answer without a boolean ``is_valid``, or one that reports its own failure, becomes
     ``validation_unavailable``. Two older names are still read: ``issues`` for ``errors``,
-    and ``error`` for ``llm_validation_error``.
+    and ``error`` for ``llm_validation_error``. ``errors`` and ``warnings`` come out as lists
+    of text, also when the model wrote an item as an object.
     """
     if not isinstance(answer, dict):
         return validation_unavailable("the provider did not answer with a JSON object")
@@ -81,11 +82,21 @@ def checked_validation(answer: object) -> dict[str, Any]:
 
 
 def _messages(value: object) -> list[str]:
-    if isinstance(value, str):
-        return [value] if value else []
+    if isinstance(value, (str, dict)):
+        value = [value]
     if isinstance(value, (list, tuple)):
-        return [str(item) for item in value]
+        return [message for message in map(_message, value) if message]
     return []
+
+
+def _message(item: object) -> str:
+    """One error or warning as text. A model may write it as an object: ``{"message": ...}``."""
+    if isinstance(item, dict):
+        text = item.get("message")
+        if isinstance(text, str) and text:
+            return text
+        return "; ".join(f"{key}: {value}" for key, value in item.items() if value not in (None, ""))
+    return "" if item is None else str(item)
 
 
 class AIProviderPort(ABC):

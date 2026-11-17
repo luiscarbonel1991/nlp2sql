@@ -104,6 +104,9 @@ pre-1.0.
   review is on.
 - `nlp2sql query` prints the errors of an invalid query. It printed an empty list unless
   the Anthropic or Gemini review was on, because it read `issues`.
+- An error or warning that the reviewing model writes as an object is reported by its text.
+  `"warnings": [{"message": "no LIMIT"}]` came out as the text of a Python dict,
+  `"{'message': 'no LIMIT'}"`. Small local models answer this way more often.
 - The three provider adapters answer `validate_query` by the port's contract when they are
   called directly too. The Anthropic and Gemini adapters reported a failed call as valid,
   and treated a JSON answer without `is_valid` as valid. An answer that is not JSON, or has

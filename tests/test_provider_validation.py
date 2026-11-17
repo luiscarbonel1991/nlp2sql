@@ -63,6 +63,16 @@ async def test_what_the_model_finds_is_reported_as_errors(provider: tuple[AIProv
 
 
 @pytest.mark.asyncio
+async def test_a_message_written_as_an_object_is_reported_as_text(provider: tuple[AIProviderPort, object]) -> None:
+    adapter, fake = provider
+    fake.validation_content = json.dumps({"is_valid": True, "warnings": [{"message": "no LIMIT"}]})
+
+    result = await adapter.validate_query(SQL, SCHEMA)
+
+    assert result["warnings"] == ["no LIMIT"]
+
+
+@pytest.mark.asyncio
 async def test_a_failed_call_is_not_an_approval(provider: tuple[AIProviderPort, object]) -> None:
     adapter, fake = provider
     _fail_every_call(fake)

@@ -46,6 +46,39 @@ def test_errors_and_warnings_are_always_lists() -> None:
     assert checked["warnings"] == []
 
 
+def test_a_message_written_as_an_object_is_its_text() -> None:
+    # What llama3.2 answered through Ollama: objects instead of strings
+    checked = checked_validation(
+        {
+            "is_valid": False,
+            "errors": [{"message": "wrong join"}],
+            "warnings": [{"type": "style", "message": "no LIMIT"}],
+        }
+    )
+
+    assert checked["errors"] == ["wrong join"]
+    assert checked["warnings"] == ["no LIMIT"]
+
+
+def test_an_object_without_a_message_is_still_readable() -> None:
+    checked = checked_validation({"is_valid": False, "errors": [{"issue": "wrong join", "fix": "join on id"}]})
+
+    assert checked["errors"] == ["issue: wrong join; fix: join on id"]
+
+
+def test_one_object_is_one_message() -> None:
+    checked = checked_validation({"is_valid": False, "errors": {"message": "wrong join"}})
+
+    assert checked["errors"] == ["wrong join"]
+
+
+def test_empty_messages_are_dropped() -> None:
+    checked = checked_validation({"is_valid": True, "errors": ["", {}, None], "warnings": [{"message": ""}]})
+
+    assert checked["errors"] == []
+    assert checked["warnings"] == []
+
+
 def test_issues_is_an_older_name_for_errors() -> None:
     checked = checked_validation({"is_valid": False, "issues": ["orders has no column total"]})
 
