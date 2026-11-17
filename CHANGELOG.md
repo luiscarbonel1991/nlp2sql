@@ -111,6 +111,9 @@ pre-1.0.
   counted. `OpenAIAdapter` reports a failed call the same way: `llm_validation_error`, and
   "LLM validation unavailable: ..." in `errors` instead of "Validation failed: ...". The
   Anthropic and Gemini adapters no longer add default `suggestions` and `complexity` keys.
+- The MCP server asks for `mcp<2`. It uses the 1.x API of the `mcp` SDK, and with 2.x, which
+  `pip install nlp2sql mcp` installs today, it failed at import with "No module named
+  'mcp.server.fastmcp'". The README installs `"mcp<2"` too.
 
 ## [0.2.0rc20] - 2026-11-08
 
