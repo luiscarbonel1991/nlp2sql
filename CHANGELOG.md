@@ -22,6 +22,8 @@ pre-1.0.
 
 ## [Unreleased]
 
+## [0.2.0rc21] - 2026-11-17
+
 ### Added
 - `OpenAIAdapter` takes `base_url`, or a ready-made `client`, to use another server that
   speaks the Chat Completions API, such as Ollama, vLLM or a gateway.
