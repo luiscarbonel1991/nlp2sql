@@ -10,7 +10,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, TextIO
+from typing import Any, Optional, TextIO
 
 import click
 
@@ -96,14 +96,46 @@ def configured_providers() -> list[str]:
     return [provider for provider in PROVIDER_NAMES if provider_api_key(provider)]
 
 
+# What a command prints for the server given with --base-url, and its key in benchmark results
+ENDPOINT_NAME = "OpenAI-compatible endpoint"
+ENDPOINT_KEY = "openai-compatible"
+BASE_URL_HELP = "Use another server that speaks the OpenAI API, such as Ollama or vLLM (with --provider openai)"
+
+
+def resolve_api_key(provider: str, api_key: str | None, base_url: str | None) -> str | None:
+    """The key a command sends: ``--api-key``, else the provider's environment variable.
+
+    With ``--base-url`` only ``--api-key`` counts. The OpenAI key of the environment is for
+    OpenAI, not for another server, and servers such as Ollama take no key.
+    """
+    if api_key or base_url:
+        return api_key
+    return provider_api_key(provider)
+
+
+def embedding_api_key(config: ProviderConfig) -> str | None:
+    """The chat key, when OpenAI embeddings may reuse it: only a key for OpenAI itself."""
+    return config.api_key if config.targets_openai else None
+
+
+def check_endpoint_options(provider: str | None, base_url: str | None, *with_base_url: str | None) -> None:
+    """Reject --base-url with another provider, and options that only mean something with it."""
+    if base_url and provider not in (None, "openai"):
+        raise click.UsageError("--base-url is only for --provider openai")
+    if not base_url and any(with_base_url):
+        raise click.UsageError("--model and --api-key are used with --base-url")
+
+
 # One table and one question keep a provider check to a few hundred tokens
 _CHECK_SCHEMA = "Table: users\nColumns: id (integer, primary key), name (text)"
 _CHECK_QUESTION = "How many users are there?"
 
 
-async def check_provider(provider: str, api_key: Optional[str]) -> str:
+async def check_provider(
+    provider: str, api_key: str | None, *, model: str | None = None, base_url: str | None = None
+) -> str:
     """Generate SQL for one small question; return "model, latency, tokens". Raises on failure."""
-    config = ProviderConfig(provider=provider, api_key=api_key)
+    config = ProviderConfig(provider=provider, api_key=api_key, model=model, base_url=base_url)
     ai_provider = create_ai_provider(config)
     started = time.perf_counter()
     response = await ai_provider.generate_query(
@@ -113,14 +145,17 @@ async def check_provider(provider: str, api_key: Optional[str]) -> str:
     return f"{config.resolved_model}, {elapsed:.1f}s, {response.tokens_used} tokens"
 
 
-def describe_provider_failure(provider: str, error: Exception) -> str:
-    """What to do about a failed provider check, from the error type."""
-    env_var = ProviderConfig.API_KEY_ENV_VARS[provider]
+def describe_provider_failure(provider: str, error: Exception, *, key_source: str | None = None) -> str:
+    """What to do about a failed provider check, from the error type.
+
+    ``key_source`` is where the key came from, when it is not the provider's environment variable.
+    """
+    key_source = key_source or ProviderConfig.API_KEY_ENV_VARS[provider]
     status = (getattr(error, "details", None) or {}).get("status_code")
     if isinstance(error, ImportError):
         return f"SDK not installed. Install with: pip install nlp2sql[{provider}]"
     if isinstance(error, ProviderAuthenticationError):
-        return f"API key rejected ({status}). Check {env_var}"
+        return f"API key rejected ({status}). Check {key_source}"
     if isinstance(error, ProviderRateLimitError):
         return "rate limited or out of quota (429)"
     if isinstance(error, ProviderUnavailableError):
@@ -131,24 +166,46 @@ def describe_provider_failure(provider: str, error: Exception) -> str:
     return str(error)
 
 
+async def run_check(
+    name: str, provider: str, api_key: str | None, *, model: str | None = None, base_url: str | None = None
+) -> bool:
+    """Check one provider, or one endpoint, with one real request and print one line about it."""
+    endpoint = {"model": model, "base_url": base_url} if base_url else {}
+    try:
+        summary = await check_provider(provider, api_key, **endpoint)
+    except Exception as e:
+        reason = describe_provider_failure(provider, e, key_source="--api-key" if base_url else None)
+        click.echo(f"   [ERROR] {name}: {reason}")
+        detail = str(e).splitlines()[0] if str(e) else ""
+        if detail and detail != reason:
+            click.echo(f"      {detail[:200]}")
+        return False
+    click.echo(f"   [OK] {name}: {summary}")
+    return True
+
+
 async def run_provider_checks(providers: list[str]) -> list[bool]:
     """Check each provider with one real request and print one line per provider."""
-    results = []
-    for provider in providers:
-        name = PROVIDER_NAMES[provider]
-        try:
-            summary = await check_provider(provider, provider_api_key(provider))
-        except Exception as e:
-            reason = describe_provider_failure(provider, e)
-            click.echo(f"   [ERROR] {name}: {reason}")
-            detail = str(e).splitlines()[0] if str(e) else ""
-            if detail and detail != reason:
-                click.echo(f"      {detail[:200]}")
-            results.append(False)
-            continue
-        click.echo(f"   [OK] {name}: {summary}")
-        results.append(True)
-    return results
+    return [await run_check(PROVIDER_NAMES[provider], provider, provider_api_key(provider)) for provider in providers]
+
+
+def benchmark_targets(
+    providers: str | None, base_url: str | None, model: str | None, api_key: str | None
+) -> dict[str, dict[str, Any]]:
+    """What a benchmark measures: a results key for each target, and its ProviderConfig arguments.
+
+    The listed providers, else every provider with an API key set. ``--base-url`` adds that
+    endpoint. Given alone, the endpoint is the only target, so no hosted provider is called
+    without being asked for.
+    """
+    if providers:
+        names = [name.strip() for name in providers.split(",") if name.strip()]
+    else:
+        names = [] if base_url else configured_providers()
+    targets: dict[str, dict[str, Any]] = {name: {"provider": name, "api_key": provider_api_key(name)} for name in names}
+    if base_url:
+        targets[ENDPOINT_KEY] = {"provider": "openai", "api_key": api_key, "model": model, "base_url": base_url}
+    return targets
 
 
 def detect_database_type(database_url: str) -> DatabaseType:
@@ -544,6 +601,7 @@ def inspect(
     default=None,
     help="AI model name (default depends on provider; e.g., gpt-5.6-terra, claude-sonnet-5, gemini-3.6-flash)",
 )
+@click.option("--base-url", help=f"{BASE_URL_HELP}. Only --api-key is sent there, never OPENAI_API_KEY")
 @click.option("--explain", is_flag=True, help="Include detailed explanation")
 @click.option("--temperature", type=float, default=0.1, help="Model temperature (0.0-1.0)")
 @click.option("--max-tokens", type=int, default=1000, help="Maximum tokens for response")
@@ -577,6 +635,7 @@ def query(
     provider: str,
     api_key: Optional[str],
     model: Optional[str],
+    base_url: str | None,
     explain: bool,
     temperature: float,
     max_tokens: int,
@@ -595,25 +654,26 @@ def query(
 ):
     """Generate SQL from natural language question with advanced options."""
     verbose = ctx.obj.get("verbose", False)
+    check_endpoint_options(provider, base_url)
 
     async def _query():
         try:
             if verbose:
                 click.echo(f"[CONFIG] Using provider: {provider}")
+                if base_url:
+                    click.echo(f"[CONFIG] Endpoint: {base_url}")
                 click.echo(f"[CONFIG] Embedding provider: {embedding_provider}")
                 click.echo(f"🌡️  Temperature: {temperature}")
                 click.echo(f"📏 Max tokens: {max_tokens}")
 
             filters = parse_schema_filters(schema_filters)
 
-            # Get API key from parameter or environment
-            final_api_key = api_key
-            if not final_api_key:
+            # The key of --api-key, else of the environment. Another endpoint may need none
+            final_api_key = resolve_api_key(provider, api_key, base_url)
+            if not final_api_key and not base_url:
                 env_var = ProviderConfig.API_KEY_ENV_VARS[provider]
-                final_api_key = provider_api_key(provider)
-                if not final_api_key:
-                    click.echo(f"[ERROR] No API key provided. Set {env_var} or use --api-key", err=True)
-                    sys.exit(1)
+                click.echo(f"[ERROR] No API key provided. Set {env_var} or use --api-key", err=True)
+                sys.exit(1)
 
             # Detect database type from URL
             database_type = detect_database_type(database_url)
@@ -638,14 +698,6 @@ def query(
                 inline_json=examples_json,
                 database_type=database_type,
             )
-            example_store = await create_example_store_from_payload(
-                examples=examples_payload,
-                database_url=database_url,
-                schema_name=schema,
-                embedding_provider_type=embedding_provider_type,
-                api_key=final_api_key,
-            )
-
             # Build unified provider config
             provider_config = ProviderConfig(
                 provider=provider,
@@ -653,6 +705,14 @@ def query(
                 model=model,
                 temperature=temperature,
                 max_tokens=max_tokens,
+                base_url=base_url,
+            )
+            example_store = await create_example_store_from_payload(
+                examples=examples_payload,
+                database_url=database_url,
+                schema_name=schema,
+                embedding_provider_type=embedding_provider_type,
+                api_key=embedding_api_key(provider_config),
             )
 
             # Create service
@@ -900,8 +960,18 @@ def providers_list():
     type=click.Choice(sorted(ProviderConfig.SUPPORTED_PROVIDERS)),
     help="Test one provider (default: every provider with an API key set)",
 )
-def providers_test(provider):
+@click.option("--base-url", help=f"Test that server instead. {BASE_URL_HELP}")
+@click.option("--model", help="Model to ask for, with --base-url")
+@click.option("--api-key", help="API key of that server, with --base-url. OPENAI_API_KEY is not sent there")
+def providers_test(provider, base_url: str | None, model: str | None, api_key: str | None):
     """Check AI providers with one small SQL generation request each (exit 1 if any fails)."""
+    check_endpoint_options(provider, base_url, model, api_key)
+    if base_url:
+        click.echo("🧪 Testing AI Providers")
+        click.echo("=" * 25)
+        if not asyncio.run(run_check(ENDPOINT_NAME, "openai", api_key, model=model, base_url=base_url)):
+            sys.exit(1)
+        return
     if provider and not provider_api_key(provider):
         click.echo(f"[ERROR] {PROVIDER_NAMES[provider]}: no API key. Set {ProviderConfig.API_KEY_ENV_VARS[provider]}")
         sys.exit(1)
@@ -923,6 +993,9 @@ def providers_test(provider):
 @click.option("--schema", default="public", help="Database schema name")
 @click.option("--questions", help="File with test questions (one per line)")
 @click.option("--providers", help="Comma-separated list of providers to test")
+@click.option("--base-url", help=f"Also measure that server; alone, only that server. {BASE_URL_HELP}")
+@click.option("--model", help="Model to ask for, with --base-url")
+@click.option("--api-key", help="API key of that server, with --base-url. OPENAI_API_KEY is not sent there")
 @click.option("--iterations", type=int, default=3, help="Number of iterations per test")
 @click.option("--schema-filters", help="JSON string with schema filters")
 @click.option("--semantic-context-file", type=click.Path(exists=True), help="Path to semantic context JSON/YAML")
@@ -943,6 +1016,9 @@ def benchmark(
     schema: str,
     questions: Optional[str],
     providers: Optional[str],
+    base_url: str | None,
+    model: str | None,
+    api_key: str | None,
     iterations: int,
     schema_filters: Optional[str],
     semantic_context_file: Optional[str],
@@ -954,6 +1030,7 @@ def benchmark(
 ):
     """Benchmark different AI providers performance."""
     verbose = ctx.obj.get("verbose", False)
+    check_endpoint_options(None, base_url, model, api_key)
 
     async def _benchmark():
         filters = parse_schema_filters(schema_filters)
@@ -982,8 +1059,9 @@ def benchmark(
                 click.echo(f"[ERROR] Questions file not found: {questions}", err=True)
                 return
 
-        # The listed providers, else every provider with an API key set
-        test_providers = providers.split(",") if providers else configured_providers()
+        # The listed providers, else every provider with an API key set, and the --base-url endpoint
+        test_providers = benchmark_targets(providers, base_url, model, api_key)
+        labels = {name: ENDPOINT_NAME if name == ENDPOINT_KEY else name.title() for name in test_providers}
 
         if not test_providers:
             click.echo("[ERROR] No providers configured", err=True)
@@ -998,8 +1076,8 @@ def benchmark(
 
         results = {}
 
-        for provider in test_providers:
-            click.echo(f"🧪 Testing {provider.title()}...")
+        for provider, config_arguments in test_providers.items():
+            click.echo(f"🧪 Testing {labels[provider]}...")
             provider_results = {
                 "total_time": 0,
                 "total_tokens": 0,
@@ -1009,9 +1087,8 @@ def benchmark(
                 "confidences": [],
             }
 
-            api_key = provider_api_key(provider)
-
             try:
+                provider_config = ProviderConfig(**config_arguments)
                 if embedding_provider == "none":
                     embedding_provider_type = None
                 elif embedding_provider == "auto":
@@ -1029,11 +1106,7 @@ def benchmark(
                     database_url=database_url,
                     schema_name=schema,
                     embedding_provider_type=embedding_provider_type,
-                    api_key=api_key,
-                )
-                provider_config = ProviderConfig(
-                    provider=provider,
-                    api_key=api_key,
+                    api_key=embedding_api_key(provider_config),
                 )
                 service = await create_and_initialize_service(
                     database_url=database_url,
@@ -1076,10 +1149,10 @@ def benchmark(
                     )
 
                 results[provider] = provider_results
-                click.echo(f"   [OK] {provider.title()} completed")
+                click.echo(f"   [OK] {labels[provider]} completed")
 
             except Exception as e:
-                click.echo(f"   [ERROR] {provider.title()} failed: {e!s}")
+                click.echo(f"   [ERROR] {labels[provider]} failed: {e!s}")
 
         # Display results
         if output_file:
@@ -1098,7 +1171,7 @@ def benchmark(
                 success_rate = (stats["successful_queries"] / total_queries * 100) if total_queries > 0 else 0
                 avg_time = stats["total_time"] / stats["successful_queries"] if stats["successful_queries"] > 0 else 0
 
-                click.echo(f"\nAI: {provider.title()}:")
+                click.echo(f"\nAI: {labels[provider]}:")
                 click.echo(f"   [OK] Success rate: {success_rate:.1f}%")
                 click.echo(f"   ⏱️  Avg response time: {avg_time:.2f}s")
                 click.echo(f"   🎯 Avg confidence: {stats['avg_confidence']:.2f}")
@@ -1107,7 +1180,7 @@ def benchmark(
             # Find the best performer
             if results:
                 best_provider = max(results.keys(), key=lambda p: results[p]["avg_confidence"])
-                click.echo(f"\n[BEST] Best performer: {best_provider.title()}")
+                click.echo(f"\n[BEST] Best performer: {labels[best_provider]}")
 
     asyncio.run(_benchmark())
 

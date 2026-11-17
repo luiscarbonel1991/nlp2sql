@@ -6,10 +6,13 @@ reset, and `cache info` found none of the files connect() had just written.
 """
 
 import json
+import sys
+from collections.abc import Iterator
 
 import psycopg2
 import pytest
 from click.testing import CliRunner
+from fakes.fake_openai import FakeOpenAI
 
 import nlp2sql
 from nlp2sql import ProviderConfig
@@ -72,3 +75,33 @@ async def test_cache_commands_find_and_clear_what_connect_wrote(postgres_availab
     assert clear.exit_code == 0, clear.output
     assert f"Cleared {len(written)} cache file(s)" in clear.stdout
     assert not [path for path in isolated_caches.rglob("*") if path.is_file()]
+
+
+@pytest.fixture
+def other_endpoint() -> Iterator[FakeOpenAI]:
+    """A second OpenAI-compatible server: the one that serves the model, not OpenAI."""
+    fake = FakeOpenAI().start()
+    yield fake
+    fake.stop()
+
+
+@pytest.mark.usefixtures("isolated_caches")
+def test_query_with_base_url_asks_that_endpoint_and_not_openai(
+    postgres_available: str, fake_openai: FakeOpenAI, other_endpoint: FakeOpenAI, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # fake_openai stands in for OpenAI itself, with a key in the environment: nothing goes there
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-key-from-the-environment")
+    monkeypatch.setitem(sys.modules, "sentence_transformers", None)
+
+    result = CliRunner().invoke(
+        cli,
+        ["query", "--database-url", postgres_available, "--question", "How many users are there?"]
+        + ["--base-url", other_endpoint.base_url, "--model", "llama3.2"],  # noqa: RUF005 (one option per line)
+    )
+
+    request = other_endpoint.requests[-1]
+    assert result.exit_code == 0, result.output
+    assert other_endpoint.sql in result.stdout
+    assert request["body"]["model"] == "llama3.2"
+    assert "sk-key-from-the-environment" not in request["authorization"]
+    assert fake_openai.requests == []

@@ -41,6 +41,14 @@ pre-1.0.
   - With `base_url` or a ready provider, `connect()` does not default to OpenAI embeddings,
     and the chat key is never sent to OpenAI. It uses local embeddings when
     `nlp2sql[embeddings-local]` is installed, and none otherwise.
+- `nlp2sql query`, `nlp2sql providers test` and `nlp2sql benchmark` take `--base-url`, to use
+  an OpenAI-compatible server from the CLI: `nlp2sql query ... --base-url
+  http://localhost:11434/v1 --model llama3.2`.
+  - No key is needed. Only `--api-key` is sent to that server, never `OPENAI_API_KEY`.
+  - `providers test --base-url` checks that server with one request, and takes `--model` and
+    `--api-key`.
+  - `benchmark --base-url` measures that server, alone or next to `--providers`. Its results
+    are under `openai-compatible`.
 - Docs: [OpenAI-compatible endpoints](https://github.com/luiscarbonel1991/nlp2sql/blob/main/docs/CONFIGURATION.md#openai-compatible-endpoints),
   with an Ollama example and how to set the context size of a local model.
 
@@ -75,6 +83,10 @@ pre-1.0.
   provider's answer to it. A custom provider that answers with `issues` keeps working.
 
 ### Fixed
+- `nlp2sql query` and `nlp2sql benchmark` no longer hand the chat key to the OpenAI embeddings
+  of the few-shot examples when the chat provider is not OpenAI. With `--provider anthropic
+  --embedding-provider openai` and examples, the Anthropic key was sent to OpenAI as its key.
+  Those embeddings now use `OPENAI_API_KEY`.
 - Gemini thinking tokens are counted. `tokens_used` now includes them, and the response
   metadata reports `thinking_tokens`. They are billed as output, but the old adapter counted
   only prompt and answer tokens.
