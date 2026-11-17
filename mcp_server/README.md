@@ -19,7 +19,7 @@ This MCP server provides **5 simple, idiomatic tools** optimized for BI analysts
 - **Natural Language Queries**: Convert questions to SQL using AI
 - **Direct Execution**: Execute queries and get results (read-only, secure)
 - **Schema Discovery**: Explore database structure interactively
-- **Multi-Provider Support**: OpenAI, Anthropic, Google Gemini
+- **Multi-Provider Support**: OpenAI, Anthropic, Google Gemini, or an OpenAI-compatible server such as Ollama
 - **Performance Optimized**: Service caching for fast subsequent calls (~5s vs ~50s)
 - **Security First**: SQL injection protection, read-only enforcement
 
@@ -76,6 +76,28 @@ Configure databases using environment variables for security:
 | `local` | `NLP2SQL_LOCAL_DB_URL` | Local development |
 | `test` | `NLP2SQL_TEST_DB_URL` | Test database |
 | `prod` / `production` | `NLP2SQL_PROD_DB_URL` | Production database |
+
+### AI Provider
+
+The server uses the first provider that has an API key: `OPENAI_API_KEY`, then `ANTHROPIC_API_KEY`, then `GOOGLE_API_KEY`.
+
+To use a local or self-hosted model instead, point it at a server that speaks the OpenAI API, such as Ollama or vLLM:
+
+| Environment Variable | Meaning |
+|---------------------|---------|
+| `NLP2SQL_LLM_BASE_URL` | Address of the server, for example `http://localhost:11434/v1`. When it is set, the server uses it instead of the providers above |
+| `NLP2SQL_LLM_MODEL` | Model to ask for, for example `llama3.2` |
+| `NLP2SQL_LLM_API_KEY` | Key of that server, if it has one |
+
+```json
+"env": {
+  "NLP2SQL_LLM_BASE_URL": "http://localhost:11434/v1",
+  "NLP2SQL_LLM_MODEL": "llama3.2",
+  "NLP2SQL_DEFAULT_DB_URL": "postgresql://user:pass@localhost:5432/mydb"
+}
+```
+
+`OPENAI_API_KEY` is never sent to that server. `NLP2SQL_LLM_MODEL` and `NLP2SQL_LLM_API_KEY` are only read together with `NLP2SQL_LLM_BASE_URL`. See [OpenAI-compatible endpoints](https://github.com/luiscarbonel1991/nlp2sql/blob/main/docs/CONFIGURATION.md#openai-compatible-endpoints) for what differs on such a server, and for the context size of local models.
 
 ## Tools Reference
 
@@ -389,6 +411,8 @@ export ANTHROPIC_API_KEY="sk-ant-..."
 # or
 export GOOGLE_API_KEY="..."
 ```
+
+Or point the server at an OpenAI-compatible server with `NLP2SQL_LLM_BASE_URL` (see [AI Provider](#ai-provider)).
 
 ### "Database alias not configured"
 

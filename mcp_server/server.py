@@ -63,9 +63,9 @@ from mcp.server.fastmcp import FastMCP
 # Add parent directory to path for nlp2sql imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from mcp_server.provider import provider_config, provider_label, service_cache_key
 from nlp2sql import (
     DatabaseType,
-    ProviderConfig,
     create_and_initialize_service,
     create_repository,
 )
@@ -92,16 +92,6 @@ DATABASE_ALIASES = {
     "production": "NLP2SQL_PROD_DB_URL",
     "prod": "NLP2SQL_PROD_DB_URL",
 }
-
-
-def _get_api_key(provider: str) -> Optional[str]:
-    """Get API key from environment variables."""
-    env_mapping = {
-        "openai": "OPENAI_API_KEY",
-        "anthropic": "ANTHROPIC_API_KEY",
-        "gemini": "GOOGLE_API_KEY",
-    }
-    return os.getenv(env_mapping.get(provider, ""))
 
 
 def _resolve_database(database: str) -> str:
@@ -161,29 +151,6 @@ def _format_error(error: Exception, context: str = "") -> str:
     )
 
 
-def _get_available_provider() -> tuple[str, str]:
-    """Get the first available AI provider with a configured API key.
-
-    Returns:
-        Tuple of (provider_name, api_key)
-
-    Raises:
-        ValueError: If no provider is configured
-    """
-    providers = [
-        ("openai", "OPENAI_API_KEY"),
-        ("anthropic", "ANTHROPIC_API_KEY"),
-        ("gemini", "GOOGLE_API_KEY"),
-    ]
-
-    for provider, env_var in providers:
-        api_key = os.getenv(env_var)
-        if api_key:
-            return provider, api_key
-
-    raise ValueError("No AI provider configured. Set one of: OPENAI_API_KEY, ANTHROPIC_API_KEY, or GOOGLE_API_KEY")
-
-
 async def _get_cached_service(
     database_url: str,
     database_type: DatabaseType,
@@ -199,7 +166,8 @@ async def _get_cached_service(
     Args:
         database_url: Database connection URL
         database_type: Type of database (postgres, redshift)
-        provider: AI provider to use (openai, anthropic, gemini). If None, auto-detect.
+        provider: AI provider to use (openai, anthropic, gemini). If None, the endpoint of
+            NLP2SQL_LLM_BASE_URL when it is set, else the first provider with an API key.
         schema_name: Database schema name (default: 'public')
 
     Returns:
@@ -212,15 +180,11 @@ async def _get_cached_service(
         - Different providers: Separate cache entries
         - Different schemas: Separate cache entries
     """
-    # Determine provider and API key
-    if provider:
-        api_key = _get_api_key(provider)
-        if not api_key:
-            raise ValueError(f"API key not configured for provider '{provider}'")
-    else:
-        provider, api_key = _get_available_provider()
+    # The provider, or the OpenAI-compatible endpoint, the environment configures
+    config = provider_config(provider)
+    provider = provider_label(config)
 
-    cache_key = f"service:{database_url}:{provider}:{schema_name}"
+    cache_key = service_cache_key(database_url, config, schema_name)
 
     if cache_key in _service_cache:
         logger.debug("Using cached service", provider=provider, schema=schema_name)
@@ -234,7 +198,6 @@ async def _get_cached_service(
     start_time = time.time()
 
     try:
-        config = ProviderConfig(provider=provider, api_key=api_key)
         service = await create_and_initialize_service(
             database_url=database_url,
             provider_config=config,

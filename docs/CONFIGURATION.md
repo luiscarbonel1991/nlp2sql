@@ -117,6 +117,16 @@ nlp2sql query \
 
 No key is needed. If the server has one, pass it with `--api-key`: `OPENAI_API_KEY` is not sent there.
 
+### MCP Server
+
+The MCP server reads the endpoint from its environment:
+
+| Variable | Description |
+|----------|-------------|
+| `NLP2SQL_LLM_BASE_URL` | Address of the server. When it is set, the MCP server uses it instead of a hosted provider |
+| `NLP2SQL_LLM_MODEL` | Model to ask for |
+| `NLP2SQL_LLM_API_KEY` | Key of that server, if it has one. `OPENAI_API_KEY` is not sent there |
+
 ### A Ready Client
 
 For anything `ProviderConfig` has no field for, such as timeouts, custom headers or a reasoning model, build the adapter yourself and pass it as the provider:
@@ -168,7 +178,7 @@ ollama create llama3.2-16k
 
 The OpenAI SDK also reads `OPENAI_BASE_URL`. It redirects every OpenAI request, chat and embeddings, and `OPENAI_API_KEY` goes with them. Use it for a proxy in front of OpenAI: for `nlp2sql` that is still OpenAI, so models keep OpenAI's request parameters.
 
-It is not a way to reach a local model. A name that is not an OpenAI model is sent `reasoning_effort`, and Ollama answers `400 ... does not support thinking` for a model without thinking. Use `base_url` from Python or `--base-url` in the CLI. The MCP server builds its provider from the environment and cannot use such a model yet.
+It is not a way to reach a local model. A name that is not an OpenAI model is sent `reasoning_effort`, and Ollama answers `400 ... does not support thinking` for a model without thinking. Use `base_url` from Python, `--base-url` in the CLI or `NLP2SQL_LLM_BASE_URL` in the MCP server.
 
 ## Semantic Context Guidance
 
