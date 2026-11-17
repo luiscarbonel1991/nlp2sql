@@ -12,8 +12,10 @@ import pytest
 
 from nlp2sql import ProviderConfig, create_query_service
 from nlp2sql.client import connect
+from nlp2sql.ports.ai_provider import AIProviderPort
 
 DB_URL = "postgresql://user:pass@localhost/db"
+OLLAMA_URL = "http://localhost:11434/v1"
 
 
 def _fake_create_embedding_provider(local_installed: bool):
@@ -107,6 +109,50 @@ class TestConnectEmbeddingDefaults:
         assert service_kwargs["example_store"] is None
 
 
+class TestAnotherEndpointKeepsItsKey:
+    """A key given for another endpoint, or held by a ready provider, is never sent to OpenAI."""
+
+    @staticmethod
+    def _gateway() -> ProviderConfig:
+        return ProviderConfig(provider="openai", api_key="gateway-key", base_url=OLLAMA_URL)
+
+    @pytest.mark.asyncio
+    async def test_base_url_uses_local_embeddings_when_installed(self) -> None:
+        service_kwargs, calls = await _connect(provider=self._gateway())
+
+        assert calls == [{"provider": "local", "api_key": None}]
+        assert service_kwargs["embedding_provider"] is not None
+
+    @pytest.mark.asyncio
+    async def test_base_url_works_without_embeddings(self) -> None:
+        service_kwargs, calls = await _connect(local_installed=False, provider=self._gateway())
+
+        assert [call["provider"] for call in calls] == ["local"]
+        assert service_kwargs["embedding_provider"] is None
+
+    @pytest.mark.asyncio
+    async def test_explicit_openai_embeddings_never_receive_the_endpoints_key(self) -> None:
+        _, calls = await _connect(provider=self._gateway(), embedding_provider_type="openai")
+
+        assert calls == [{"provider": "openai", "api_key": None}]
+
+    @pytest.mark.asyncio
+    async def test_a_ready_provider_uses_local_embeddings_when_installed(
+        self, mock_ai_provider: AIProviderPort
+    ) -> None:
+        service_kwargs, calls = await _connect(provider=mock_ai_provider)
+
+        assert calls == [{"provider": "local", "api_key": None}]
+        assert service_kwargs["embedding_provider"] is not None
+
+    @pytest.mark.asyncio
+    async def test_a_ready_provider_works_without_embeddings(self, mock_ai_provider: AIProviderPort) -> None:
+        service_kwargs, calls = await _connect(local_installed=False, provider=mock_ai_provider)
+
+        assert [call["provider"] for call in calls] == ["local"]
+        assert service_kwargs["embedding_provider"] is None
+
+
 class TestCreateQueryServiceEmbeddingKey:
     def test_provider_config_key_reaches_openai_embeddings(self):
         factory, calls = _fake_create_embedding_provider(local_installed=True)
@@ -118,3 +164,21 @@ class TestCreateQueryServiceEmbeddingKey:
             )
 
         assert calls == [{"provider": "openai", "api_key": "sk-config"}]
+
+    def test_a_key_for_another_endpoint_stays_out_of_openai_embeddings(self) -> None:
+        factory, calls = _fake_create_embedding_provider(local_installed=True)
+        with patch("nlp2sql.create_embedding_provider", side_effect=factory), patch("nlp2sql.QueryGenerationService"):
+            create_query_service(
+                DB_URL,
+                provider_config=ProviderConfig(provider="openai", api_key="gateway-key", base_url=OLLAMA_URL),
+                embedding_provider_type="openai",
+            )
+
+        assert calls == [{"provider": "openai", "api_key": None}]
+
+    def test_a_ready_provider_shares_no_key_with_openai_embeddings(self, mock_ai_provider: AIProviderPort) -> None:
+        factory, calls = _fake_create_embedding_provider(local_installed=True)
+        with patch("nlp2sql.create_embedding_provider", side_effect=factory), patch("nlp2sql.QueryGenerationService"):
+            create_query_service(DB_URL, ai_provider=mock_ai_provider, embedding_provider_type="openai")
+
+        assert calls == [{"provider": "openai", "api_key": None}]

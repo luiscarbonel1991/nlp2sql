@@ -18,6 +18,7 @@ from .core.entities import DatabaseType, SemanticContext
 from .core.provider_config import ProviderConfig
 from .core.result import QueryResult
 from .core.runtime import ExecutionHooks, ExecutionMode, SemanticHooks
+from .ports.ai_provider import AIProviderPort
 from .ports.embedding_provider import EmbeddingProviderPort
 from .ports.error_classifier import ErrorClassifierPort
 from .ports.example_repository import ExampleRepositoryPort
@@ -135,30 +136,32 @@ class NLP2SQL:
 
 
 def _resolve_embedding_provider(
-    provider: Optional[ProviderConfig],
+    provider: ProviderConfig | AIProviderPort | None,
     embedding_provider: Optional[EmbeddingProviderPort],
     embedding_provider_type: Optional[str],
 ) -> Optional[EmbeddingProviderPort]:
     """Pick the embedding provider ``connect()`` uses for schema search and examples.
 
-    An explicit instance or type always wins. Otherwise OpenAI chat reuses its API key
-    for OpenAI embeddings, and any other setup uses local embeddings when
-    sentence-transformers is installed, or no embeddings when it is not. The chat
-    provider name is never used as an embedding type: Anthropic and Gemini have no
-    embedding adapter.
+    An explicit instance or type always wins. Otherwise chat on OpenAI itself reuses its
+    API key for OpenAI embeddings, and any other setup uses local embeddings when
+    sentence-transformers is installed, or no embeddings when it is not: another provider,
+    another endpoint (``base_url``) or a ready provider. A key given for another endpoint
+    is never sent to OpenAI. The chat provider name is never used as an embedding type:
+    Anthropic and Gemini have no embedding adapter.
     """
     from . import create_embedding_provider
 
     if embedding_provider is not None:
         return embedding_provider
 
-    openai_key = provider.api_key if provider is not None and provider.provider == "openai" else None
+    openai_config = provider if isinstance(provider, ProviderConfig) and provider.targets_openai else None
+    openai_key = openai_config.api_key if openai_config is not None else None
     if embedding_provider_type is not None:
         return create_embedding_provider(
             provider=embedding_provider_type,
             api_key=openai_key if embedding_provider_type == "openai" else None,
         )
-    if provider is not None and provider.provider == "openai":
+    if openai_config is not None:
         return create_embedding_provider(provider="openai", api_key=openai_key)
     try:
         return create_embedding_provider(provider="local")
@@ -170,7 +173,7 @@ def _resolve_embedding_provider(
 async def connect(
     database_url: str,
     *,
-    provider: Optional[ProviderConfig] = None,
+    provider: ProviderConfig | AIProviderPort | None = None,
     schema: str = "public",
     database_type: Optional[DatabaseType] = None,
     schema_filters: Optional[dict[str, Any]] = None,
@@ -193,15 +196,18 @@ async def connect(
 
     Args:
         database_url: Database connection URL (postgresql://, redshift://, etc.)
-        provider: AI provider configuration. If None, falls back to env vars.
+        provider: AI provider: a ``ProviderConfig``, or a ready provider such as
+            ``OpenAIAdapter(client=...)``. If None, falls back to env vars.
         schema: Database schema name (default: ``"public"``).
         database_type: Database type. Auto-detected from URL if None.
         schema_filters: Optional filters (include_schemas, exclude_tables, etc.)
         embedding_provider: Pre-built embedding provider instance.
         embedding_provider_type: Embedding provider to auto-create (``"local"`` or ``"openai"``).
             If neither this nor ``embedding_provider`` is given, OpenAI chat uses OpenAI
-            embeddings with the same API key; other providers use local embeddings when
-            ``nlp2sql[embeddings-local]`` is installed, or no embeddings otherwise.
+            embeddings with the same API key. Any other setup uses local embeddings when
+            ``nlp2sql[embeddings-local]`` is installed, or no embeddings otherwise: another
+            provider, another endpoint (``ProviderConfig(base_url=...)``) or a ready provider.
+            A key given for another endpoint is never sent to OpenAI.
         examples: Few-shot examples. Can be:
             - A list of dicts ``[{"question": ..., "sql": ..., "database_type": ...}]``
               (auto-creates an ExampleStore with the same embedding provider; ignored with a
@@ -216,6 +222,9 @@ async def connect(
 
     Returns:
         An initialized ``NLP2SQL`` client ready for ``ask()`` calls.
+
+    Raises:
+        TypeError: If ``provider`` is neither a ``ProviderConfig`` nor an AI provider.
 
     Example::
 
@@ -232,6 +241,10 @@ async def connect(
     """
     from . import create_and_initialize_service
     from .schema.example_store import ExampleStore
+
+    if provider is not None and not isinstance(provider, (ProviderConfig, AIProviderPort)):
+        msg = f"provider must be a ProviderConfig or an AI provider (AIProviderPort), not {type(provider).__name__}"
+        raise TypeError(msg)
 
     # Auto-detect database type from URL if not provided
     if database_type is None:
@@ -273,6 +286,10 @@ async def connect(
         semantic_validator = semantic_validator or semantic_hooks.semantic_validator
         semantic_context = semantic_context or semantic_hooks.semantic_context
 
+    # A ready provider goes in as it is; a ProviderConfig, or None, is built by the factory
+    provider_args: dict[str, Any] = (
+        {"ai_provider": provider} if isinstance(provider, AIProviderPort) else {"provider_config": provider}
+    )
     service = await create_and_initialize_service(
         database_url=database_url,
         database_type=database_type,
@@ -280,7 +297,7 @@ async def connect(
         schema_filters=schema_filters,
         embedding_provider=embedding_provider,
         example_store=example_store,
-        provider_config=provider,
+        **provider_args,
         execution_port=execution_port,
         error_classifier=error_classifier,
         repair_policy=repair_policy,

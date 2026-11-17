@@ -49,13 +49,13 @@ nlp = await nlp2sql.connect(
 | Parameter                 | Type                                        | Description                                                         |
 | ------------------------- | ------------------------------------------- | ------------------------------------------------------------------- |
 | `database_url`            | `str`                                       | Database connection URL                                             |
-| `provider`                | `ProviderConfig | None`                     | Provider config, otherwise resolved from environment                |
+| `provider`                | `ProviderConfig | AIProviderPort | None`    | Provider config or a ready provider, otherwise resolved from environment |
 | `schema`                  | `str | None`                                | Schema name, usually `public` for PostgreSQL                        |
 | `database_type`           | `DatabaseType | None`                       | Optional explicit override                                          |
 | `schema_filters`          | `dict | None`                               | Include or exclude schemas and tables                               |
 | `examples`                | `list[dict] | ExampleRepositoryPort | None` | Few-shot examples or custom repository                              |
 | `embedding_provider`      | `EmbeddingProviderPort | None`              | Custom embedding provider instance                                  |
-| `embedding_provider_type` | `str | None`                                | Auto-create embedding provider, typically `local` or `openai`       |
+| `embedding_provider_type` | `str | None`                                | Auto-create embedding provider, typically `local` or `openai`. Default: OpenAI embeddings for chat on OpenAI itself, otherwise local embeddings when installed |
 | `hooks`                   | `ExecutionHooks | None`                     | Execution, classification, and repair hooks                         |
 | `semantic_hooks`          | `SemanticHooks | None`                      | Semantic resolver, validator, and optional default semantic context |
 | `semantic_context`        | `SemanticContext | dict | None`             | Default semantic context applied to future `ask()` calls            |
@@ -108,6 +108,12 @@ config = ProviderConfig(
 | `model`       | optional explicit model            |
 | `temperature` | generation temperature             |
 | `max_tokens`  | response budget                    |
+| `base_url`    | another server that speaks OpenAI's API, such as Ollama or vLLM; `openai` only |
+
+With `base_url`, `api_key` is the key of that server, and the OpenAI key of the environment is
+not sent there. `provider` in `connect()` also takes a ready provider, such as
+`OpenAIAdapter(client=...)`. See
+[OpenAI-compatible endpoints](CONFIGURATION.md#openai-compatible-endpoints).
 
 `ProviderConfig.API_KEY_ENV_VARS` maps each provider to the environment variable the CLI
 reads its key from: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` and `GOOGLE_API_KEY`.
@@ -296,6 +302,10 @@ from nlp2sql import ProviderConfig, create_ai_provider
 
 provider = create_ai_provider(ProviderConfig(provider="anthropic", api_key="sk-ant-..."))
 ```
+
+The `ai_provider` argument of `create_and_initialize_service()`, `create_query_service()` and
+`generate_sql_from_db()` takes a provider name or a ready provider. A ready provider has its
+own key and model, so it cannot be combined with `api_key`, `model` or `provider_config`.
 
 `NLP2SQL.get_stats()` returns the provider, its context size and which components are
 enabled. From synchronous code, `nlp.stats` runs it; inside an event loop it raises
