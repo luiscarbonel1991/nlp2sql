@@ -49,6 +49,9 @@ pre-1.0.
     `--api-key`.
   - `benchmark --base-url` measures that server, alone or next to `--providers`. Its results
     are under `openai-compatible`.
+- The MCP server can use an OpenAI-compatible server. `NLP2SQL_LLM_BASE_URL` selects it,
+  `NLP2SQL_LLM_MODEL` is the model to ask for and `NLP2SQL_LLM_API_KEY` its key, if it has
+  one. `OPENAI_API_KEY` is not sent there. Before, the MCP server could not choose a model.
 - Docs: [OpenAI-compatible endpoints](https://github.com/luiscarbonel1991/nlp2sql/blob/main/docs/CONFIGURATION.md#openai-compatible-endpoints),
   with an Ollama example and how to set the context size of a local model.
 
