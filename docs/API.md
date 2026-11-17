@@ -400,6 +400,8 @@ nlp2sql query \
 | `--schema`                 | Schema name                              |
 | `--provider`               | `openai`, `anthropic`, or `gemini`       |
 | `--api-key`                | Explicit provider key                    |
+| `--model`                  | Model name; the provider's default if omitted |
+| `--base-url`               | Another server that speaks the OpenAI API, such as Ollama or vLLM. With it, only `--api-key` is sent as the key |
 | `--embedding-provider`     | Example and schema embedding provider    |
 | `--schema-filters`         | JSON schema filters                      |
 | `--examples-file`          | Load few-shot examples from JSON or YAML |
@@ -430,6 +432,18 @@ nlp2sql benchmark \
 ```
 
 The benchmark command also accepts examples and semantic context so provider comparisons stay fair.
+
+`--base-url`, with `--model` and an optional `--api-key`, measures an OpenAI-compatible
+server. Given alone, that server is the only target, so no hosted provider is called without
+being asked for. With `--providers` it is measured next to them, and its results are under
+`openai-compatible`:
+
+```bash
+nlp2sql benchmark \
+  --database-url postgresql://testuser:testpass@localhost:5432/testdb \
+  --providers openai \
+  --base-url http://localhost:11434/v1 --model llama3.2
+```
 
 ### `nlp2sql inspect`
 
@@ -466,8 +480,12 @@ hundred tokens), and print the model, latency and tokens:
 ```bash
 nlp2sql providers test                     # every provider with a key set
 nlp2sql providers test --provider gemini
+nlp2sql providers test --base-url http://localhost:11434/v1 --model llama3.2
 nlp2sql validate                           # providers, plus DATABASE_URL when set
 ```
+
+With `--base-url`, the check goes to that server only. `--model` and `--api-key` belong to it,
+and `OPENAI_API_KEY` is not sent there.
 
 A failure says what to fix (rejected key, unknown model id, rate limit, unreachable
 provider, SDK not installed), and the command exits 1.
