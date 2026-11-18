@@ -1,10 +1,8 @@
 """Amazon Redshift repository for schema management."""
 
 import asyncio
-import os
-import pickle
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -20,21 +18,23 @@ from ..ports.schema_repository import (
     TableInfo,
 )
 from ..utils.logger import get_logger
-from ..utils.storage import EMBEDDINGS_LOCATION, get_data_directory, tables_cache_directory_name
+from ._tables_cache import SCHEMA_CACHE_TTL_HOURS, TablesCacheMixin  # noqa: F401 (TTL re-exported)
 
 logger = get_logger(__name__)
 
 # Cache configuration
-SCHEMA_CACHE_TTL_HOURS = int(os.getenv("NLP2SQL_SCHEMA_CACHE_TTL_HOURS", "24"))
 SCHEMA_CACHE_VERSION = "1.0"  # Increment when cache format changes
 
 
-class RedshiftRepository(SchemaRepositoryPort):
+class RedshiftRepository(TablesCacheMixin, SchemaRepositoryPort):
     """Amazon Redshift implementation of schema repository.
 
     Uses psycopg2 directly for maximum compatibility with Redshift.
     SQLAlchemy dialects have issues with Redshift's custom configuration.
     """
+
+    tables_cache_version = SCHEMA_CACHE_VERSION
+    cache_empty_table_list = False
 
     def __init__(self, connection_string: str, schema_name: str = "public"):
         self.connection_string = connection_string
@@ -49,101 +49,6 @@ class RedshiftRepository(SchemaRepositoryPort):
         self._schema_col: str = "table_schema"
         self._db_filter: str = ""
         self._db_filter_aliased: str = ""
-
-    def _get_cache_dir(self) -> Path:
-        """Get the cache directory for this database connection."""
-        if self._cache_dir is None:
-            # Same base directory as the schema index, with its /tmp fallback
-            base_dir = get_data_directory(*EMBEDDINGS_LOCATION)
-            self._cache_dir = base_dir / tables_cache_directory_name(self.connection_string)
-            self._cache_dir.mkdir(parents=True, exist_ok=True)
-        return self._cache_dir
-
-    def _get_tables_cache_path(self, schema: str) -> Path:
-        """Get path for the tables cache file."""
-        return self._get_cache_dir() / f"tables_cache_{schema}.pkl"
-
-    def _is_cache_valid(self, schema: str) -> bool:
-        """Check if tables cache exists and is not expired."""
-        cache_path = self._get_tables_cache_path(schema)
-        if not cache_path.exists():
-            return False
-
-        try:
-            with open(cache_path, "rb") as f:
-                cache_data = pickle.load(f)
-
-            if cache_data.get("version") != SCHEMA_CACHE_VERSION:
-                return False
-
-            created_at = cache_data.get("created_at")
-            if created_at is None:
-                return False
-
-            ttl = timedelta(hours=SCHEMA_CACHE_TTL_HOURS)
-            if datetime.now() - created_at > ttl:
-                return False
-
-            if cache_data.get("schema_name") != schema:
-                return False
-
-            return True
-
-        except Exception as e:
-            logger.warning("Failed to validate cache", error=str(e))
-            return False
-
-    def _load_tables_from_cache(self, schema: str) -> Optional[List[TableInfo]]:
-        """Load tables from disk cache if valid."""
-        if not self._is_cache_valid(schema):
-            return None
-
-        cache_path = self._get_tables_cache_path(schema)
-        try:
-            with open(cache_path, "rb") as f:
-                cache_data = pickle.load(f)
-
-            tables = cache_data.get("tables", [])
-            logger.info("Loaded tables from disk cache", count=len(tables))
-            return tables
-
-        except Exception as e:
-            logger.warning("Failed to load tables from cache", error=str(e))
-            return None
-
-    def _save_tables_to_cache(self, tables: List[TableInfo], schema: str) -> None:
-        """Save tables to disk cache. Skips caching if tables list is empty."""
-        if not tables:
-            logger.debug("Skipping cache save for empty tables list", schema=schema)
-            return
-
-        cache_path = self._get_tables_cache_path(schema)
-        try:
-            cache_data = {
-                "tables": tables,
-                "created_at": datetime.now(),
-                "schema_name": schema,
-                "table_count": len(tables),
-                "version": SCHEMA_CACHE_VERSION,
-            }
-
-            with open(cache_path, "wb") as f:
-                pickle.dump(cache_data, f)
-
-            logger.info("Tables saved to disk cache", count=len(tables))
-
-        except Exception as e:
-            logger.warning("Failed to save tables to cache", error=str(e))
-
-    def clear_cache(self) -> None:
-        """Clear all cached data for this repository."""
-        cache_dir = self._get_cache_dir()
-        try:
-            for cache_file in cache_dir.glob("tables_cache_*.pkl"):
-                cache_file.unlink()
-                logger.info("Cache file deleted", path=str(cache_file))
-        except Exception as e:
-            logger.warning("Failed to clear cache", error=str(e))
 
     def _parse_connection_string(self, conn_str: str) -> Dict[str, Any]:
         """Parse connection string into psycopg2 parameters."""
@@ -554,22 +459,6 @@ class RedshiftRepository(SchemaRepositoryPort):
         except Exception as e:
             logger.error("Failed to get schema metadata", error=str(e))
             raise SchemaException(f"Failed to get schema metadata: {e!s}")
-
-    async def refresh_schema(self) -> None:
-        """Drop the cached table list so the next get_tables() reads the database again.
-
-        Same contract as PostgreSQLRepository.refresh_schema; it used to be a no-op, so the
-        24-hour disk cache kept serving the old table list.
-        """
-        cache_path = self._get_tables_cache_path(self.schema_name)
-        try:
-            cache_path.unlink()
-        except FileNotFoundError:
-            return
-        except OSError as e:
-            logger.warning("Failed to remove tables cache", path=str(cache_path), error=str(e))
-            return
-        logger.info("Schema cache invalidated", schema=self.schema_name)
 
     async def get_table_sample_data(self, table_name: str, limit: int = 5) -> List[Dict[str, Any]]:
         """Get sample data from a table."""

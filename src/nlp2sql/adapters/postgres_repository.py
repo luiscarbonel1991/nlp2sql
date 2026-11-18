@@ -6,10 +6,8 @@ when nlp2sql is called from synchronous contexts (e.g., sync-to-async bridges).
 """
 
 import asyncio
-import os
-import pickle
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -21,12 +19,11 @@ from ..core.sql_safety import DEFAULT_QUERY_ROWS, apply_row_limit, is_safe_query
 from ..exceptions import SchemaException, SecurityException
 from ..ports.schema_repository import SchemaMetadata, SchemaRepositoryPort, TableInfo
 from ..utils.logger import get_logger
-from ..utils.storage import EMBEDDINGS_LOCATION, get_data_directory, tables_cache_directory_name
+from ._tables_cache import SCHEMA_CACHE_TTL_HOURS, TablesCacheMixin  # noqa: F401 (TTL re-exported)
 
 logger = get_logger(__name__)
 
 # Cache configuration
-SCHEMA_CACHE_TTL_HOURS = int(os.getenv("NLP2SQL_SCHEMA_CACHE_TTL_HOURS", "24"))
 SCHEMA_CACHE_VERSION = "2.1"  # v2: pg_catalog queries (Issue #32); v2.1: row_count is estimated rows
 
 # row_count is the planner's estimate, pg_class.reltuples: kept current by autovacuum and
@@ -36,13 +33,15 @@ SCHEMA_CACHE_VERSION = "2.1"  # v2: pg_catalog queries (Issue #32); v2.1: row_co
 # n_tup_del: writes since the last statistics reset, not rows.
 
 
-class PostgreSQLRepository(SchemaRepositoryPort):
+class PostgreSQLRepository(TablesCacheMixin, SchemaRepositoryPort):
     """PostgreSQL implementation of schema repository.
 
     Uses psycopg2 directly with asyncio.to_thread() for maximum compatibility
     across sync and async calling contexts. Each query gets a fresh connection,
     avoiding event loop binding issues from asyncpg.
     """
+
+    tables_cache_version = SCHEMA_CACHE_VERSION
 
     def __init__(self, connection_string: str, schema_name: str = "public"):
         self.connection_string = connection_string
@@ -106,117 +105,6 @@ class PostgreSQLRepository(SchemaRepositoryPort):
         """Execute a query and return one result as dict."""
         results = self._execute_query(query, params)
         return results[0] if results else None
-
-    # ── Cache methods (unchanged) ──────────────────────────────────────
-
-    def _get_cache_dir(self) -> Path:
-        """Get the cache directory for this database connection.
-
-        Uses the same directory structure as embeddings for consistency.
-        """
-        if self._cache_dir is None:
-            # Create hash of connection string for unique directory
-            # Same base directory as the schema index, with its /tmp fallback
-            base_dir = get_data_directory(*EMBEDDINGS_LOCATION)
-            self._cache_dir = base_dir / tables_cache_directory_name(self.connection_string)
-            self._cache_dir.mkdir(parents=True, exist_ok=True)
-        return self._cache_dir
-
-    def _get_tables_cache_path(self, schema: str) -> Path:
-        """Get path for the tables cache file."""
-        return self._get_cache_dir() / f"tables_cache_{schema}.pkl"
-
-    def _is_cache_valid(self, schema: str) -> bool:
-        """Check if tables cache exists and is not expired."""
-        cache_path = self._get_tables_cache_path(schema)
-        if not cache_path.exists():
-            return False
-
-        try:
-            with open(cache_path, "rb") as f:
-                cache_data = pickle.load(f)
-
-            # Check version
-            if cache_data.get("version") != SCHEMA_CACHE_VERSION:
-                logger.debug("Cache version mismatch, invalidating", path=str(cache_path))
-                return False
-
-            # Check TTL
-            created_at = cache_data.get("created_at")
-            if created_at is None:
-                return False
-
-            ttl = timedelta(hours=SCHEMA_CACHE_TTL_HOURS)
-            if datetime.now() - created_at > ttl:
-                age_hours = (datetime.now() - created_at).total_seconds() / 3600
-                logger.debug("Cache expired", path=str(cache_path), age_hours=age_hours)
-                return False
-
-            # Check schema matches
-            if cache_data.get("schema_name") != schema:
-                return False
-
-            return True
-
-        except Exception as e:
-            logger.warning("Failed to validate cache", error=str(e))
-            return False
-
-    def _load_tables_from_cache(self, schema: str) -> Optional[List[TableInfo]]:
-        """Load tables from disk cache if valid."""
-        if not self._is_cache_valid(schema):
-            return None
-
-        cache_path = self._get_tables_cache_path(schema)
-        try:
-            with open(cache_path, "rb") as f:
-                cache_data = pickle.load(f)
-
-            tables = cache_data.get("tables", [])
-            logger.info(
-                "Loaded tables from disk cache",
-                count=len(tables),
-                cache_path=str(cache_path),
-            )
-            return tables
-
-        except Exception as e:
-            logger.warning("Failed to load tables from cache", error=str(e))
-            return None
-
-    def _save_tables_to_cache(self, tables: List[TableInfo], schema: str) -> None:
-        """Save tables to disk cache."""
-        cache_path = self._get_tables_cache_path(schema)
-        try:
-            cache_data = {
-                "tables": tables,
-                "created_at": datetime.now(),
-                "schema_name": schema,
-                "table_count": len(tables),
-                "version": SCHEMA_CACHE_VERSION,
-            }
-
-            with open(cache_path, "wb") as f:
-                pickle.dump(cache_data, f)
-
-            logger.info(
-                "Tables saved to disk cache",
-                count=len(tables),
-                cache_path=str(cache_path),
-            )
-
-        except Exception as e:
-            logger.warning("Failed to save tables to cache", error=str(e))
-
-    def clear_cache(self) -> None:
-        """Clear all cached data for this repository."""
-        cache_dir = self._get_cache_dir()
-        try:
-            for cache_file in cache_dir.glob("tables_cache_*.pkl"):
-                cache_file.unlink()
-                logger.info("Cache file deleted", path=str(cache_file))
-        except Exception as e:
-            logger.warning("Failed to clear cache", error=str(e))
 
     # ── Connection lifecycle ───────────────────────────────────────────
 
@@ -650,23 +538,6 @@ class PostgreSQLRepository(SchemaRepositoryPort):
         except Exception as e:
             logger.error("Failed to get schema metadata", error=str(e))
             raise SchemaException(f"Failed to get schema metadata: {e!s}")
-
-    async def refresh_schema(self) -> None:
-        """Drop the cached table list so the next get_tables() reads the database again.
-
-        Runs nothing against the database. It used to run ANALYZE on the whole
-        database: slow on a large database, refused for tables the user does not own,
-        and the job of autovacuum, which keeps the row estimates current.
-        """
-        cache_path = self._get_tables_cache_path(self.schema_name)
-        try:
-            cache_path.unlink()
-        except FileNotFoundError:
-            return
-        except OSError as e:
-            logger.warning("Failed to remove tables cache", path=str(cache_path), error=str(e))
-            return
-        logger.info("Schema cache invalidated", schema=self.schema_name)
 
     async def get_table_sample_data(self, table_name: str, limit: int = 5) -> List[Dict[str, Any]]:
         """Get sample data from a table."""
