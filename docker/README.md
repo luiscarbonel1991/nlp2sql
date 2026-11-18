@@ -23,6 +23,13 @@ This directory contains Docker configurations for testing nlp2sql with PostgreSQ
 - **Tables**: Test tables optimized for data warehouse patterns
 - **Use case**: Testing Redshift-specific functionality and compatibility
 
+### 4. MySQL 8.4 (Port 3306) and MariaDB 11.4 (Port 3307)
+- **Connection**: `mysql://testuser:testpass@127.0.0.1:3306/testdb` and `mariadb://testuser:testpass@127.0.0.1:3307/testdb`
+- **Schema**: The simple e-commerce schema, translated in `mysql/init-schema.sql`. Keep it in step with `init-schema.sql`
+- **Start**: `docker-compose up -d mysql mariadb`
+- **Data**: No volume. The schema is loaded again when the container is created; `docker-compose rm -sf mysql mariadb` resets it
+- **Use case**: Integration tests of the MySQL adapter (`pytest -m integration tests/test_mysql_test_database.py`)
+
 ## Quick Start
 
 ### Default Setup (No Configuration Needed)
