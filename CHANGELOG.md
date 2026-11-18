@@ -22,6 +22,25 @@ pre-1.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`connect()` chose PostgreSQL for every URL that did not mention Redshift.** `connect("mysql://...")` tried to connect with the PostgreSQL driver. `connect()` now reads the database type from the URL scheme, the same way as the CLI and the MCP server, and a URL of a database without an adapter raises `NotImplementedError`.
+- `create_query_service()`, `create_and_initialize_service()` and `generate_sql_from_db()` detect the database type from the URL when `database_type` is not given. It defaulted to PostgreSQL, so a `redshift://` URL got the PostgreSQL repository.
+- A `postgresql://` or `postgres://` URL whose host names Redshift is Redshift in the CLI and the MCP server too, as it already was in `connect()`. Only the host counts: "redshift" in the user, the password or the database name no longer changes the type.
+- The Redshift adapter reads `postgres://` URLs. It took the user and the password from the wrong places.
+- The CLI accepts a URL scheme in any case (`POSTGRESQL://`), as the library does.
+- The MCP server no longer repeats a connection URL it rejects in its error message.
+
+### Changed
+
+- `mysql+pymysql://` and `mariadb://` URLs are recognized as MySQL. There is no MySQL adapter yet: until it lands, the CLI and the MCP server reject these URLs with "unsupported scheme".
+- The CLI and the MCP server accept the URL schemes of every database type that has a repository, including one registered with `RepositoryFactory.register()`. The CLI no longer accepts `mysql://` and `sqlite://` URLs, which failed later with "not supported".
+- The `mysql` extra installs only `pymysql`. It also installed `mysql-connector-python`, which nothing uses.
+
+### Removed
+
+- The `oracle` and `mssql` extras. They installed drivers for databases that have no adapter.
+
 ## [0.2.0rc21] - 2026-11-17
 
 ### Added

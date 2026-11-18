@@ -5,10 +5,38 @@ based on database type. It follows the Registry pattern to allow runtime registr
 of new repository types.
 """
 
+from __future__ import annotations
+
 from typing import Dict, Optional, Type
+from urllib.parse import urlsplit
 
 from ..core.entities import DatabaseType
 from ..ports.schema_repository import SchemaRepositoryPort
+
+# URL scheme -> database type. "mysql+pymysql" is the SQLAlchemy spelling; MariaDB uses
+# the MySQL type because it speaks the same protocol and nearly the same SQL.
+URL_SCHEMES: dict[str, DatabaseType] = {
+    "postgresql": DatabaseType.POSTGRES,
+    "postgres": DatabaseType.POSTGRES,
+    "redshift": DatabaseType.REDSHIFT,
+    "mysql": DatabaseType.MYSQL,
+    "mysql+pymysql": DatabaseType.MYSQL,
+    "mariadb": DatabaseType.MYSQL,
+    "sqlite": DatabaseType.SQLITE,
+    "mssql": DatabaseType.MSSQL,
+    "oracle": DatabaseType.ORACLE,
+}
+
+
+def _scheme(database_url: str) -> str:
+    return database_url.split("://", 1)[0].lower() if "://" in database_url else ""
+
+
+def _host(database_url: str) -> str:
+    try:
+        return (urlsplit(database_url).hostname or "").lower()
+    except ValueError:
+        return ""
 
 
 class RepositoryFactory:
@@ -113,55 +141,44 @@ class RepositoryFactory:
 
     @classmethod
     def detect_database_type(cls, database_url: str) -> DatabaseType:
-        """Detect database type from connection URL.
+        """Detect the database type from the scheme of a connection URL.
 
-        Supports case-insensitive URL scheme detection and handles
-        the common 'postgres://' alias for 'postgresql://'.
-
-        Args:
-            database_url: Database connection URL
-
-        Returns:
-            Detected DatabaseType
+        The scheme is matched without regard to case. A PostgreSQL URL whose host
+        names Redshift (``postgresql://...redshift.amazonaws.com``) is Redshift,
+        which speaks the PostgreSQL protocol. A URL with an unknown scheme is
+        treated as PostgreSQL, as before.
 
         Example:
-            >>> RepositoryFactory.detect_database_type("postgresql://localhost/db")
-            DatabaseType.POSTGRES
-            >>> RepositoryFactory.detect_database_type("POSTGRESQL://localhost/db")
-            DatabaseType.POSTGRES
             >>> RepositoryFactory.detect_database_type("postgres://localhost/db")
             DatabaseType.POSTGRES
             >>> RepositoryFactory.detect_database_type("redshift://localhost/db")
             DatabaseType.REDSHIFT
+            >>> RepositoryFactory.detect_database_type("mariadb://localhost/db")
+            DatabaseType.MYSQL
         """
-        url_lower = database_url.lower()
-
-        # PostgreSQL (handles both postgresql:// and postgres://)
-        if url_lower.startswith("postgresql://") or url_lower.startswith("postgres://"):
-            return DatabaseType.POSTGRES
-
-        # Redshift
-        if url_lower.startswith("redshift://"):
+        database_type = URL_SCHEMES.get(_scheme(database_url), DatabaseType.POSTGRES)
+        if database_type is DatabaseType.POSTGRES and "redshift" in _host(database_url):
             return DatabaseType.REDSHIFT
+        return database_type
 
-        # MySQL
-        if url_lower.startswith("mysql://"):
-            return DatabaseType.MYSQL
+    @classmethod
+    def supported_url_schemes(cls) -> list[str]:
+        """URL schemes of the database types that have a repository, such as ``postgresql``."""
+        cls._register_default_repositories()
+        return [scheme for scheme, database_type in URL_SCHEMES.items() if database_type in cls._registry]
 
-        # SQLite
-        if url_lower.startswith("sqlite://"):
-            return DatabaseType.SQLITE
+    @classmethod
+    def unsupported_url_reason(cls, database_url: str) -> str | None:
+        """Why no repository can be built for this URL, or None if one can.
 
-        # MSSQL
-        if url_lower.startswith("mssql://"):
-            return DatabaseType.MSSQL
-
-        # Oracle
-        if url_lower.startswith("oracle://"):
-            return DatabaseType.ORACLE
-
-        # Default to PostgreSQL for compatibility
-        return DatabaseType.POSTGRES
+        The text never includes the URL, which can hold a password.
+        """
+        if "://" not in database_url:
+            return "missing scheme://"
+        scheme = _scheme(database_url)
+        if scheme not in cls.supported_url_schemes():
+            return f"unsupported scheme '{scheme}'"
+        return None
 
     @classmethod
     def create(

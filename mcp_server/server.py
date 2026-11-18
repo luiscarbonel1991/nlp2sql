@@ -118,9 +118,14 @@ def _resolve_database(database: str) -> str:
             )
         return url
 
-    # Allow direct URLs (PostgreSQL, Redshift)
-    if database.startswith(("postgresql://", "postgres://", "redshift://")):
+    # A connection URL of any database type that has a repository
+    reason = RepositoryFactory.unsupported_url_reason(database)
+    if reason is None:
         return database
+    if "://" in database:
+        # Never echo a URL: it can hold a password
+        schemes = ", ".join(f"{scheme}://" for scheme in RepositoryFactory.supported_url_schemes())
+        raise ValueError(f"Invalid database URL: {reason}. Supported: {schemes}")
 
     raise ValueError(
         f"Invalid database: '{database}'. "

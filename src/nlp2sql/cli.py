@@ -227,10 +227,11 @@ def detect_database_type(database_url: str) -> DatabaseType:
 
 def validate_database_url(ctx, param, value):
     """Validate database URL format."""
-    if value and not value.startswith(("postgresql://", "postgres://", "mysql://", "sqlite://", "redshift://")):
-        # Never echo the value: a malformed URL can still contain the password
-        scheme = value.split("://", 1)[0] if "://" in value else None
-        reason = f"unsupported scheme '{scheme}'" if scheme else "missing scheme://"
+    from .factories import RepositoryFactory
+
+    # Never echo the value: a malformed URL can still contain the password
+    reason = RepositoryFactory.unsupported_url_reason(value) if value else None
+    if reason:
         click.echo(f"[ERROR] Invalid database URL format: {reason}", err=True)
         click.echo("Hint: Expected format: postgresql://user:pass@host:port/database", err=True)
         click.echo("Note: Examples:", err=True)
