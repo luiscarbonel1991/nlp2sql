@@ -285,7 +285,7 @@ def create_query_service(
     ai_provider: str | AIProviderPort = "openai",
     api_key: Optional[str] = None,
     model: Optional[str] = None,
-    database_type: DatabaseType = DatabaseType.POSTGRES,
+    database_type: DatabaseType | None = None,
     schema_filters: dict[str, Any] | None = None,
     embedding_provider: EmbeddingProviderPort | None = None,
     embedding_provider_type: Optional[str] = None,
@@ -311,7 +311,7 @@ def create_query_service(
         api_key: API key for the AI provider
         model: Optional model name for the AI provider (e.g., 'gpt-5.6-luna', 'claude-sonnet-5',
             'gemini-3.6-flash'). If None, uses the provider's default model.
-        database_type: Type of database
+        database_type: Type of database. If None, detected from the URL scheme.
         schema_filters: Optional filters to limit schema scope
         embedding_provider: Optional embedding provider instance
         embedding_provider_type: Optional embedding provider type ('local', 'openai') to auto-create.
@@ -415,7 +415,7 @@ async def create_and_initialize_service(
     ai_provider: str | AIProviderPort = "openai",
     api_key: Optional[str] = None,
     model: Optional[str] = None,
-    database_type: DatabaseType = DatabaseType.POSTGRES,
+    database_type: DatabaseType | None = None,
     schema_filters: dict[str, Any] | None = None,
     embedding_provider: EmbeddingProviderPort | None = None,
     embedding_provider_type: Optional[str] = None,
@@ -443,7 +443,7 @@ async def create_and_initialize_service(
         api_key: API key for the AI provider
         model: Optional model name for the AI provider (e.g., 'gpt-5.6-luna', 'claude-sonnet-5').
             If None, uses the provider's default model.
-        database_type: Type of database
+        database_type: Type of database. If None, detected from the URL scheme.
         schema_filters: Optional filters to limit schema scope
         embedding_provider: Optional embedding provider instance
         embedding_provider_type: Optional embedding provider type ('local', 'openai') to auto-create
@@ -465,6 +465,7 @@ async def create_and_initialize_service(
         )
         result = await service.generate_sql("Show all users")
     """
+    database_type = database_type or RepositoryFactory.detect_database_type(database_url)
     service = create_query_service(
         database_url,
         ai_provider,
@@ -494,7 +495,7 @@ async def generate_sql_from_db(
     ai_provider: str | AIProviderPort = "openai",
     api_key: Optional[str] = None,
     model: Optional[str] = None,
-    database_type: DatabaseType = DatabaseType.POSTGRES,
+    database_type: DatabaseType | None = None,
     schema_filters: dict[str, Any] | None = None,
     embedding_provider: EmbeddingProviderPort | None = None,
     embedding_provider_type: Optional[str] = None,
@@ -522,7 +523,7 @@ async def generate_sql_from_db(
         api_key: API key for the AI provider
         model: Optional model name for the AI provider (e.g., 'gpt-5.6-luna').
             If None, uses the provider's default model.
-        database_type: Type of database (default: POSTGRES)
+        database_type: Type of database. If None, detected from the URL scheme.
         schema_filters: Optional filters to limit schema scope
         embedding_provider: Optional embedding provider instance for schema search.
         embedding_provider_type: Optional embedding provider type ('local', 'openai') to auto-create.
@@ -544,6 +545,7 @@ async def generate_sql_from_db(
             model="gpt-5.6-luna"
         )
     """
+    database_type = database_type or RepositoryFactory.detect_database_type(database_url)
     service = await create_and_initialize_service(
         database_url,
         ai_provider,

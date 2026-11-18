@@ -48,9 +48,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-mysql = ["pymysql>=1.1.0", "mysql-connector-python>=8.0.0"]
-oracle = ["oracledb>=2.0.0"]
-mssql = ["pymssql>=2.2.0"]
+mysql = ["pymysql>=1.1.0"]
 anthropic = ["anthropic>=0.18.0"]
 gemini = ["google-genai>=1.51.0"]
 all-providers = ["anthropic>=0.18.0", "google-genai>=1.51.0"]

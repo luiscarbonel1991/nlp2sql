@@ -18,6 +18,7 @@ from .core.entities import DatabaseType, SemanticContext
 from .core.provider_config import ProviderConfig
 from .core.result import QueryResult
 from .core.runtime import ExecutionHooks, ExecutionMode, SemanticHooks
+from .factories import RepositoryFactory
 from .ports.ai_provider import AIProviderPort
 from .ports.embedding_provider import EmbeddingProviderPort
 from .ports.error_classifier import ErrorClassifierPort
@@ -248,10 +249,7 @@ async def connect(
 
     # Auto-detect database type from URL if not provided
     if database_type is None:
-        if "redshift" in database_url.lower():
-            database_type = DatabaseType.REDSHIFT
-        else:
-            database_type = DatabaseType.POSTGRES
+        database_type = RepositoryFactory.detect_database_type(database_url)
 
     # One embedding provider serves both schema search and few-shot examples
     embedding_provider = _resolve_embedding_provider(provider, embedding_provider, embedding_provider_type)

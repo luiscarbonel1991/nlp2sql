@@ -52,11 +52,9 @@ class RedshiftRepository(TablesCacheMixin, SchemaRepositoryPort):
 
     def _parse_connection_string(self, conn_str: str) -> Dict[str, Any]:
         """Parse connection string into psycopg2 parameters."""
-        # Handle redshift:// or postgresql:// prefix
-        if conn_str.startswith("redshift://"):
-            conn_str = conn_str[11:]  # Remove "redshift://"
-        elif conn_str.startswith("postgresql://"):
-            conn_str = conn_str[13:]  # Remove "postgresql://"
+        # redshift://, postgresql:// or postgres://, in any case
+        if "://" in conn_str:
+            conn_str = conn_str.split("://", 1)[1]
 
         # Parse user:password@host:port/database
         auth_host, database = conn_str.rsplit("/", 1)
