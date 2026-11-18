@@ -628,7 +628,7 @@ class QueryGenerationService:
             validation_result["warnings"].extend(semantic_validation.warnings)
 
         # Checked in every mode: generate_only results must never look valid when they write
-        is_safe, safety_error = is_safe_query(sql)
+        is_safe, safety_error = is_safe_query(sql, dialect=database_type)
         if not is_safe:
             validation_result["errors"].append(f"Not a read-only query: {safety_error}")
             validation_result["is_valid"] = False

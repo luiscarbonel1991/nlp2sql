@@ -28,7 +28,7 @@ WRITES = {
 
 @pytest.fixture
 def check_misses_everything(monkeypatch: pytest.MonkeyPatch) -> None:
-    def accept(sql: str) -> tuple[bool, str]:
+    def accept(sql: str, *, dialect: object = None) -> tuple[bool, str]:
         return True, ""
 
     monkeypatch.setattr("nlp2sql.adapters.postgres_repository.is_safe_query", accept)
