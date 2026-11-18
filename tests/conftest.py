@@ -24,6 +24,22 @@ POSTGRES_DB = os.getenv("NLP2SQL_TEST_POSTGRES_DB", "testdb")
 
 POSTGRES_URL = f"postgresql://{POSTGRES_USER}:{POSTGRES_PASS}@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
 
+# MySQL and MariaDB from docker/docker-compose.yml, loaded with docker/mysql/init-schema.sql.
+# NLP2SQL_TEST_MYSQL_SERVERS picks the servers to test ("mysql", "mariadb" or both).
+MYSQL_HOST = os.getenv("NLP2SQL_TEST_MYSQL_HOST", "127.0.0.1")
+MYSQL_USER = os.getenv("NLP2SQL_TEST_MYSQL_USER", "testuser")
+MYSQL_PASS = os.getenv("NLP2SQL_TEST_MYSQL_PASS", "testpass")
+MYSQL_DB = os.getenv("NLP2SQL_TEST_MYSQL_DB", "testdb")
+MYSQL_PORTS = {
+    "mysql": os.getenv("NLP2SQL_TEST_MYSQL_PORT", "3306"),
+    "mariadb": os.getenv("NLP2SQL_TEST_MARIADB_PORT", "3307"),
+}
+MYSQL_SERVERS = [
+    server.strip()
+    for server in os.getenv("NLP2SQL_TEST_MYSQL_SERVERS", "mysql,mariadb").split(",")
+    if server.strip() in MYSQL_PORTS
+]
+
 # Expected tables from docker/init-schema.sql
 EXPECTED_TABLES = {
     "stores",
@@ -145,6 +161,44 @@ async def postgres_available(postgres_url: str) -> str:
             pytest.fail(f"{message} (NLP2SQL_REQUIRE_INTEGRATION set — refusing to skip)")
         pytest.skip(message)
     return postgres_url
+
+
+def _mysql_is_reachable(url: str) -> str | None:
+    """None if the server at ``url`` accepts a connection, else why it does not."""
+    from urllib.parse import urlsplit
+
+    try:
+        import pymysql
+    except ImportError:
+        return "PyMySQL is not installed (pip install 'nlp2sql[mysql]')"
+
+    parts = urlsplit(url)
+    try:
+        pymysql.connect(
+            host=parts.hostname,
+            port=parts.port,
+            user=parts.username,
+            password=parts.password,
+            database=parts.path.lstrip("/"),
+            connect_timeout=3,
+        ).close()
+    except pymysql.MySQLError as error:
+        return f"{type(error).__name__}: {error.args[0] if error.args else ''}"
+    return None
+
+
+@pytest.fixture(params=MYSQL_SERVERS)
+def mysql_available(request: pytest.FixtureRequest) -> str:
+    """URL of each MySQL-family test server. Skip (or, in CI, fail) if it is not running."""
+    server = request.param
+    url = f"{server}://{MYSQL_USER}:{MYSQL_PASS}@{MYSQL_HOST}:{MYSQL_PORTS[server]}/{MYSQL_DB}"
+    problem = _mysql_is_reachable(url)
+    if problem:
+        message = f"{server} not reachable at {MYSQL_HOST}:{MYSQL_PORTS[server]}: {problem}"
+        if require_integration():
+            pytest.fail(f"{message} (NLP2SQL_REQUIRE_INTEGRATION set — refusing to skip)")
+        pytest.skip(message)
+    return url
 
 
 @pytest.fixture

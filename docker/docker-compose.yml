@@ -37,6 +37,46 @@ services:
       timeout: 5s
       retries: 5
 
+  # MySQL and MariaDB: the same e-commerce schema as postgres, in mysql/init-schema.sql.
+  # No data volume: the schema is loaded again each time the container is created.
+  mysql:
+    image: mysql:${MYSQL_VERSION:-8.4}
+    container_name: ${MYSQL_CONTAINER_NAME:-nlp2sql-mysql}
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootpass}
+      MYSQL_USER: ${MYSQL_DB_USER:-testuser}
+      MYSQL_PASSWORD: ${MYSQL_DB_PASSWORD:-testpass}
+      MYSQL_DATABASE: ${MYSQL_DB_NAME:-testdb}
+    ports:
+      - "${MYSQL_DB_PORT:-3306}:3306"
+    volumes:
+      - ./mysql/init-schema.sql:/docker-entrypoint-initdb.d/init-schema.sql:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u${MYSQL_DB_USER:-testuser} -p${MYSQL_DB_PASSWORD:-testpass} --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  mariadb:
+    image: mariadb:${MARIADB_VERSION:-11.4}
+    container_name: ${MARIADB_CONTAINER_NAME:-nlp2sql-mariadb}
+    environment:
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:-rootpass}
+      MARIADB_USER: ${MARIADB_DB_USER:-testuser}
+      MARIADB_PASSWORD: ${MARIADB_DB_PASSWORD:-testpass}
+      MARIADB_DATABASE: ${MARIADB_DB_NAME:-testdb}
+    ports:
+      - "${MARIADB_DB_PORT:-3307}:3306"
+    volumes:
+      - ./mysql/init-schema.sql:/docker-entrypoint-initdb.d/init-schema.sql:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
   # LocalStack for Redshift testing
   localstack:
     image: localstack/localstack:latest
