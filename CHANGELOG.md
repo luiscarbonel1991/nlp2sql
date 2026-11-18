@@ -22,6 +22,24 @@ pre-1.0.
 
 ## [Unreleased]
 
+### Added
+
+- **MySQL and MariaDB.** `connect("mysql://user:password@host:3306/database")` works, and so do `mysql+pymysql://` and `mariadb://` URLs. The CLI and the MCP server accept them too. Install the driver with `pip install 'nlp2sql[mysql]'`. Tested against MySQL 8.4 and MariaDB 11.4.
+  - A schema is a database: nlp2sql reads the database of the URL. A `schema` other than the default names another database of the same server.
+  - Tables, columns, keys, indexes and comments come from `information_schema`, in four queries whatever the number of tables. `row_count` is the storage engine's estimate. Views are not listed, as with PostgreSQL.
+  - Every connection is read-only for its whole session (`SET SESSION TRANSACTION READ ONLY`), and it runs one statement per query: the driver does not ask the server for multiple statements.
+  - The statement timeout is `max_execution_time` on MySQL and `max_statement_time` on MariaDB. MySQL's does not interrupt every statement, so the client also stops waiting 5 seconds after it.
+  - Only these URL parameters are accepted: `charset`, `connect_timeout`, `read_timeout`, `write_timeout`, `unix_socket`, `ssl_ca`, `ssl_cert`, `ssl_key`, `ssl_key_password`, `ssl_disabled`, `ssl_verify_cert` and `ssl_verify_identity`. Any other raises `ConfigurationException`: `local_infile`, `init_command` and `read_default_file` would let a URL read local files or run SQL on connect.
+  - Not yet adapted to MySQL: the dialect rules of the prompt and the error classifier.
+- `is_safe_query()` and `apply_row_limit()` take `dialect=`, a `DatabaseType` or its name. With MySQL (or `"mariadb"`) the read-only check reads the query the way those servers do, which the PostgreSQL reading gets wrong:
+  - `$a$ ... $a$` is not a string: MariaDB reads `$a$` as a name, so what is between is code;
+  - `--` starts a comment only before whitespace (`5--1` is `5 - (-1)`), and `#` starts one;
+  - `` `name` `` is a quoted name, and `"..."` can be a string with backslash escapes;
+  - comments that the server runs are rejected: `/*! ... */`, `/*M! ... */` and optimizer hints `/*+ ... */`, which can change session settings such as the statement timeout;
+  - `INTO OUTFILE`, `INTO DUMPFILE` and `NEXT VALUE FOR` are rejected, and so are calls to `sleep`, `benchmark`, `load_file`, the `get_lock` family and the replication wait functions;
+  - `CHARACTER SET` in a `CAST` is allowed.
+- `validate_sql()` and the validation inside `ask()` pass the database type to the check. Nothing changes for PostgreSQL and Redshift.
+
 ### Fixed
 
 - **`connect()` chose PostgreSQL for every URL that did not mention Redshift.** `connect("mysql://...")` tried to connect with the PostgreSQL driver. `connect()` now reads the database type from the URL scheme, the same way as the CLI and the MCP server, and a URL of a database without an adapter raises `NotImplementedError`.
@@ -33,9 +51,9 @@ pre-1.0.
 
 ### Changed
 
-- `mysql+pymysql://` and `mariadb://` URLs are recognized as MySQL. There is no MySQL adapter yet: until it lands, the CLI and the MCP server reject these URLs with "unsupported scheme".
+- `mysql+pymysql://` and `mariadb://` URLs are recognized as MySQL.
 - The CLI and the MCP server accept the URL schemes of every database type that has a repository, including one registered with `RepositoryFactory.register()`. The CLI no longer accepts `mysql://` and `sqlite://` URLs, which failed later with "not supported".
-- The `mysql` extra installs only `pymysql`. It also installed `mysql-connector-python`, which nothing uses.
+- The `mysql` extra installs `pymysql[rsa]`: PyMySQL and `cryptography`, which MySQL 8 sign-in needs on a connection without TLS. It also installed `mysql-connector-python`, which nothing uses.
 
 ### Removed
 
