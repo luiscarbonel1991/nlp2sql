@@ -34,7 +34,7 @@ pre-1.0.
   - `validate()` and `ask()` warn about PostgreSQL idioms that both servers refuse (`::`, `ILIKE`, `DATE_TRUNC`, `STRING_AGG`, `FULL OUTER JOIN`, `DISTINCT ON`, `NULLS LAST`, `FILTER (WHERE ...)`, `INTERVAL '1 month'`) and about `||`.
   - With `repair=True`, errors are classified by the server's error number, not by the words of the message.
   - The column check reads names in backticks.
-  - `nlp2sql setup` offers `mysql` and `mariadb`, and `nlp2sql inspect` shows the database as the schema.
+  - `nlp2sql setup` offers `mysql` and `mariadb`. `nlp2sql inspect` and the MCP tool `explore_schema` show the database as the schema.
   - See [MySQL and MariaDB Support](https://github.com/luiscarbonel1991/nlp2sql/blob/main/docs/MySQL.md).
 - `is_safe_query()` and `apply_row_limit()` take `dialect=`, a `DatabaseType` or its name. With MySQL (or `"mariadb"`) the read-only check reads the query the way those servers do, which the PostgreSQL reading gets wrong:
   - `$a$ ... $a$` is not a string: MariaDB reads `$a$` as a name, so what is between is code;

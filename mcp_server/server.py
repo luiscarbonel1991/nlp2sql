@@ -384,7 +384,8 @@ async def explore_schema(
         return json.dumps(
             {
                 "database": database,
-                "schema": schema,
+                # MySQL reads the database of the URL, whatever the schema argument defaults to
+                "schema": getattr(repository, "schema_name", schema),
                 "total_tables": len(tables),
                 "tables": [
                     {
