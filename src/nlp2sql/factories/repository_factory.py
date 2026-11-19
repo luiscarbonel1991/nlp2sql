@@ -56,7 +56,7 @@ class RepositoryFactory:
         )
 
         # Register custom repository type
-        RepositoryFactory.register(DatabaseType.MYSQL, MySQLRepository)
+        RepositoryFactory.register(DatabaseType.SQLITE, SQLiteRepository)
     """
 
     # Class-level registry mapping DatabaseType to repository classes
@@ -73,12 +73,15 @@ class RepositoryFactory:
         if cls._defaults_registered:
             return
 
-        # Lazy import to avoid circular dependencies
+        # Lazy import to avoid circular dependencies. The MySQL module imports its driver,
+        # an optional dependency, only when a repository is built.
+        from ..adapters.mysql_repository import MySQLRepository
         from ..adapters.postgres_repository import PostgreSQLRepository
         from ..adapters.redshift_adapter import RedshiftRepository
 
         cls._registry[DatabaseType.POSTGRES] = PostgreSQLRepository
         cls._registry[DatabaseType.REDSHIFT] = RedshiftRepository
+        cls._registry[DatabaseType.MYSQL] = MySQLRepository
 
         cls._defaults_registered = True
 
@@ -95,7 +98,7 @@ class RepositoryFactory:
             repository_class: The repository class implementing SchemaRepositoryPort
 
         Example:
-            RepositoryFactory.register(DatabaseType.MYSQL, MySQLRepository)
+            RepositoryFactory.register(DatabaseType.SQLITE, SQLiteRepository)
         """
         cls._registry[database_type] = repository_class
 

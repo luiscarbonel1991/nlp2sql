@@ -28,7 +28,7 @@ This directory contains Docker configurations for testing nlp2sql with PostgreSQ
 - **Schema**: The simple e-commerce schema, translated in `mysql/init-schema.sql`. Keep it in step with `init-schema.sql`
 - **Start**: `docker-compose up -d mysql mariadb`
 - **Data**: No volume. The schema is loaded again when the container is created; `docker-compose rm -sf mysql mariadb` resets it
-- **Use case**: Integration tests of the MySQL adapter (`pytest -m integration tests/test_mysql_test_database.py`)
+- **Use case**: Integration tests of the MySQL adapter (`pytest -m integration tests/test_mysql_test_database.py tests/test_mysql_repository_against_servers.py`). They need the driver: `pip install 'nlp2sql[mysql]'`
 
 ## Quick Start
 

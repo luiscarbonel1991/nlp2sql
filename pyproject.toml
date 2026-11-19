@@ -48,7 +48,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-mysql = ["pymysql>=1.1.0"]
+# [rsa] adds cryptography: MySQL 8 signs in with caching_sha2_password, which PyMySQL
+# needs it for when the connection is not encrypted
+mysql = ["pymysql[rsa]>=1.1.0"]
 anthropic = ["anthropic>=0.18.0"]
 gemini = ["google-genai>=1.51.0"]
 all-providers = ["anthropic>=0.18.0", "google-genai>=1.51.0"]

@@ -39,23 +39,24 @@ def test_detects_the_type_from_scheme_and_host(url: str, expected: DatabaseType)
 
 
 @pytest.fixture
-def mysql_repository_registered() -> Iterator[None]:
-    RepositoryFactory.register(DatabaseType.MYSQL, PostgreSQLRepository)
+def sqlite_repository_registered() -> Iterator[None]:
+    RepositoryFactory.register(DatabaseType.SQLITE, PostgreSQLRepository)
     yield
-    RepositoryFactory.unregister(DatabaseType.MYSQL)
+    RepositoryFactory.unregister(DatabaseType.SQLITE)
 
 
 def test_supported_schemes_are_those_with_a_repository() -> None:
     schemes = RepositoryFactory.supported_url_schemes()
 
-    assert {"postgresql", "postgres", "redshift"} <= set(schemes)
+    assert {"postgresql", "postgres", "redshift", "mysql", "mysql+pymysql", "mariadb"} <= set(schemes)
     assert "oracle" not in schemes
+    assert "sqlite" not in schemes
 
 
-@pytest.mark.usefixtures("mysql_repository_registered")
+@pytest.mark.usefixtures("sqlite_repository_registered")
 def test_registering_a_repository_makes_its_schemes_supported() -> None:
-    assert {"mysql", "mysql+pymysql", "mariadb"} <= set(RepositoryFactory.supported_url_schemes())
-    assert RepositoryFactory.unsupported_url_reason("mariadb://user:pass@localhost/shop") is None
+    assert "sqlite" in RepositoryFactory.supported_url_schemes()
+    assert RepositoryFactory.unsupported_url_reason("sqlite:///path/to/shop.db") is None
 
 
 @pytest.mark.parametrize(

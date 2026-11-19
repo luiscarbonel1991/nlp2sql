@@ -203,17 +203,13 @@ class TestCreate:
 
     def test_create_unsupported_type_raises_error(self):
         """Test creating an unsupported type raises NotImplementedError."""
-        # Remove MySQL if it was registered
-        if DatabaseType.MYSQL in RepositoryFactory._registry:
-            RepositoryFactory.unregister(DatabaseType.MYSQL)
-
         with pytest.raises(NotImplementedError) as exc_info:
             RepositoryFactory.create(
-                "mysql://user:pass@localhost/db",
-                database_type=DatabaseType.MYSQL,
+                "sqlite:///path/to/database.db",
+                database_type=DatabaseType.SQLITE,
             )
 
-        assert "mysql" in str(exc_info.value).lower()
+        assert "sqlite" in str(exc_info.value).lower()
         assert "not supported" in str(exc_info.value).lower()
 
 

@@ -156,12 +156,8 @@ jobs:
     - name: Install uv
       run: python -m pip install uv
 
-    # pymysql[rsa]: MySQL 8.4 signs in with caching_sha2_password, which PyMySQL
-    # can only do over a plain connection with the cryptography package
-    - name: Install dependencies (with the MySQL driver)
-      run: |
-        uv pip install --system ".[dev]"
-        uv pip install --system "pymysql[rsa]>=1.1.0"
+    - name: Install dependencies (with the mysql extra)
+      run: uv pip install --system ".[dev,mysql]"
 
     - name: Load the e-commerce test schema
       run: mysql --protocol=tcp -h 127.0.0.1 -P 3306 -u testuser -ptestpass testdb < docker/mysql/init-schema.sql
@@ -173,7 +169,7 @@ jobs:
         NLP2SQL_TEST_MYSQL_SERVERS: ${{ matrix.server }}
         NLP2SQL_TEST_MYSQL_PORT: "3306"
         NLP2SQL_TEST_MARIADB_PORT: "3306"
-      run: pytest tests/test_mysql_test_database.py -m integration -q
+      run: pytest tests/test_mysql_test_database.py tests/test_mysql_repository_against_servers.py -m integration -q
 
   # Installs the built wheel the way a user does: fresh environment, no lock
   # file, latest dependency versions. Catches undeclared dependencies (rc13-rc15
