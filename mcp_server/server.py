@@ -71,6 +71,7 @@ from nlp2sql import (
 )
 from nlp2sql.exceptions import SecurityException
 from nlp2sql.factories import RepositoryFactory
+from nlp2sql.utils.redaction import mask_database_url
 
 # Create FastMCP server
 mcp = FastMCP("nlp2sql")
@@ -127,8 +128,9 @@ def _resolve_database(database: str) -> str:
         schemes = ", ".join(f"{scheme}://" for scheme in RepositoryFactory.supported_url_schemes())
         raise ValueError(f"Invalid database URL: {reason}. Supported: {schemes}")
 
+    # The text can be a URL typed without its scheme, password included
     raise ValueError(
-        f"Invalid database: '{database}'. "
+        f"Invalid database: '{mask_database_url(database)}'. "
         f"Use a configured alias ({list(DATABASE_ALIASES.keys())}) "
         f"or a connection URL (postgresql://...)"
     )
@@ -144,13 +146,25 @@ async def _get_repository(database_url: str, schema_name: str = "public") -> Any
     return _repository_cache[cache_key]
 
 
-def _format_error(error: Exception, context: str = "") -> str:
-    """Format error as JSON response."""
+def _hide_database_url(text: str, database: str) -> str:
+    """Return ``text`` with the connection URL of ``database`` masked.
+
+    A tool result goes to the model and into the client's history. ``database`` is the
+    tool argument: a URL, or an alias whose URL the caller never saw.
+    """
+    for url in (database, os.getenv(DATABASE_ALIASES.get(database, ""), "")):
+        if url:
+            text = text.replace(url, mask_database_url(url))
+    return text
+
+
+def _format_error(error: Exception, context: str = "", database: str = "") -> str:
+    """Format error as JSON response, without the connection URL of ``database``."""
     return json.dumps(
         {
-            "error": str(error),
+            "error": _hide_database_url(str(error), database),
             "error_type": type(error).__name__,
-            "context": context,
+            "context": _hide_database_url(context, database),
         },
         indent=2,
     )
@@ -226,7 +240,12 @@ async def _get_cached_service(
 
     except Exception as e:
         # Don't cache failed services - allow retry
-        logger.error("Service initialization failed", error=str(e), provider=provider, schema=schema_name)
+        logger.error(
+            "Service initialization failed",
+            error=_hide_database_url(str(e), database_url),
+            provider=provider,
+            schema=schema_name,
+        )
         raise
 
 
@@ -300,13 +319,13 @@ async def ask_database(
                 response["execution_error"] = str(e)
                 response["results"] = None
             except Exception as e:
-                response["execution_error"] = f"Failed to execute: {e}"
+                response["execution_error"] = _hide_database_url(f"Failed to execute: {e}", database)
                 response["results"] = None
 
         return json.dumps(response, indent=2, default=str)
 
     except Exception as e:
-        return _format_error(e, f"Question: {question}")
+        return _format_error(e, f"Question: {question}", database)
 
 
 # =============================================================================
@@ -383,7 +402,7 @@ async def explore_schema(
 
         return json.dumps(
             {
-                "database": database,
+                "database": mask_database_url(database),
                 # MySQL reads the database of the URL, whatever the schema argument defaults to
                 "schema": getattr(repository, "schema_name", schema),
                 "total_tables": len(tables),
@@ -401,7 +420,7 @@ async def explore_schema(
         )
 
     except Exception as e:
-        return _format_error(e, f"Database: {database}, Schema: {schema}")
+        return _format_error(e, f"Database: {database}, Schema: {schema}", database)
 
 
 # =============================================================================
@@ -466,7 +485,7 @@ async def run_sql(
             indent=2,
         )
     except Exception as e:
-        return _format_error(e, f"SQL: {sql[:100]}...")
+        return _format_error(e, f"SQL: {sql[:100]}...", database)
 
 
 # =============================================================================
@@ -566,7 +585,7 @@ async def explain_sql(
         return json.dumps(explanation, indent=2, default=str)
 
     except Exception as e:
-        return _format_error(e, f"SQL: {sql[:100]}...")
+        return _format_error(e, f"SQL: {sql[:100]}...", database)
 
 
 if __name__ == "__main__":

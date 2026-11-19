@@ -24,6 +24,7 @@ from ..core.sql_safety import DEFAULT_QUERY_ROWS, apply_row_limit, is_safe_query
 from ..exceptions import ConfigurationException, SchemaException, SecurityException
 from ..ports.schema_repository import SchemaMetadata, SchemaRepositoryPort, TableInfo
 from ..utils.logger import get_logger
+from ..utils.redaction import UNREADABLE_URL
 from ._tables_cache import TablesCacheMixin
 
 if TYPE_CHECKING:
@@ -93,8 +94,9 @@ def parse_mysql_url(url: str) -> dict[str, Any]:
     try:
         parts = urlsplit(url)
         port = parts.port
-    except ValueError as error:
-        raise ConfigurationException("The MySQL URL cannot be read: check the host and the port") from error
+    except ValueError:
+        # "from None": the ValueError repeats the bad port, which can be a piece of the password
+        raise ConfigurationException(UNREADABLE_URL.format(database="MySQL")) from None
 
     params: dict[str, Any] = {
         "host": parts.hostname or "localhost",
