@@ -169,7 +169,7 @@ jobs:
         NLP2SQL_TEST_MYSQL_SERVERS: ${{ matrix.server }}
         NLP2SQL_TEST_MYSQL_PORT: "3306"
         NLP2SQL_TEST_MARIADB_PORT: "3306"
-      run: pytest tests/test_mysql_test_database.py tests/test_mysql_repository_against_servers.py -m integration -q
+      run: pytest tests/test_mysql_test_database.py tests/test_mysql_repository_against_servers.py tests/test_mysql_dialect_against_servers.py -m integration -q
 
   # Installs the built wheel the way a user does: fresh environment, no lock
   # file, latest dependency versions. Catches undeclared dependencies (rc13-rc15

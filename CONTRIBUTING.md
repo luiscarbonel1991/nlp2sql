@@ -169,7 +169,7 @@ class ExampleAdapter(AIProviderPort):
 Priority areas for enterprise contributions:
 
 - **New AI providers** (AWS Bedrock, Azure OpenAI, etc.)
-- **Database support** (MySQL, SQLite, Oracle, MSSQL)
+- **Database support** (SQLite, Oracle, MSSQL)
 - **Performance optimizations** (caching, schema handling)
 - **Security features** (audit logging, sanitization)
 - **Monitoring** (metrics, health checks, alerting)
@@ -276,7 +276,6 @@ The PyPI workflow stops before building if the run is not on a tag, if the tag h
 ### Current Focus Areas
 
 1. **Database Support Expansion**
-   - MySQL adapter implementation
    - SQLite support for local development
    - Oracle enterprise database support
 

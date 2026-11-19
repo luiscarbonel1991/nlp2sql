@@ -35,7 +35,7 @@ The library is designed for both simple schemas and large warehouses, but all pu
 - **Few-shot examples**: pass example lists directly or use an example repository implementation
 - **Large schema support**: FAISS plus TF-IDF hybrid retrieval, schema filters, and disk-backed caches
 - **Multiple providers**: OpenAI, Anthropic, and Gemini built in; OpenAI-compatible servers such as Ollama and vLLM through `base_url`; or your own `AIProviderPort` passed to `connect()`
-- **Database support**: PostgreSQL and Amazon Redshift built in; register a `SchemaRepositoryPort` implementation with `RepositoryFactory.register()` and pass `database_type=` to `connect()` to add another database
+- **Database support**: PostgreSQL, Amazon Redshift, MySQL and MariaDB built in; register a `SchemaRepositoryPort` implementation with `RepositoryFactory.register()` and pass `database_type=` to `connect()` to add another database
 - **Async by default**: built for services, APIs, notebooks, and workers
 
 ## Documentation
@@ -47,6 +47,7 @@ The library is designed for both simple schemas and large warehouses, but all pu
 | [Configuration](docs/CONFIGURATION.md) | Environment variables, examples, semantic context, cache behavior |
 | [Enterprise Guide](docs/ENTERPRISE.md) | Governed usage, scale, and deployment patterns |
 | [Redshift Support](docs/Redshift.md) | Redshift-specific notes using public examples |
+| [MySQL and MariaDB Support](docs/MySQL.md) | Install, connection URLs, read-only execution and dialect notes |
 | [Examples](examples/README.md) | Safe public examples based on the local e-commerce domain |
 | [Contributing](CONTRIBUTING.md) | Contribution guidelines |
 
@@ -58,6 +59,9 @@ uv add nlp2sql
 
 # With pip
 pip install nlp2sql
+
+# With MySQL or MariaDB
+pip install 'nlp2sql[mysql]'
 
 # With specific providers
 pip install nlp2sql[anthropic,gemini]
