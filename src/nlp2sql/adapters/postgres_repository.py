@@ -16,9 +16,10 @@ from psycopg2 import sql as psycopg2_sql
 from psycopg2.extras import RealDictCursor
 
 from ..core.sql_safety import DEFAULT_QUERY_ROWS, apply_row_limit, is_safe_query
-from ..exceptions import SchemaException, SecurityException
+from ..exceptions import ConfigurationException, SchemaException, SecurityException
 from ..ports.schema_repository import SchemaMetadata, SchemaRepositoryPort, TableInfo
 from ..utils.logger import get_logger
+from ..utils.redaction import UNREADABLE_URL
 from ._tables_cache import SCHEMA_CACHE_TTL_HOURS, TablesCacheMixin  # noqa: F401 (TTL re-exported)
 
 logger = get_logger(__name__)
@@ -64,11 +65,17 @@ class PostgreSQLRepository(TablesCacheMixin, SchemaRepositoryPort):
         if conn_str.startswith("postgres://"):
             conn_str = "postgresql://" + conn_str[len("postgres://"):]
 
-        parsed = urlparse(conn_str)
+        # urlparse reports a bad port by repeating it, and with a / ? or # in the password
+        # that "port" is a piece of the password
+        try:
+            parsed = urlparse(conn_str)
+            port = parsed.port
+        except ValueError:
+            raise ConfigurationException(UNREADABLE_URL.format(database="PostgreSQL")) from None
 
         params = {
             "host": parsed.hostname or "localhost",
-            "port": parsed.port or 5432,
+            "port": port or 5432,
             "database": parsed.path.lstrip("/") if parsed.path else "",
             "user": unquote(parsed.username or ""),
             "password": unquote(parsed.password or ""),

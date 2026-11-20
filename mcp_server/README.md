@@ -401,6 +401,12 @@ Queries run in read-only transactions (PostgreSQL and Redshift), so the database
 - Maximum: 1000 rows
 - Enforced server-side
 
+### Connection URLs
+
+Use an alias when you can: the model then never sees the connection URL. When a tool is called with a URL, its result shows the URL with `***` as the password, and an error that quotes the URL shows it the same way.
+
+A `/`, `?`, `#` or `@` in the password must be URL-encoded (`%2F`, `%3F`, `%23`, `%40`). A URL that cannot be read is refused with a message that repeats no part of it.
+
 ## Troubleshooting
 
 ### "No AI provider configured"
@@ -459,6 +465,9 @@ redshift://username:password@cluster.region.redshift.amazonaws.com:5439/database
 
 # With SSL
 postgresql://username:password@localhost:5432/database?sslmode=require
+
+# A password with / ? # or @ is URL-encoded: p@ss/word becomes p%40ss%2Fword
+postgresql://username:p%40ss%2Fword@localhost:5432/database
 
 # MySQL and MariaDB (the database of the URL is the schema)
 mysql://username:password@localhost:3306/database

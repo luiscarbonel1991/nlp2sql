@@ -65,6 +65,15 @@ pre-1.0.
 
 - The `oracle` and `mssql` extras. They installed drivers for databases that have no adapter.
 
+### Security
+
+- **The MCP server no longer returns a connection URL with its password.** A tool result goes to the model and stays in the client's history.
+  - `explore_schema()` repeated its `database` argument in the answer and in the context of an error. A URL is now shown with `***` as the password.
+  - Text that is not a URL came back whole in "Invalid database: '...'", from every tool. A URL typed without `scheme://` is such a text.
+  - An error that quotes the URL is masked too, also when the caller passed an alias and never saw the URL.
+- **A connection URL that cannot be read is refused without repeating any of it.** With a `/`, `?` or `#` in the password that was not URL-encoded, `PostgreSQLRepository` raised urllib's "Port could not be cast to integer value as '...'", and the quoted text was the start of the password. Through the MCP server it reached a caller that knew only the alias. PostgreSQL and MySQL URLs now raise `ConfigurationException` (PostgreSQL raised `ValueError`), and the message says to URL-encode those characters.
+- **`mask_database_url()` hides passwords it showed.** A password with an unencoded `/`, `?` or `#` was printed whole, and so were the `sslpassword` and `ssl_key_password` parameters. The CLI prints connection URLs through this function.
+
 ## [0.2.0rc21] - 2026-11-17
 
 ### Added
