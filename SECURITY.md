@@ -70,6 +70,15 @@ When using nlp2sql in production:
    ```
 
    Do not use a superuser: it can read server files (`pg_read_file`) and end other sessions.
+
+   In MySQL and MariaDB:
+
+   ```sql
+   CREATE USER 'nlp2sql_reader'@'%' IDENTIFIED BY '...';
+   GRANT SELECT ON mydb.* TO 'nlp2sql_reader'@'%';
+   ```
+
+   Do not grant `FILE`: it lets a query read and write files on the database server.
 3. **Enable query validation** to prevent dangerous SQL execution
 4. **Review generated SQL** before executing on sensitive data
 5. **Keep dependencies updated** - Run `uv sync` regularly

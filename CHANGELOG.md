@@ -30,7 +30,12 @@ pre-1.0.
   - Every connection is read-only for its whole session (`SET SESSION TRANSACTION READ ONLY`), and it runs one statement per query: the driver does not ask the server for multiple statements.
   - The statement timeout is `max_execution_time` on MySQL and `max_statement_time` on MariaDB. MySQL's does not interrupt every statement, so the client also stops waiting 5 seconds after it.
   - Only these URL parameters are accepted: `charset`, `connect_timeout`, `read_timeout`, `write_timeout`, `unix_socket`, `ssl_ca`, `ssl_cert`, `ssl_key`, `ssl_key_password`, `ssl_disabled`, `ssl_verify_cert` and `ssl_verify_identity`. Any other raises `ConfigurationException`: `local_infile`, `init_command` and `read_default_file` would let a URL read local files or run SQL on connect.
-  - Not yet adapted to MySQL: the dialect rules of the prompt and the error classifier.
+  - The prompt gives the model the rules that differ from PostgreSQL. Two PostgreSQL habits return a wrong answer on these servers instead of an error: `"name"` is a string, and `||` is logical OR.
+  - `validate()` and `ask()` warn about PostgreSQL idioms that both servers refuse (`::`, `ILIKE`, `DATE_TRUNC`, `STRING_AGG`, `FULL OUTER JOIN`, `DISTINCT ON`, `NULLS LAST`, `FILTER (WHERE ...)`, `INTERVAL '1 month'`) and about `||`.
+  - With `repair=True`, errors are classified by the server's error number, not by the words of the message.
+  - The column check reads names in backticks.
+  - `nlp2sql setup` offers `mysql` and `mariadb`. `nlp2sql inspect` and the MCP tool `explore_schema` show the database as the schema.
+  - See [MySQL and MariaDB Support](https://github.com/luiscarbonel1991/nlp2sql/blob/main/docs/MySQL.md).
 - `is_safe_query()` and `apply_row_limit()` take `dialect=`, a `DatabaseType` or its name. With MySQL (or `"mariadb"`) the read-only check reads the query the way those servers do, which the PostgreSQL reading gets wrong:
   - `$a$ ... $a$` is not a string: MariaDB reads `$a$` as a name, so what is between is code;
   - `--` starts a comment only before whitespace (`5--1` is `5 - (-1)`), and `#` starts one;
@@ -42,6 +47,7 @@ pre-1.0.
 
 ### Fixed
 
+- **With `repair=True`, a write that the database refused was sent back to the model as a missing table.** The message "cannot execute CREATE TABLE in a read-only transaction" names a table. It is now the `read_only` error category, which is not retried.
 - **`connect()` chose PostgreSQL for every URL that did not mention Redshift.** `connect("mysql://...")` tried to connect with the PostgreSQL driver. `connect()` now reads the database type from the URL scheme, the same way as the CLI and the MCP server, and a URL of a database without an adapter raises `NotImplementedError`.
 - `create_query_service()`, `create_and_initialize_service()` and `generate_sql_from_db()` detect the database type from the URL when `database_type` is not given. It defaulted to PostgreSQL, so a `redshift://` URL got the PostgreSQL repository.
 - A `postgresql://` or `postgres://` URL whose host names Redshift is Redshift in the CLI and the MCP server too, as it already was in `connect()`. Only the host counts: "redshift" in the user, the password or the database name no longer changes the type.

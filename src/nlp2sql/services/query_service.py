@@ -187,11 +187,7 @@ class QueryGenerationService:
                 f"query:{question}:{database_type.value}:{self.ai_provider.provider_type.value}:"
                 f"{execution_mode}:{resolved_max_tokens}:{resolved_temperature}:{semantic_signature}"
             )
-            if (
-                self.cache
-                and execution_mode == "generate_only"
-                and not self.semantic_resolution_service.is_configured
-            ):
+            if self.cache and execution_mode == "generate_only" and not self.semantic_resolution_service.is_configured:
                 cached_result = await self.cache.get(cache_key)
                 if cached_result:
                     logger.debug("Query served from cache", question=question[:50])
@@ -445,7 +441,11 @@ class QueryGenerationService:
                 response = await self.ai_provider.generate_query(query_context)
                 token_usage.add_generation(response)
                 repair_attempts.append(
-                    {"type": "column_retry", "errors": validation_result["column_errors"], "attempt": len(repair_attempts) + 1}
+                    {
+                        "type": "column_retry",
+                        "errors": validation_result["column_errors"],
+                        "attempt": len(repair_attempts) + 1,
+                    }
                 )
                 continue
 
@@ -456,7 +456,9 @@ class QueryGenerationService:
                 and execution_mode == "generate_validate_repair"
                 and not (query_context.metadata or {}).get("_semantic_retry")
             ):
-                issue_messages = [issue["message"] for issue in semantic_issues if issue.get("severity", "error") == "error"]
+                issue_messages = [
+                    issue["message"] for issue in semantic_issues if issue.get("severity", "error") == "error"
+                ]
                 if issue_messages:
                     logger.info("Semantic validation failed, retrying", issues=issue_messages)
                     query_context = self._build_semantic_retry_context(query_context, issue_messages)
@@ -672,6 +674,8 @@ class QueryGenerationService:
 
     def _validate_dialect_rules(self, sql: str, database_type: DatabaseType) -> list[str]:
         """Detect a few high-signal dialect mismatches before execution."""
+        if database_type == DatabaseType.MYSQL:
+            return self._mysql_dialect_issues(sql)
         if database_type != DatabaseType.REDSHIFT:
             return []
 
@@ -687,6 +691,33 @@ class QueryGenerationService:
         issues = []
         for pattern, message in rules:
             if re.search(pattern, sql, flags=re.IGNORECASE):
+                issues.append(message)
+        return issues
+
+    @staticmethod
+    def _mysql_dialect_issues(sql: str) -> list[str]:
+        """PostgreSQL idioms that MySQL 8.4 and MariaDB 11.4 both refuse or read differently."""
+        issues = []
+        # Seen before the literals are removed: the mistake is the unit inside the quotes
+        if re.search(r"\bINTERVAL\s+'\s*\d+\s+[a-z]+\s*'", sql, flags=re.IGNORECASE):
+            issues.append("MySQL writes INTERVAL 1 MONTH: the unit is a keyword outside the quotes.")
+
+        # What is inside a string literal is text, not syntax
+        code = re.sub(r"'(?:[^']|'')*'", "''", sql)
+        rules = [
+            (r"\|\|", "In MySQL || is logical OR and returns 0 or 1; concatenate with CONCAT()."),
+            (r"::\s*\w", "MySQL has no :: cast; use CAST(value AS type)."),
+            (r"\bILIKE\b", "MySQL has no ILIKE; LIKE already ignores case with the default collations."),
+            (r"\bSTRING_AGG\s*\(", "MySQL uses GROUP_CONCAT instead of STRING_AGG."),
+            (r"\bDATE_TRUNC\s*\(", "MySQL has no DATE_TRUNC; use DATE_FORMAT(), YEAR() or MONTH()."),
+            (r"\bFULL\s+(?:OUTER\s+)?JOIN\b", "MySQL has no FULL OUTER JOIN; UNION a LEFT JOIN and a RIGHT JOIN."),
+            (r"\bDISTINCT\s+ON\b", "MySQL does not support DISTINCT ON; use ROW_NUMBER() in a subquery."),
+            (r"\bNULLS\s+(?:FIRST|LAST)\b", "MySQL has no NULLS FIRST/LAST; use ORDER BY col IS NULL, col."),
+            (r"\bFILTER\s*\(\s*WHERE\b", "MySQL has no FILTER (WHERE ...); use SUM(CASE WHEN ... END)."),
+            (r"\bgenerate_series\s*\(", "MySQL does not support generate_series()."),
+        ]
+        for pattern, message in rules:
+            if re.search(pattern, code, flags=re.IGNORECASE):
                 issues.append(message)
         return issues
 

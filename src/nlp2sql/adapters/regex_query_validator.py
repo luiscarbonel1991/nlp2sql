@@ -17,6 +17,9 @@ class RegexQueryValidator(QueryValidatorPort):
 
     async def validate_columns(self, sql: str, tables: list[Any]) -> list[str]:
         """Validate column names in SQL against the columns of referenced tables."""
+        # MySQL quotes names with backticks: `orders`.`total` is read as orders.total
+        sql = sql.replace("`", "")
+
         # Build table -> columns mapping
         table_columns: dict[str, set[str]] = {}
         all_table_names: set[str] = set()

@@ -66,7 +66,7 @@ Ports define the boundaries between orchestration and infrastructure:
 | Port | Purpose |
 |------|---------|
 | `AIProviderPort` | Generate and validate SQL through a model provider |
-| `SchemaRepositoryPort` | Read table and column metadata from PostgreSQL or Redshift |
+| `SchemaRepositoryPort` | Read table and column metadata from PostgreSQL, Redshift, MySQL or MariaDB |
 | `EmbeddingProviderPort` | Produce embeddings for schema and example retrieval |
 | `ExampleRepositoryPort` | Retrieve few-shot examples |
 | `SemanticResolverPort` | Resolve business context for a question |
@@ -82,7 +82,7 @@ Adapters implement those ports:
 | Area | Adapters |
 |------|----------|
 | AI providers | OpenAI, Anthropic, Gemini |
-| Databases | PostgreSQL, Redshift |
+| Databases | PostgreSQL, Redshift, MySQL, MariaDB |
 | Embeddings | local sentence-transformers, OpenAI embeddings |
 | Examples | `ExampleStore` and any custom repository implementation |
 | Semantic resolution | no-op, dictionary-backed, file-backed |
@@ -364,3 +364,4 @@ This keeps the public architecture documentation grounded in a real domain witho
 - [Configuration](CONFIGURATION.md)
 - [Enterprise Guide](ENTERPRISE.md)
 - [Redshift Support](Redshift.md)
+- [MySQL and MariaDB Support](MySQL.md)

@@ -238,6 +238,7 @@ def validate_database_url(ctx, param, value):
         click.echo("   postgresql://testuser:testpass@localhost:5432/testdb", err=True)
         click.echo("   postgres://demo:demo123@localhost:5433/enterprise", err=True)
         click.echo("   redshift://user:pass@cluster.region.redshift.amazonaws.com:5439/database", err=True)
+        click.echo("   mysql://user:pass@localhost:3306/database (also mariadb://)", err=True)
         ctx.exit(1)
     return value
 
@@ -565,7 +566,10 @@ def inspect(
             )
 
             if output_format == "summary":
-                write_schema_summary(tables, len(all_tables), database_url, schema, output)
+                # MySQL reads the database of the URL, whatever --schema defaults to
+                write_schema_summary(
+                    tables, len(all_tables), database_url, getattr(repo, "schema_name", schema), output
+                )
             else:
                 write_tables(tables, output_format, output)
 
@@ -833,14 +837,17 @@ def setup(ctx):
     click.echo("Hint: Run 'nlp2sql validate' to verify your configuration")
 
 
+# The databases nlp2sql has adapters for, by URL scheme, with the port each one listens on
+SETUP_DEFAULT_PORTS = {"postgresql": "5432", "redshift": "5439", "mysql": "3306", "mariadb": "3306"}
+
+
 def _setup_database():
     """Interactive database setup."""
     click.echo("\n[STATS] Database Configuration")
     click.echo("-" * 30)
 
-    # Only the databases nlp2sql has adapters for
-    db_type = click.prompt("Select database type", type=click.Choice(["postgresql", "redshift"]), default="postgresql")
-    default_port = "5432" if db_type == "postgresql" else "5439"
+    db_type = click.prompt("Select database type", type=click.Choice(list(SETUP_DEFAULT_PORTS)), default="postgresql")
+    default_port = SETUP_DEFAULT_PORTS[db_type]
 
     host = click.prompt("Host", default="localhost")
     port = click.prompt("Port", default=default_port)

@@ -168,7 +168,7 @@ If you do not pass `execution_mode`, the library infers it from `validate` and `
 | `is_valid`           | `bool`              | Final validation state                         |
 | `explanation`        | `str | None`        | Optional natural-language explanation          |
 | `provider`           | `str`               | Provider that generated the SQL                |
-| `database_type`      | `str`               | Postgres or Redshift                           |
+| `database_type`      | `str`               | Postgres, Redshift or MySQL                    |
 | `tokens_used`        | `int`               | Tokens of every LLM call made for the question |
 | `generation_time_ms` | `float`             | End-to-end generation time                     |
 | `examples_used`      | `int`               | Count of selected examples                     |

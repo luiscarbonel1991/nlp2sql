@@ -442,7 +442,8 @@ The first call takes ~50s to initialize. Subsequent calls are ~5s. This is expec
 
 - **PostgreSQL** - Full support
 - **Amazon Redshift** - Full support
-- MySQL, SQLite, Oracle - Coming soon
+- **MySQL and MariaDB** - Supported; install the driver with `pip install 'nlp2sql[mysql]'`
+- SQLite, Oracle - Not supported
 
 ## Database URL Examples
 
@@ -458,6 +459,10 @@ redshift://username:password@cluster.region.redshift.amazonaws.com:5439/database
 
 # With SSL
 postgresql://username:password@localhost:5432/database?sslmode=require
+
+# MySQL and MariaDB (the database of the URL is the schema)
+mysql://username:password@localhost:3306/database
+mariadb://username:password@localhost:3306/database
 ```
 
 ## License
