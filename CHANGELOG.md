@@ -60,7 +60,7 @@ pre-1.0.
 ### Changed
 
 - `mysql+pymysql://` and `mariadb://` URLs are recognized as MySQL.
-- The CLI and the MCP server accept the URL schemes of every database type that has a repository, including one registered with `RepositoryFactory.register()`. The CLI no longer accepts `mysql://` and `sqlite://` URLs, which failed later with "not supported".
+- The CLI and the MCP server accept the URL schemes of every database type that has a repository, including one registered with `RepositoryFactory.register()`. The CLI no longer accepts `sqlite://` URLs, which failed later with "not supported".
 - The `mysql` extra installs `pymysql[rsa]`: PyMySQL and `cryptography`, which MySQL 8 sign-in needs on a connection without TLS. It also installed `mysql-connector-python`, which nothing uses.
 
 ### Removed
