@@ -22,6 +22,8 @@ pre-1.0.
 
 ## [Unreleased]
 
+## [0.2.0rc22] - 2026-11-20
+
 ### Added
 
 - **MySQL and MariaDB.** `connect("mysql://user:password@host:3306/database")` works, and so do `mysql+pymysql://` and `mariadb://` URLs. The CLI and the MCP server accept them too. Install the driver with `pip install 'nlp2sql[mysql]'`. Tested against MySQL 8.4 and MariaDB 11.4.
